@@ -524,11 +524,12 @@ onBeforeMount(() => {
       </UTooltip>
     </motion.div>
 
-    <!-- 相簿背景音乐（BGM）：有 bgm 且已解锁才显示并自动播放 -->
+    <!-- 相簿背景音乐（BGM）：暂不显示，待后台音乐盒完善后恢复
     <AlbumsAlbumBgmPlayer
       v-if="!isLocked && (albumData as any)?.bgm"
       :bgm="(albumData as any)?.bgm"
     />
+    -->
   </div>
 </template>
 

@@ -1,7 +1,6 @@
 <script lang="ts" setup>
 import type { ScanPhoto } from '~/components/albums/scanPhoto'
 import RandomPreviewOverlay from '~/components/albums/RandomPreviewOverlay.vue'
-import AlbumBgmPlayer from '~/components/albums/AlbumBgmPlayer.vue'
 import { supportsWheel3D } from '~/utils/capability'
 
 interface ScanChildNode {
@@ -796,11 +795,12 @@ const selectView = (v: 'photos' | 'subs') => {
       @cancel="handleRandomCancel"
     />
 
-    <!-- 扫描相簿背景音乐（BGM）：已解锁且该相簿绑定了 BGM 才显示并自动播放 -->
+    <!-- 扫描相簿背景音乐（BGM）：暂不显示，待后台音乐盒完善后恢复
     <AlbumBgmPlayer
       v-if="!data?.passwordProtected || data?.authorized"
       :bgm="(data?.node as any)?.bgm || null"
     />
+    -->
   </div>
 </template>
 

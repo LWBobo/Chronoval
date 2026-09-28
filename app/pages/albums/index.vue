@@ -344,7 +344,7 @@ const hoveredAlbum = ref<number | null>(null)
               </div>
             </div>
 
-            <!-- BGM 标记：右上角；该相簿已绑定背景音乐时显示 -->
+            <!-- BGM 标记：暂不显示，待后台音乐盒完善后恢复
             <div
               v-if="album.bgm"
               class="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-1.5 rounded-full bg-neutral-950/55 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm"
@@ -352,6 +352,7 @@ const hoveredAlbum = ref<number | null>(null)
             >
               <Icon name="tabler:music" class="size-3.5" />
             </div>
+            -->
 
             <!-- 照片数浮标：右下角；扫描相簿用书本图标标识来源，不带文字 -->
             <div
