@@ -49,11 +49,11 @@ const handleBlurLoad = () => {
   persistentBlur.value = currentBlur.value
 }
 
-// 拍摄时间格式化，与首页查看器工具栏一致
+// 拍摄时间格式化（左上角简写：月-日 时:分，避免长格式挤压右侧操作按钮）
 const dayjs = useDayjs()
 const currentDateLabel = computed(() => {
   const dt = currentPhoto.value?.dateTaken
-  return dt ? dayjs(dt).format('YYYY-MM-DD HH:mm') : null
+  return dt ? dayjs(dt).format('MM-DD HH:mm') : null
 })
 
 // 打开/关闭时锁定/释放页面滚动（仅客户端；SSR 无 document）
@@ -258,7 +258,7 @@ const swiperModules = [Navigation, Keyboard, Virtual]
         >
           <div class="pointer-events-auto flex min-w-0 items-center gap-2">
             <span
-              class="truncate rounded-full bg-black/35 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+              class="max-w-[40vw] truncate rounded-full bg-black/35 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm sm:max-w-[28rem]"
             >
               {{ currentPhoto?.title || `${props.currentIndex + 1} / ${props.photos.length}` }}
             </span>
