@@ -524,6 +524,8 @@ export interface ScanAlbumNode {
   randomQuotes: string | null
   /** 「随机照片轮经典语录」标签来源：ancient=古诗语录 / modern=现代语录；null=未选（使用自定义） */
   randomQuotesTag: 'ancient' | 'modern' | null
+  /** 相簿背景音乐（音乐盒）；null=不播放 BGM */
+  bgmMusicId?: number | null
   /** 该层目录直接包含的照片数（不含更深的子目录） */
   photoCount: number
   coverPhotoId: string | null

@@ -245,8 +245,6 @@ export const applyScanAlbumMeta = async (
     urlKey: meta.urlKey || node.urlKey,
     // 布局：自定义元数据优先，否则使用节点默认
     layout: meta.layout ?? node.layout,
-    // 「随机一张照片」是否使用轮盘动画（默认关闭=直接打开）
-    randomWheelAnimation: meta.randomWheelAnimation ?? false,
     // 「随机一张照片」动画模式（default=直接打开 / wheel=轮盘 / compat=兼容动画）
     randomAnimation: meta.randomAnimation ?? 'default',
     // 「随机照片轮经典语录」扩展功能

@@ -456,6 +456,7 @@
     "queue": "队列管理",
     "logs": "系统日志",
     "albums": "相簿",
+    "albumChildren": "子相簿管理",
     "siteAdministration": "站点设置",
     "generalSettings": "基本设置",
     "interfaceSettings": "界面设置",
@@ -1043,6 +1044,7 @@
       "viewList": "列表视图",
       "viewMedium": "中型视图",
       "subAlbums": "个子相簿",
+      "noSubAlbums": "该相簿集暂无子相簿",
       "card": {
         "locked": "已上锁",
         "actions": {
@@ -1194,6 +1196,19 @@
         "loadPhotosError": "加载照片失败",
         "resetSuccess": "自定义配置已清除",
         "resetError": "清除自定义配置失败"
+      },
+      "children": {
+        "manage": "管理子相簿",
+        "title": "子相簿管理",
+        "back": "返回相簿管理",
+        "backUpper": "返回上一级",
+        "notFound": "未找到该相簿集",
+        "listTitle": "子相簿列表",
+        "photoTotal": "张照片",
+        "editTitle": "编辑子相簿",
+        "resetTitle": "重置子相簿",
+        "resetDesc": "将清除该子相簿的自定义设置（标题、描述、封面等），恢复为扫描库默认值：",
+        "resetConfirm": "重置自定义"
       },
       "photoCount": "{count} 张"
     },

@@ -457,6 +457,7 @@
     "queue": "Queue Management",
     "logs": "System Logs",
     "albums": "Albums",
+    "albumChildren": "Sub-album Management",
     "siteAdministration": "Site settings",
     "location": "Location services",
     "generalSettings": "General Settings",
@@ -1044,6 +1045,7 @@
       "viewList": "List view",
       "viewMedium": "Medium view",
       "subAlbums": "sub-albums",
+      "noSubAlbums": "No sub-albums in this collection",
       "searchClear": "Clear search",
       "card": {
         "locked": "Locked",
@@ -1200,6 +1202,19 @@
         "loadPhotosError": "Failed to load photos",
         "resetSuccess": "Custom settings cleared",
         "resetError": "Failed to clear custom settings"
+      },
+      "children": {
+        "manage": "Manage sub-albums",
+        "title": "Sub-album Management",
+        "back": "Back to albums",
+        "backUpper": "Back to parent",
+        "notFound": "Album collection not found",
+        "listTitle": "Sub-albums",
+        "photoTotal": "photos",
+        "editTitle": "Edit Sub-album",
+        "resetTitle": "Reset Sub-album",
+        "resetDesc": "This will clear the custom settings (title, description, cover, etc.) of this sub-album and restore the scanned defaults:",
+        "resetConfirm": "Reset custom"
       },
       "photoCount": "{count} photos"
     },

@@ -1,5 +1,4 @@
 import { eq, tables, useDB } from '~~/server/utils/db'
-import { leftJoin } from 'drizzle-orm'
 
 export default eventHandler(async (event) => {
   const db = useDB()
@@ -105,7 +104,7 @@ export default eventHandler(async (event) => {
       // 相簿背景音乐（音乐盒）：解析并返回 BGM 信息（null=未启用）
       bgm: (album.bgmMusicId && musicMap.get(album.bgmMusicId)) || null,
       // 即使是空相册，也返回空数组而不是 undefined
-      photoIds: photoIds.length > 0 ? photoIds.map((p) => p.photoId) : [],
+      photoIds,
       photoCount: photoIds.length,
     })
   }

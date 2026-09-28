@@ -15,6 +15,10 @@ interface AlbumItem extends Album {
   photoCount?: number
   passwordProtected?: boolean
   bgm?: { id: number; title: string } | null
+  // 外部库（扫描库）相簿：库根定位字段
+  libId?: number
+  mount?: string
+  relPath?: string
 }
 const config = useRuntimeConfig()
 const { photos } = usePhotos()
