@@ -50,6 +50,13 @@ const emit = defineEmits<{ open: [index: number] }>()
         <Icon name="tabler:player-play" class="size-5 ml-0.5" />
       </span>
     </div>
+    <!-- GIF 标识：右上角动图标签 -->
+    <span
+      v-if="isGifPhoto(photo)"
+      class="pointer-events-none absolute right-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-white backdrop-blur-sm"
+    >
+      GIF
+    </span>
   </button>
 </template>
 

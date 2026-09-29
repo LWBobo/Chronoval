@@ -324,8 +324,15 @@ private async collectFiles(dir: string): Promise<string[]> {
         })
           .rotate()
           .metadata()
+        // GIF：生成动画缩略图（animated webp），网格卡片也保持动态效果；
+        // 限制宽度控制体积（动画逐帧编码，过大缩略图会显著膨胀）
+        const isAnimatedGif = fileExt === '.gif'
         const { thumbnailBuffer, thumbnailHash } =
-          await generateThumbnailAndHash(imageBuffer)
+          await generateThumbnailAndHash(
+            imageBuffer,
+            undefined,
+            isAnimatedGif ? { animated: true, width: 640 } : {},
+          )
 
         // 缩略图统一写入内部存储（不就地写外部库目录；见 writeThumbnail）
         const thumb = await writeThumbnail(thumbnailBuffer)

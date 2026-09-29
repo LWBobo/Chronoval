@@ -316,11 +316,16 @@ export class QueueManager {
 
           const { imageBuffer, metadata } = processedData
 
-          // STEP 3: 生成缩略图
+          // STEP 3: 生成缩略图（GIF 保留动画）
           await this.updateTaskStage(taskId, 'thumbnail')
           this.logger.info(`[${taskId}:in-stage] thumbnail generation`)
+          const isGif = path.extname(storageKey).toLowerCase() === '.gif'
           const { thumbnailBuffer, thumbnailHash } =
-            await generateThumbnailAndHash(imageBuffer, this.logger)
+            await generateThumbnailAndHash(
+              imageBuffer,
+              this.logger,
+              isGif ? { animated: true, width: 640 } : {},
+            )
 
           // 上传缩略图到存储服务
           const thumbnailObject = await new Promise<any>((resolve, reject) => {
