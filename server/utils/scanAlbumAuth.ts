@@ -23,6 +23,9 @@ const cookieName = (libId: number, relPath: string): string => {
   return slug ? `scan_album_${libId}_${slug}` : `scan_album_${libId}`
 }
 
+/** 库级解锁 Cookie 名：会话内任一次正确解锁后，整个扫描库免密 */
+const libCookieName = (libId: number): string => `scan_album_lib_${libId}`
+
 const getSecret = (): string =>
   process.env.SCAN_ALBUM_UNLOCK_SECRET || DEFAULT_SECRET
 
@@ -68,6 +71,28 @@ export const hasScanAlbumAccess = (
   return id === opts.libId && safeEqual(token, expected)
 }
 
+/**
+ * 是否已获得整个扫描库的会话访问权限（库级解锁 cookie）。
+ * 只要用户在本次浏览器会话内任一次输对过密码（签发过库级 cookie），
+ * 该库下所有相簿/子相簿均免密，无需逐相簿重复输入。
+ * @param libPasswordHash 该库顶层（根相簿）生效的密码哈希；顶层开放时传 null
+ */
+export const hasScanLibraryAccess = (
+  event: any,
+  libId: number,
+  libPasswordHash: string | null,
+): boolean => {
+  const scope = libCookieName(libId)
+  const stored = getCookie(event, scope)
+  if (!stored) return false
+  const idx = stored.indexOf(':')
+  if (idx === -1) return false
+  const id = Number(stored.slice(0, idx))
+  const token = stored.slice(idx + 1)
+  const expected = scanAlbumToken(scope, libPasswordHash)
+  return id === libId && safeEqual(token, expected)
+}
+
 /** 签发解锁 Cookie（密码校验通过后调用） */
 export const authorizeScanAlbum = (
   event: any,
@@ -88,6 +113,27 @@ export const authorizeScanAlbum = (
   )
 }
 
+/** 签发库级解锁 Cookie（任一次密码校验通过后调用）：会话内整库免密 */
+export const authorizeScanLibrary = (
+  event: any,
+  libId: number,
+  libPasswordHash: string | null,
+): void => {
+  const scope = libCookieName(libId)
+  setCookie(
+    event,
+    scope,
+    `${libId}:${scanAlbumToken(scope, libPasswordHash)}`,
+    {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false, // 与登录 cookie 保持一致
+      path: '/',
+      // 不设 maxAge → 会话 Cookie：浏览器/会话关闭后即失效
+    },
+  )
+}
+
 /** 清除解锁 Cookie */
 export const revokeScanAlbum = (
   event: any,
@@ -95,4 +141,5 @@ export const revokeScanAlbum = (
   relPath?: string,
 ): void => {
   deleteCookie(event, cookieName(libId, relPath || ''), { path: '/' })
+  deleteCookie(event, libCookieName(libId), { path: '/' })
 }

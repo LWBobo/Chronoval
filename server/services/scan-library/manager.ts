@@ -587,12 +587,16 @@ const buildScanAlbumNode = (
   dirPhotos.sort((a, b) =>
     (a.dateTaken || '').localeCompare(b.dateTaken || ''),
   )
-  const covers: ScanAlbumCover[] = dirPhotos.slice(0, 3).map((p) => ({
-    id: p.id,
-    thumbnailUrl: p.thumbnailUrl,
-    thumbnailHash: p.thumbnailHash,
-    aspectRatio: p.aspectRatio,
-  }))
+  const covers: ScanAlbumCover[] = dirPhotos
+    // 封面仅取图片类型：视频文件通常无图片缩略图，避免封面空白
+    .filter((p) => p.type !== 'video')
+    .slice(0, 3)
+    .map((p) => ({
+      id: p.id,
+      thumbnailUrl: p.thumbnailUrl,
+      thumbnailHash: p.thumbnailHash,
+      aspectRatio: p.aspectRatio,
+    }))
   const seg = relPath.split('/').filter(Boolean).pop()
   const title = relPath === '' ? lib.name : decodeURIComponent(seg || relPath)
   // 公开链接优先使用 urlKey（base36 时间戳），回退到数字 id 兼容存量
@@ -790,6 +794,7 @@ export const getScanAlbumDetail = async (
       dateTaken: p.dateTaken,
       isLivePhoto: p.isLivePhoto,
       livePhotoVideoUrl: p.livePhotoVideoUrl,
+      type: p.type,
     }))
 
   const children: ScanAlbumNode[] = await Promise.all(

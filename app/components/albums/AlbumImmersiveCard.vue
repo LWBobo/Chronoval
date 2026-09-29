@@ -43,13 +43,33 @@ const intrinsicSize = computed(() => {
   >
     <div class="flex w-full items-center justify-center sm:max-h-[85vh]" :style="{ aspectRatio }">
       <!-- 沉浸看图：主图为原图，缩略图作为失败回退 -->
+      <!-- 视频：原图为视频文件无法直接渲染，走服务端缩略图/浏览器首帧兜底 -->
+      <AlbumsVideoThumb
+        v-if="photo.type === 'video'"
+        :video-src="photo.originalUrl || ''"
+        :poster="photo.thumbnailUrl || null"
+        :thumbhash="photo.thumbnailHash || ''"
+        :alt="photo.id"
+        image-contain
+        class="absolute inset-0 h-full w-full object-contain"
+      />
       <ThumbImage
+        v-else
         :src="photo.originalUrl || photo.thumbnailUrl || ''"
         :fallback-src="photo.thumbnailUrl || ''"
         :alt="photo.id"
         :thumbhash="photo.thumbnailHash || ''"
         class="absolute inset-0 h-full w-full object-contain"
       />
+      <!-- 视频标识：提示该卡片为可播放的视频文件 -->
+      <div
+        v-if="photo.type === 'video'"
+        class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10"
+      >
+        <span class="flex size-12 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+          <Icon name="tabler:player-play" class="size-6 ml-0.5" />
+        </span>
+      </div>
     </div>
   </div>
 </template>

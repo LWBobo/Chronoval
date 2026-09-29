@@ -130,8 +130,13 @@ export class LibraryScanner {
           .where(eq(tables.photos.id, photoId))
           .get()
 
-        // 已存在且未被更新，跳过
-        if (existing && existing.lastModified === stat.mtime.toISOString()) {
+        // 已存在且未被更新，跳过；缺缩略图（如早期 ffmpeg 抽帧失败）的文件不跳过，
+        // 重新处理以补生成缩略图，确保历史视频重扫后也能显示卡片图
+        if (
+          existing &&
+          existing.lastModified === stat.mtime.toISOString() &&
+          existing.thumbnailUrl
+        ) {
           continue
         }
 

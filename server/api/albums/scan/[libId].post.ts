@@ -4,9 +4,21 @@ import {
   getScanAlbumEffectivePasswordHash,
 } from '~~/server/services/scan-library/manager'
 import { getScanAlbumMetaByUrlKey } from '~~/server/services/scan-library/album-meta'
-import { authorizeScanAlbum } from '~~/server/utils/scanAlbumAuth'
+import {
+  authorizeScanAlbum,
+  authorizeScanLibrary,
+} from '~~/server/utils/scanAlbumAuth'
 import { verifyAlbumPassword } from '~~/server/utils/scanAlbumPassword'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
+
+/** 签发库级解锁 cookie：任一次正确解锁后，会话内整个扫描库免密（无需逐相簿重复输入） */
+const authorizeScanLibraryUnlock = async (
+  event: any,
+  libIdNum: number,
+): Promise<void> => {
+  const libPasswordHash = await getScanAlbumEffectivePasswordHash(libIdNum, '')
+  authorizeScanLibrary(event, libIdNum, libPasswordHash)
+}
 
 export default eventHandler(async (event) => {
   const { libId } = await getValidatedRouterParams(
@@ -65,6 +77,7 @@ export default eventHandler(async (event) => {
       relPath,
       passwordHash,
     })
+    await authorizeScanLibraryUnlock(event, libIdNum)
     return { authorized: true }
   }
 
@@ -73,5 +86,6 @@ export default eventHandler(async (event) => {
   }
 
   authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
+  await authorizeScanLibraryUnlock(event, libIdNum)
   return { authorized: true }
 })

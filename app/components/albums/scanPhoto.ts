@@ -10,4 +10,6 @@ export interface ScanPhoto {
   title?: string | null
   /** 拍摄时间（ISO 字符串），供查看器工具栏展示 */
   dateTaken?: string | null
+  /** 媒体类型：image=图片 / video=视频（查看器内以内置播放器播放） */
+  type?: 'image' | 'video'
 }

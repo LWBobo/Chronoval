@@ -5,7 +5,10 @@ import {
   getScanAlbumEffectivePasswordHash,
 } from '~~/server/services/scan-library/manager'
 import { getScanAlbumMetaByUrlKey } from '~~/server/services/scan-library/album-meta'
-import { hasScanAlbumAccess } from '~~/server/utils/scanAlbumAuth'
+import {
+  hasScanAlbumAccess,
+  hasScanLibraryAccess,
+} from '~~/server/utils/scanAlbumAuth'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
 
@@ -75,11 +78,15 @@ export default eventHandler(async (event) => {
   const adminBypass =
     isAdmin &&
     (await settingsManager.get<boolean>('system', 'scanAlbum.adminBypass', false))
-  const authorized = hasScanAlbumAccess(
-    event,
-    { libId: libIdNum, relPath, passwordHash },
-    Boolean(adminBypass),
-  )
+  // 库级会话解锁：任一次正确解锁后整库免密（顶层生效密码哈希，顶层开放时为 null）
+  const libPasswordHash = await getScanAlbumEffectivePasswordHash(libIdNum, '')
+  const authorized =
+    hasScanLibraryAccess(event, libIdNum, libPasswordHash) ||
+    hasScanAlbumAccess(
+      event,
+      { libId: libIdNum, relPath, passwordHash },
+      Boolean(adminBypass),
+    )
 
   const passwordProtected = Boolean(detail.node.passwordProtected)
 

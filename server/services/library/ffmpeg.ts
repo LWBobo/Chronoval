@@ -54,40 +54,53 @@ export const probeVideo = async (filePath: string): Promise<VideoProbeInfo | nul
 
 /**
  * 使用 ffmpeg 抽取视频某一帧生成 JPG，用于缩略图
+ * 依次尝试 25% 处、10% 处、1 秒处、0.1 秒处，任意一次成功即返回，提高各种格式/编码下的成功率。
  */
 export const extractVideoFrame = async (
   filePath: string,
   durationSec: number,
 ): Promise<Buffer | null> => {
-  // 抽取约 25% 处或 1 秒处的一帧
-  const time = durationSec > 5 ? Math.min(durationSec * 0.25, 5) : 0.1
-  const args = [
-    '-v', 'error',
-    '-ss', String(Math.max(time, 0)),
-    '-i', filePath,
-    '-frames:v', '1',
-    '-vf', 'scale=600:-1',
-    '-q:v', '3',
-    '-f', 'image2pipe',
-    '-vcodec', 'mjpeg',
-    'pipe:1',
-  ]
-  try {
-    const { stdout } = await execFileP(FFMPEG_BIN, args, {
-      timeout: 30000,
-      maxBuffer: 8 * 1024 * 1024,
-    })
-    if (!stdout || stdout.length === 0) {
-      return null
+  // 候选时间点：优先中后段（画面更丰富），抽帧失败则逐步回退到片头附近
+  const candidates =
+    durationSec > 5
+      ? [
+          Math.min(durationSec * 0.25, 5),
+          Math.max(durationSec * 0.1, 1),
+          1,
+          0.1,
+        ]
+      : [0.1]
+
+  for (const time of candidates) {
+    const args = [
+      '-v', 'error',
+      '-ss', String(Math.max(time, 0)),
+      '-i', filePath,
+      '-frames:v', '1',
+      '-vf', 'scale=600:-1',
+      '-q:v', '3',
+      '-f', 'image2pipe',
+      '-vcodec', 'mjpeg',
+      'pipe:1',
+    ]
+    try {
+      const { stdout } = await execFileP(FFMPEG_BIN, args, {
+        timeout: 30000,
+        maxBuffer: 8 * 1024 * 1024,
+      })
+      if (stdout && stdout.length > 0) {
+        return Buffer.from(stdout)
+      }
+    } catch (err) {
+      const e = err as Error
+      if (String(e?.message).includes('ENOENT')) {
+        logger.dynamic('library')?.warn?.('ffmpeg not found at', FFMPEG_BIN)
+        return null
+      }
+      // 当前时间点抽帧失败，尝试下一个候选时间点
     }
-    return Buffer.from(stdout)
-  } catch (err) {
-    const e = err as Error
-    if (String(e?.message).includes('ENOENT')) {
-      logger.dynamic('library')?.warn?.('ffmpeg not found at', FFMPEG_BIN)
-    }
-    return null
   }
+  return null
 }
 
 export const getVideoExtensionFromPath = (filePath: string): string =>
