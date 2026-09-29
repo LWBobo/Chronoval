@@ -25,6 +25,10 @@ interface ScanAlbumPayload {
   }
   dirPhotos: ScanPhoto[]
   children: ScanChildNode[]
+  /** 是否把子相簿插进父相簿照片流；缺省视为开启 */
+  childInParent?: boolean
+  /** 子相簿格子排在本层照片的开头还是末尾 */
+  childPosition?: 'start' | 'end'
   passwordProtected: boolean
   authorized: boolean
 }
@@ -264,11 +268,11 @@ watch(
 )
 
 // —— 相簿浏览视图：照片主页面 / 子相簿 ——
-// 有子相簿时用右上角 Home 图标展开的菜单切换，避免「照片 + 子相簿」混排在一个页面显得突兀。
-// 默认优先展示本层照片（照片为主页面）；仅当本层无直接照片、只有子相簿时才落到子相簿视图。
+// 有子相簿时用右上角网格图标展开的菜单切换。
+// 照片页也会在最前面用照片格展示子相簿；这里的切换仍进入独立的子相簿列表。
+// 默认优先展示本层照片；仅当本层无直接照片、只有子相簿时才落到子相簿视图。
 const menuOpen = ref(false)
 const ballRef = ref<HTMLElement | null>(null)
-// 点击胶囊外部任意处自动收回展开的「照片/子相簿」切换区
 function onClickOutside(e: MouseEvent) {
   if (!menuOpen.value) return
   if (ballRef.value && e.target instanceof Node && !ballRef.value.contains(e.target)) {
@@ -278,7 +282,6 @@ function onClickOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', onClickOutside))
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 
-// 浏览视图记忆：每个相簿独立记住「照片/子相簿」，存 sessionStorage（关闭浏览器即重置）
 const viewStorageKey = computed(() => `chronoval:scan-view:${props.libKey}:${relPath.value}`)
 function readStoredView(): 'photos' | 'subs' | null {
   try {
@@ -291,18 +294,22 @@ function readStoredView(): 'photos' | 'subs' | null {
 }
 const activeView = ref<'photos' | 'subs'>(readStoredView() ?? 'photos')
 
-// 可用性判断：仅当「同时有照片和子相簿」时才需要圆球切换；否则固定唯一可用视图
 const hasPhotos = computed(() => (data.value?.dirPhotos?.length ?? 0) > 0)
 const hasSubs = computed(() => (data.value?.children?.length ?? 0) > 0)
+const childInParent = computed(() => data.value?.childInParent !== false)
+const childPosition = computed<'start' | 'end'>(() =>
+  data.value?.childPosition === 'end' ? 'end' : 'start',
+)
+const inlineChildren = computed(() =>
+  childInParent.value ? (data.value?.children ?? []) : [],
+)
 const canSwitch = computed(() => hasPhotos.value && hasSubs.value)
 
 watch(
   () => [hasPhotos.value, hasSubs.value],
   () => {
     if (!canSwitch.value) {
-      // 数据尚未就绪（照片、子相簿都为空）时保持默认，避免加载期视图闪现
       if (!hasPhotos.value && !hasSubs.value) return
-      // 单一视图：有照片优先显示照片，只有子相簿则显示子相簿
       activeView.value = hasPhotos.value ? 'photos' : 'subs'
       return
     }
@@ -312,7 +319,6 @@ watch(
   { immediate: true },
 )
 
-// 点选浏览模式后收起胶囊切换区，并记忆该选择
 const selectView = (v: 'photos' | 'subs') => {
   activeView.value = v
   menuOpen.value = false
@@ -367,9 +373,8 @@ const selectView = (v: 'photos' | 'subs') => {
           </template>
         </nav>
 
-        <!-- 右上角胶囊组：圆球在相簿首页与子相簿都显示；右侧独立「返回相簿」胶囊仅子相簿显示 -->
+        <!-- 右上角胶囊组：圆球在同时有照片和子相簿时显示；右侧独立「返回相簿」胶囊仅子目录显示 -->
         <div class="ml-auto flex shrink-0 items-center gap-2">
-          <!-- 圆形球胶囊：仅当「同时有照片和子相簿」时显示，点击无缝原地增长为「照片 / 子相簿」切换 -->
           <div v-if="canSwitch" ref="ballRef" class="ball-capsule">
             <div class="ball-segments-grid" :class="{ open: menuOpen }">
               <div class="seg-wrap">
@@ -682,15 +687,20 @@ const selectView = (v: 'photos' | 'subs') => {
     <template
       v-if="status !== 'pending' && !!data && (!data.passwordProtected || data.authorized)"
     >
-      <!-- 照片主页面：保持本层照片一整页展示，不与子相簿混排 -->
+      <!-- 照片主页面：子相簿格子排在本层照片前面 -->
       <div v-if="activeView === 'photos'" class="px-6">
-        <div v-if="data!.dirPhotos.length">
+        <div v-if="data!.dirPhotos.length || inlineChildren.length">
           <ClientOnly>
             <AlbumsAlbumGallery
               v-model:layout="layout"
               :photos="data!.dirPhotos"
+              :leads="inlineChildren"
+              :lead-position="childPosition"
               @open-random="handleOpenRandom($event)"
             >
+              <template #lead="{ lead, variant }">
+                <AlbumsScanChildTile :child="lead" :variant="variant" />
+              </template>
               <template #waterfall-card="{ photo, index }">
                 <AlbumsAlbumFluidCard
                   :photo="photo"
@@ -720,7 +730,7 @@ const selectView = (v: 'photos' | 'subs') => {
         </p>
       </div>
 
-      <!-- 子相簿页：独立于照片展示，进入浏览不再突兀 -->
+      <!-- 子相簿页：右上角切换后的独立列表 -->
       <div v-else class="px-6">
         <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           <NuxtLink
@@ -815,7 +825,6 @@ const selectView = (v: 'photos' | 'subs') => {
   border: 1px solid var(--ui-border);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
 }
-/* 用 grid-template-columns 实现宽度丝滑增长，而不是跳变 */
 .ball-segments-grid {
   display: grid;
   grid-template-columns: 0fr;
@@ -829,12 +838,9 @@ const selectView = (v: 'photos' | 'subs') => {
   align-items: center;
   gap: 2px;
   overflow: hidden;
-  /* min-width 归零以允许轨道收拢回圆球(0fr)，绝不能用 max-content 撑住宽度 */
   min-width: 0;
-  /* 内容禁止换行，动画中只会被裁剪显现，绝不会竖排成一列 */
   white-space: nowrap;
   height: 26px;
-  /* 文字用渐入渐出，展开时不随宽度被挤压裁剪 */
   opacity: 0;
   transition: opacity 0.16s ease;
 }
@@ -845,7 +851,6 @@ const selectView = (v: 'photos' | 'subs') => {
 }
 .ball-segments-grid.open .seg-wrap {
   opacity: 1;
-  /* 等胶囊宽度基本展开后再淡入，避免被挤压的观感 */
   transition-delay: 0.18s;
   transition-duration: 0.22s;
 }
@@ -864,13 +869,11 @@ const selectView = (v: 'photos' | 'subs') => {
   color: var(--ui-text-accent);
   background-color: var(--ui-bg-accent);
 }
-/* 白色选中块：强迫与外部胶囊同圆度（完全圆形、不挤压），并留出内边距呼吸感 */
 .ball-seg {
   flex: none;
   white-space: nowrap;
   border-radius: 9999px;
 }
-/* 选中态：纯圆 + 细腻阴影 + 与外框一致的圆角，消除被压缩观感 */
 .ball-seg-active {
   background-color: var(--ui-bg);
   color: var(--ui-text);
@@ -878,10 +881,8 @@ const selectView = (v: 'photos' | 'subs') => {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.08),
     0 0 0 0.5px rgb(0 0 0 / 0.04);
-  /* 允许白块在胶囊内部水平方向有呼吸空间，避免贴边显挤压 */
   outline: 1px solid transparent;
 }
-/* 白色块保持内容垂直居中以呈现饱满胶囊，且圆角渲染不受裁剪 */
 .ball-segments-grid .seg-wrap > button.ball-seg-active,
 .ball-segments-grid .seg-wrap > span.ball-seg-active {
   box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.6);

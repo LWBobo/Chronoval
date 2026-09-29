@@ -34,6 +34,15 @@ export default eventHandler(async (event) => {
   const byMetaUrl = await getScanAlbumMetaByUrlKey(libId)
   let libIdNum: number
   let relPath: string
+  let childInParent = true
+  let childPosition: 'start' | 'end' = 'start'
+  const readChildDisplay = (lib: {
+    childInParent?: boolean | null
+    childPosition?: string | null
+  }) => {
+    childInParent = lib.childInParent !== false
+    childPosition = lib.childPosition === 'end' ? 'end' : 'start'
+  }
   if (byMetaUrl) {
     const parsed = Number(byMetaUrl.mount.replace(/^scan_/, ''))
     if (!Number.isFinite(parsed)) {
@@ -44,6 +53,7 @@ export default eventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     libIdNum = lib.id
+    readChildDisplay(lib)
     // urlKey 标识的相簿可能是某目录层，公开链接 /albums/scan/{urlKey}/{子路径...} 可继续向下钻取；
     // 因此在基础 relPath 之上叠加 query.path，否则点击其子相簿会被错误地解析回父相簿（表现为“打不开”）。
     relPath = query.path
@@ -55,6 +65,7 @@ export default eventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     libIdNum = lib.id
+    readChildDisplay(lib)
     relPath = query.path
   }
 
@@ -110,6 +121,8 @@ export default eventHandler(async (event) => {
       node: await withRandomQuotePool(detail.node),
       dirPhotos: [],
       children: [],
+      childInParent,
+      childPosition,
       passwordProtected: true,
       authorized: false,
     }
@@ -119,6 +132,8 @@ export default eventHandler(async (event) => {
     ...detail,
     node: await withRandomQuotePool(detail.node),
     children: await Promise.all(detail.children.map(withRandomQuotePool)),
+    childInParent,
+    childPosition,
     passwordProtected,
     authorized,
   }

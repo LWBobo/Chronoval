@@ -53,7 +53,7 @@ export default eventHandler(async (_event) => {
       .all()
   }
 
-  // 排除已「转为相簿」或被禁用的扫描库照片（只在相册页展示，不再出现在首页全局画廊）
+  // 排除已禁用的扫描库照片。设为相簿的库仍留在首页瀑布流。
   const hiddenScanMounts = getGalleryHiddenScanMountSet()
   if (hiddenScanMounts.size === 0) return rows
   return rows.filter(

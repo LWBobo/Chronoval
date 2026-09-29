@@ -448,8 +448,20 @@ export const scanLibraries = sqliteTable(
     rootPath: text('root_path').notNull(),
   provider: text('provider', { enum: ['local'] }).default('local').notNull(),
   enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
-  /** 转为相簿展示：启用后该库以「相簿」形式出现在相册页，并从首页全局画廊隐藏 */
+  /** 首页瀑布流是否展示该库照片；与 asAlbum 至少开一个，默认开 */
+  showInGallery: integer('show_in_gallery', { mode: 'boolean' })
+    .default(true)
+    .notNull(),
+  /** 相册页是否按文件夹生成相簿；与 showInGallery 至少开一个 */
   asAlbum: integer('as_album', { mode: 'boolean' }).default(false).notNull(),
+  /** 进入父相簿时，是否把子相簿以照片格插进本层照片流 */
+  childInParent: integer('child_in_parent', { mode: 'boolean' })
+    .default(true)
+    .notNull(),
+  /** 子相簿格子相对本层照片的位置：开头 / 末尾 */
+  childPosition: text('child_position', { enum: ['start', 'end'] })
+    .default('start')
+    .notNull(),
   /** 相簿访问密码（哈希）；为空表示不设密码 */
   passwordHash: text('password_hash'),
   /** 自动监控轮询间隔（毫秒），默认 60s */

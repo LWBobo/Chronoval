@@ -1,13 +1,31 @@
-FROM node:22.22.3-alpine AS base
+# syntax=docker/dockerfile:1
+FROM node:24.16.0-alpine3.22 AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+
+# Corepack 走 npmmirror，避免构建机访问不到 registry.npmjs.org
+# 需要官方源时：docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org .
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
+ENV npm_config_registry=${NPM_REGISTRY}
+
+# better-sqlite3 预编译二进制走 npmmirror，避免访问 GitHub Releases 超时
+# 环境变量名遵循 prebuild-install 约定：${package_name}_binary_host_mirror
+ENV npm_config_better_sqlite3_binary_host_mirror=https://registry.npmmirror.com/-/binary/better-sqlite3/
+
+# 构建容器默认网卡连不上外网，下载步骤改走宿主机网络
+RUN --network=host corepack enable && corepack prepare pnpm@10.34.1 --activate
 
 FROM base AS deps
 WORKDIR /usr/src/app
+
+# node-gyp 编译工具链：better-sqlite3 预编译下载失败时回退到源码编译
+RUN --network=host apk add --no-cache python3 make g++
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/webgl-image/package.json ./packages/webgl-image/
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+RUN --network=host --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /usr/src/app
@@ -18,8 +36,12 @@ RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build:deps
 RUN NODE_OPTIONS="--max-old-space-size=8192" pnpm run build
 RUN find ./.output -type f -name '*.map' -delete
 
-FROM node:22.22.3-alpine AS runtime_deps
-RUN apk add --no-cache ca-certificates perl exiftool ffmpeg \
+FROM node:24.16.0-alpine3.22 AS runtime_deps
+# Alpine 官方 CDN 在部分网络会返回 temporary error / Permission denied
+# 默认换成阿里云镜像，可用 --build-arg ALPINE_MIRROR=https://dl-cdn.alpinelinux.org 改回
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com
+RUN --network=host sed -i "s#https://dl-cdn.alpinelinux.org#${ALPINE_MIRROR}#g" /etc/apk/repositories \
+	&& apk add --no-cache --timeout 60 ca-certificates perl exiftool ffmpeg \
 	&& install -Dm755 "$(readlink -f /usr/bin/perl)" /opt/runtime-bin/perl \
 	&& install -Dm755 "$(readlink -f /usr/bin/env)" /opt/runtime-bin/env \
 	&& install -Dm755 "$(readlink -f /usr/bin/exiftool)" /opt/runtime-bin/exiftool \
@@ -30,7 +52,6 @@ RUN apk add --no-cache ca-certificates perl exiftool ffmpeg \
 FROM scratch AS runtime
 WORKDIR /app
 
-# 预创建可写数据目录（scratch 阶段无 shell，通过 COPY 空目录实现）
 COPY --from=runtime_deps /opt/runtime-bin/appdirs/data /app/data
 
 COPY --from=runtime_deps /usr/local/bin/node /usr/bin/node
@@ -46,11 +67,7 @@ COPY --from=build /usr/src/app/.output ./.output
 COPY --from=build /usr/src/app/server/database/migrations ./server/database/migrations
 
 EXPOSE 3000
-# 数据卷：SQLite 数据库 + 会话密钥/配置（程序运行目录）
 VOLUME ["/app/data"]
-# 存储卷（可选，用于持久化上传照片/缩略图）：运行时以 -v ./storage:/app/storage 挂载，
-# 该目录只作存储（上传照片落 photos/、所有缩略图统一落 thumbnails/），绝不自动扫描。
-# 外部扫描库需单独挂载并放至 /app/library 等目录，由用户显式添加。
 
 ENV NODE_ENV=production
 ENV NITRO_PORT=3000
@@ -61,16 +78,11 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 ENV EXIFTOOL_PATH=/usr/bin/exiftool
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 ENV FFPROBE_PATH=/usr/bin/ffprobe
-# ---- 本地存储默认值（docker-compose 无需再重复配置，必要时可覆盖） ----
-# 本地文件存储：上传照片落盘位置（prefix=photos/ 即写入 /app/storage/photos）
-# /app/storage 纯作存储 + 统一缩略图目录，绝不参与媒体库自动扫描。
 ENV NUXT_STORAGE_PROVIDER=local
 ENV NUXT_PROVIDER_LOCAL_PATH=/app/storage
 ENV NUXT_PROVIDER_LOCAL_BASE_URL=/storage
 ENV NUXT_PROVIDER_LOCAL_PREFIX=photos/
-# 外部扫描库：仅用户显式添加 /app/library 等目录才被自动识别；无内置 photos/videos 兜底。
 ENV LIBRARY_ENABLED=true
-# 自动扫描间隔（毫秒），默认 300 秒（对外部扫描库生效）
 ENV LIBRARY_SCAN_INTERVAL_MS=300000
 
 CMD ["/usr/bin/node", ".output/server/index.mjs"]

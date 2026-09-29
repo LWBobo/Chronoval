@@ -36,8 +36,14 @@ export interface ScanLibrary {
   rootPath: string
   provider: 'local'
   enabled: boolean
-  /** 是否以「相簿」形式在相册页展示（同时从首页全局画廊隐藏） */
+  /** 首页瀑布流是否展示该库照片 */
+  showInGallery: boolean
+  /** 相册页是否按文件夹生成相簿 */
   asAlbum: boolean
+  /** 进入父相簿时，是否把子相簿插进本层照片流 */
+  childInParent: boolean
+  /** 子相簿格子排在本层照片的开头还是末尾 */
+  childPosition: 'start' | 'end'
   watchIntervalMs: number
   lastScanAt: string | null
   lastScanResult: string | null
@@ -54,7 +60,10 @@ export const scanLibraryInputSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   rootPath: z.string().trim().min(1).max(1024),
   enabled: z.boolean().optional(),
+  showInGallery: z.boolean().optional(),
   asAlbum: z.boolean().optional(),
+  childInParent: z.boolean().optional(),
+  childPosition: z.enum(['start', 'end']).optional(),
   watchIntervalMs: z.number().int().min(5000).max(3600000).optional(),
 })
 export type ScanLibraryInput = z.infer<typeof scanLibraryInputSchema>
@@ -138,7 +147,10 @@ export const listScanLibraries = async (): Promise<ScanLibrary[]> => {
     rootPath: row.rootPath,
     provider: 'local',
     enabled: row.enabled,
+    showInGallery: row.showInGallery,
     asAlbum: row.asAlbum,
+    childInParent: row.childInParent,
+    childPosition: row.childPosition === 'end' ? 'end' : 'start',
     watchIntervalMs: row.watchIntervalMs,
     lastScanAt: row.lastScanAt ? new Date(row.lastScanAt).toISOString() : null,
     lastScanResult: row.lastScanResult,
@@ -219,9 +231,20 @@ export const getLibraryMounts = (): LibraryMount[] => {
  */
 export const getAllScalableMounts = (): LibraryMount[] => buildLibraryMounts()
 
+/** 瀑布流与相册至少开一个 */
+const assertScanDisplay = (showInGallery: boolean, asAlbum: boolean) => {
+  if (!showInGallery && !asAlbum) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'At least one display mode is required',
+    })
+  }
+}
+
 /** 新增扫描库并返回其 id */
 export const createScanLibrary = async (input: ScanLibraryInput): Promise<number> => {
   const db = useDB()
+  assertScanDisplay(input.showInGallery ?? true, input.asAlbum ?? false)
   const name =
     cleanName(input.name) || path.basename(path.resolve(input.rootPath))
   const res = db
@@ -232,7 +255,10 @@ export const createScanLibrary = async (input: ScanLibraryInput): Promise<number
       provider: 'local',
       // urlKey 由自增 id 导入后推导（sha256(id) 前 8 位）
       enabled: input.enabled ?? true,
+      showInGallery: input.showInGallery ?? true,
       asAlbum: input.asAlbum ?? false,
+      childInParent: input.childInParent ?? true,
+      childPosition: input.childPosition ?? 'start',
       watchIntervalMs: input.watchIntervalMs ?? 60000,
     })
     .returning({ id: scanLibraries.id })
@@ -252,19 +278,30 @@ export const updateScanLibrary = async (
   input: ScanLibraryInput,
 ): Promise<boolean> => {
   const db = useDB()
+  const current = getScanLibraryRow(id)
+  assertScanDisplay(
+    input.showInGallery ?? current?.showInGallery ?? true,
+    input.asAlbum ?? current?.asAlbum ?? false,
+  )
   const patch: Partial<ScanLibraryInput> = {}
   if (input.rootPath !== undefined) patch.rootPath = path.resolve(input.rootPath)
   if (input.name !== undefined && (input.name as string).trim())
     patch.name = (input.name as string).trim()
   if (input.enabled !== undefined) patch.enabled = input.enabled
+  if (input.showInGallery !== undefined) patch.showInGallery = input.showInGallery
   if (input.asAlbum !== undefined) patch.asAlbum = input.asAlbum
+  if (input.childInParent !== undefined) patch.childInParent = input.childInParent
+  if (input.childPosition !== undefined) patch.childPosition = input.childPosition
   if (input.watchIntervalMs !== undefined) patch.watchIntervalMs = input.watchIntervalMs
   const colPatch: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(patch)) {
     if (k === 'rootPath') colPatch.rootPath = v
     else if (k === 'name') colPatch.name = v
     else if (k === 'enabled') colPatch.enabled = v
+    else if (k === 'showInGallery') colPatch.showInGallery = v
     else if (k === 'asAlbum') colPatch.asAlbum = v
+    else if (k === 'childInParent') colPatch.childInParent = v
+    else if (k === 'childPosition') colPatch.childPosition = v
     else if (k === 'watchIntervalMs') colPatch.watchIntervalMs = v
   }
 
@@ -437,7 +474,7 @@ export const getScanAlbumEffectivePasswordHash = async (
   return null
 }
 
-/** 以「相簿」展示且启用的扫描库挂载名集合（如 scan_1），用于从首页全局画廊隐藏 */
+/** 以「相簿」展示且启用的扫描库挂载名集合（如 scan_1）。不用于从首页画廊隐藏。 */
 export const getAlbumScanMountSet = (): Set<string> => {
   const db = useDB()
   const rows = db
@@ -452,10 +489,8 @@ export const getAlbumScanMountSet = (): Set<string> => {
 
 /**
  * 应从首页全局画廊隐藏的扫描库挂载名集合。
- * 包含两类：
- * 1) 转为相簿展示的库（asAlbum=true，照片只在相册页展示）；
- * 2) 已被禁用/停止的库（enabled=false，外部库不再可用，其缩略图应立即从画廊隐藏，
- *    避免"关闭了还在首页显示"），删除的库则由 deleteScanLibrary 直接清理 DB 记录。
+ * 1) 已禁用的库；
+ * 2) 未勾选「瀑布流」的库（只在相册页展示）。
  */
 export const getGalleryHiddenScanMountSet = (): Set<string> => {
   const db = useDB()
@@ -464,8 +499,8 @@ export const getGalleryHiddenScanMountSet = (): Set<string> => {
     .from(scanLibraries)
     .where(
       or(
-        eq(scanLibraries.asAlbum, true),
         eq(scanLibraries.enabled, false),
+        eq(scanLibraries.showInGallery, false),
       ),
     )
     .all()

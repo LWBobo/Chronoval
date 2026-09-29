@@ -6,12 +6,20 @@ import type { AlbumLayout } from '~~/shared/types/album'
  * 具体卡片由父组件通过具名插槽提供（保留普通相簿丰富的卡片能力）：
  *   - #waterfall-card="{ photo, index }"  瀑布流卡片
  *   - #grid-card="{ photo, index }"       统一网格卡片（时间线分组内复用此卡片）
+ *   - #lead="{ lead, variant }"           与照片同一格的前置项（如子相簿），位置由 leadPosition 决定
  */
-const props = defineProps<{
-  photos: any[]
-  /** 是否展示右上角「样式布局」切换控件（相簿详情默认展示） */
-  showSwitch?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    photos: any[]
+    /** 与照片同一套布局格子里展示的项（如子相簿） */
+    leads?: any[]
+    /** 这些格子排在照片开头还是末尾 */
+    leadPosition?: 'start' | 'end'
+    /** 是否展示右上角「样式布局」切换控件（相簿详情默认展示） */
+    showSwitch?: boolean
+  }>(),
+  { leads: () => [], leadPosition: 'start' },
+)
 
 const emit = defineEmits<{
   (e: 'open-random', index: number): void
@@ -28,8 +36,29 @@ const columnWidth = computed(() => (isMobile.value ? 280 : 280))
 const maxColumns = computed(() => (isMobile.value ? 2 : 8))
 const minColumns = computed(() => (isMobile.value ? 2 : 2))
 
-const masonryItems = computed(() =>
-  props.photos.map((photo, index) => ({ id: photo.id, photo, originalIndex: index })),
+const leadList = computed(() => props.leads ?? [])
+const leadAtEnd = computed(() => props.leadPosition === 'end')
+
+const masonryItems = computed(() => {
+  const leads = leadList.value.map((lead, index) => ({
+    id: String(lead.id ?? lead.link ?? `lead-${index}`),
+    lead,
+    photo: null as any,
+    originalIndex: -1,
+    isLead: true,
+  }))
+  const photos = props.photos.map((photo, index) => ({
+    id: photo.id,
+    lead: null as any,
+    photo,
+    originalIndex: index,
+    isLead: false,
+  }))
+  return leadAtEnd.value ? [...photos, ...leads] : [...leads, ...photos]
+})
+
+const hasItems = computed(
+  () => props.photos.length > 0 || leadList.value.length > 0,
 )
 
 const LAYOUT_OPTIONS: { value: AlbumLayout; label: string; icon: string }[] = [
@@ -178,7 +207,7 @@ const timelineGroups = computed(() => {
     <!-- 顶部切换控件：仅在有照片且需要展示时渲染 -->
     <!-- 单一胶囊：收起态显示山体+数量，点击后胶囊从中心向左右平滑展开，露出四个布局选项 -->
     <div
-      v-if="photos.length > 0"
+      v-if="hasItems"
       ref="switchRoot"
       class="relative z-[40] mb-2 flex h-9 items-center justify-center"
     >
@@ -239,7 +268,8 @@ const timelineGroups = computed(() => {
             </span>
           </button>
 
-          <!-- 分隔线 -->
+          <!-- 分隔线 + 魔百盒：没有照片时不提供随机预览 -->
+          <template v-if="photos.length">
           <span class="h-4 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" aria-hidden="true" />
 
           <!-- 魔百盒：点击随机预览一张相簿照片 -->
@@ -255,6 +285,7 @@ const timelineGroups = computed(() => {
               class="shrink-0 size-4 text-neutral-500 transition-transform duration-500 group-hover:-rotate-12 group-hover:scale-110 group-active:scale-90 dark:text-neutral-400"
             />
           </button>
+          </template>
         </div>
 
         <!-- 展开态内容：四个布局选项，每个为独立胶囊，文字图标不挤压，一行契合排列 -->
@@ -300,11 +331,18 @@ const timelineGroups = computed(() => {
       :ssr-columns="2"
       :key-mapper="
         (_item, _column, _row, index) =>
-          masonryItems[index]?.originalIndex ?? index
+          masonryItems[index]?.id ?? index
       "
     >
       <template #default="{ item }">
         <slot
+          v-if="item.isLead"
+          name="lead"
+          :lead="item.lead"
+          variant="waterfall"
+        />
+        <slot
+          v-else
           name="waterfall-card"
           :photo="item.photo"
           :index="item.originalIndex"
@@ -317,20 +355,48 @@ const timelineGroups = computed(() => {
       v-else-if="layout === 'grid'"
       class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
     >
+      <template v-if="!leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="grid" />
+        </div>
+      </template>
       <div v-for="(photo, index) in photos" :key="photo.id">
         <slot name="grid-card" :photo="photo" :index="index" />
       </div>
+      <template v-if="leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="`end-${lead.id ?? lead.link ?? index}`">
+          <slot name="lead" :lead="lead" variant="grid" />
+        </div>
+      </template>
     </div>
 
     <!-- 沉浸式看图：单列全幅，向下滚动逐张浏览 -->
     <div v-else-if="layout === 'immersive'" class="mx-auto flex w-full flex-col gap-4 px-2 sm:px-4">
+      <template v-if="!leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="immersive" />
+        </div>
+      </template>
       <div v-for="(photo, index) in photos" :key="photo.id">
         <slot name="immersive-card" :photo="photo" :index="index" />
       </div>
+      <template v-if="leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="`end-${lead.id ?? lead.link ?? index}`">
+          <slot name="lead" :lead="lead" variant="immersive" />
+        </div>
+      </template>
     </div>
 
-    <!-- 时光线：按拍摄日期分组，组头标注城市，组内复用网格卡片 -->
+    <!-- 时光线：子相簿按设置排在日期分组之前或之后 -->
     <div v-else-if="layout === 'timeline'" class="space-y-10">
+      <div
+        v-if="leadList.length && !leadAtEnd"
+        class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
+      >
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="grid" />
+        </div>
+      </div>
       <div v-for="group in timelineGroups" :key="group.key" class="space-y-3">
         <!-- 日期/城市头：吸顶便于滚动浏览大分组 -->
         <div class="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-white/90 px-1 py-2 backdrop-blur-sm dark:bg-neutral-950/90">
@@ -355,6 +421,14 @@ const timelineGroups = computed(() => {
           <div v-for="item in group.photos" :key="item.photo.id">
             <slot name="grid-card" :photo="item.photo" :index="item.index" />
           </div>
+        </div>
+      </div>
+      <div
+        v-if="leadList.length && leadAtEnd"
+        class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
+      >
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="grid" />
         </div>
       </div>
     </div>

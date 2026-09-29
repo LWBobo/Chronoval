@@ -13,8 +13,7 @@ export default eventHandler(async (event) => {
     .orderBy(desc(tables.photos.dateTaken), asc(tables.photos.id))
     .all()
 
-  // 首页画廊数据源（?gallery=1）：即使管理员登录，也不返回「已转为相簿」的扫描库照片，
-  // 与后台 /dashboard 区分——后台仍需完整数据以便管理，画廊则遵循「相簿只在相册页显示」。
+  // 首页画廊：隐藏已禁用、以及未勾选「瀑布流」的扫描库。
   const galleryOnly = getQuery(event).gallery === '1'
 
   const session = await getUserSession(event).catch(() => null)
