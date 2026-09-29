@@ -44,14 +44,14 @@ export default eventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     const lib = getScanLibraryByKey(String(parsed))
-    if (!lib || !lib.asAlbum || !lib.enabled) {
+    if (!lib || lib.displayMode === 'gallery' || !lib.enabled) {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     libIdNum = lib.id
     relPath = byMetaUrl.relPath || ''
   } else {
     const lib = getScanLibraryByKey(libId)
-    if (!lib || !lib.asAlbum || !lib.enabled) {
+    if (!lib || lib.displayMode === 'gallery' || !lib.enabled) {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     libIdNum = lib.id

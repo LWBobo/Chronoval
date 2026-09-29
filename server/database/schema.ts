@@ -448,8 +448,16 @@ export const scanLibraries = sqliteTable(
     rootPath: text('root_path').notNull(),
   provider: text('provider', { enum: ['local'] }).default('local').notNull(),
   enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
-  /** 转为相簿展示：启用后该库以「相簿」形式出现在相册页，并从首页全局画廊隐藏 */
-  asAlbum: integer('as_album', { mode: 'boolean' }).default(false).notNull(),
+  /**
+   * 展示方式（三态）：
+   * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
+   * - album：相簿照片（相册页显示，首页全局画廊隐藏）
+   * - both：共存（相册页显示 + 首页全局画廊也显示）
+   * 注：旧布尔列 as_album 由数据迁移 v3 回填后不再读写，物理列保留以兼容旧镜像。
+   */
+  displayMode: text('display_mode', { enum: ['gallery', 'album', 'both'] })
+    .default('gallery')
+    .notNull(),
   /** 相簿访问密码（哈希）；为空表示不设密码 */
   passwordHash: text('password_hash'),
   /** 自动监控轮询间隔（毫秒），默认 60s */

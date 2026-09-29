@@ -17,7 +17,7 @@ import type { DataMigration } from './types'
  *   CURRENT_DATA_VERSION 表示「当前应用期望的数据版本」。数据库中通过
  *   app_meta.data_version 记录已到达的版本。启动时自动把旧数据迁移到该版本。
  */
-export const CURRENT_DATA_VERSION = 2
+export const CURRENT_DATA_VERSION = 3
 
 /** 生成不透明的公开相簿 UID（与 server/utils/albumUid.ts 的生成规则一致） */
 function generateAlbumUid(): string {
@@ -78,6 +78,40 @@ export const MIGRATIONS: DataMigration[] = [
         if (res.changes > 0) changed++
       }
       ctx.report(changed, '为存量相簿生成公开 UID（唯一索引兜底去重）')
+    },
+  },
+
+  // ===== v3 =====
+  {
+    version: 3,
+    id: 'add-scan-library-display-mode',
+    description: '扫描库展示方式升级为三态（gallery/album/both），存量 as_album 回填 display_mode',
+    run: (ctx) => {
+      // 幂等加列：新装库可能已有（drizzle schema 迁移未跑该列时为缺失，这里补上）
+      const cols = (
+        ctx.sqlite.prepare(`PRAGMA table_info(scan_libraries)`).all() as {
+          name: string
+        }[]
+      ).map((c) => c.name)
+      if (!cols.includes('display_mode')) {
+        ctx.sqlite.exec(
+          `ALTER TABLE scan_libraries ADD COLUMN display_mode text DEFAULT 'gallery'`,
+        )
+      }
+      // 回填：旧布尔 as_album=1 → album；其余保持 gallery（含 both 新值，防止覆盖）
+      const res = ctx.sqlite
+        .prepare(
+          `UPDATE scan_libraries
+              SET display_mode = CASE WHEN as_album = 1 THEN 'album' ELSE 'gallery' END
+            WHERE display_mode IS NULL
+               OR (as_album = 1 AND display_mode = 'gallery')`,
+        )
+        .run()
+      // 物理旧列 as_album 保留不删：兼容旧镜像读取（新代码不再读写它）
+      ctx.report(
+        res.changes,
+        '存量 as_album 已回填；display_mode 为 NULL 的行补为 gallery',
+      )
     },
   },
 ]

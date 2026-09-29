@@ -1956,7 +1956,7 @@
           "asAlbumLabel": "展示方式",
           "asAlbumStateOn": "相簿",
           "asAlbumStateOff": "画廊",
-          "asAlbumHint": "将该库以「相簿」形式展示在相册页，并从首页全局画廊中隐藏。库内子文件夹会自动嵌套为子相簿。"
+          "asAlbumHint": "展示方式：照片画廊（仅首页画廊显示）、相簿照片（仅相册页显示）、共存（相册页与首页画廊同时显示）。库内子文件夹会自动嵌套为子相簿。"
         },
         "info": {
           "title": "扫描库信息",
@@ -1975,6 +1975,7 @@
           "displayMode": "展示方式",
           "modeAlbum": "相簿照片",
           "modeGallery": "照片画廊",
+          "modeBoth": "共存",
           "thumbnailDirHint": "缩略图统一写入程序内部存储",
           "thumbnailDir": "本地存储 thumbnails 目录，非相册目录",
           "scanIntervalHint": "自动轮询扫描该目录的间隔",

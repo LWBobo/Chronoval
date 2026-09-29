@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { and, count, eq, isNotNull, isNull, lt, or } from 'drizzle-orm'
+import { and, count, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm'
 import { z } from 'zod'
 import { useDB, tables } from '~~/server/utils/db'
 import {
@@ -36,8 +36,13 @@ export interface ScanLibrary {
   rootPath: string
   provider: 'local'
   enabled: boolean
-  /** 是否以「相簿」形式在相册页展示（同时从首页全局画廊隐藏） */
-  asAlbum: boolean
+  /**
+   * 展示方式（三态）：
+   * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
+   * - album：相簿照片（相册页显示，首页全局画廊隐藏）
+   * - both：共存（相册页显示 + 首页全局画廊也显示）
+   */
+  displayMode: 'gallery' | 'album' | 'both'
   watchIntervalMs: number
   lastScanAt: string | null
   lastScanResult: string | null
@@ -54,7 +59,7 @@ export const scanLibraryInputSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   rootPath: z.string().trim().min(1).max(1024),
   enabled: z.boolean().optional(),
-  asAlbum: z.boolean().optional(),
+  displayMode: z.enum(['gallery', 'album', 'both']).optional(),
   watchIntervalMs: z.number().int().min(5000).max(3600000).optional(),
 })
 export type ScanLibraryInput = z.infer<typeof scanLibraryInputSchema>
@@ -138,7 +143,7 @@ export const listScanLibraries = async (): Promise<ScanLibrary[]> => {
     rootPath: row.rootPath,
     provider: 'local',
     enabled: row.enabled,
-    asAlbum: row.asAlbum,
+    displayMode: row.displayMode ?? 'gallery',
     watchIntervalMs: row.watchIntervalMs,
     lastScanAt: row.lastScanAt ? new Date(row.lastScanAt).toISOString() : null,
     lastScanResult: row.lastScanResult,
@@ -232,7 +237,7 @@ export const createScanLibrary = async (input: ScanLibraryInput): Promise<number
       provider: 'local',
       // urlKey 由自增 id 导入后推导（sha256(id) 前 8 位）
       enabled: input.enabled ?? true,
-      asAlbum: input.asAlbum ?? false,
+      displayMode: input.displayMode ?? 'gallery',
       watchIntervalMs: input.watchIntervalMs ?? 60000,
     })
     .returning({ id: scanLibraries.id })
@@ -257,14 +262,14 @@ export const updateScanLibrary = async (
   if (input.name !== undefined && (input.name as string).trim())
     patch.name = (input.name as string).trim()
   if (input.enabled !== undefined) patch.enabled = input.enabled
-  if (input.asAlbum !== undefined) patch.asAlbum = input.asAlbum
+  if (input.displayMode !== undefined) patch.displayMode = input.displayMode
   if (input.watchIntervalMs !== undefined) patch.watchIntervalMs = input.watchIntervalMs
   const colPatch: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(patch)) {
     if (k === 'rootPath') colPatch.rootPath = v
     else if (k === 'name') colPatch.name = v
     else if (k === 'enabled') colPatch.enabled = v
-    else if (k === 'asAlbum') colPatch.asAlbum = v
+    else if (k === 'displayMode') colPatch.displayMode = v
     else if (k === 'watchIntervalMs') colPatch.watchIntervalMs = v
   }
 
@@ -437,14 +442,17 @@ export const getScanAlbumEffectivePasswordHash = async (
   return null
 }
 
-/** 以「相簿」展示且启用的扫描库挂载名集合（如 scan_1），用于从首页全局画廊隐藏 */
+/** 以「相簿」展示（album/both）且启用的扫描库挂载名集合（如 scan_1） */
 export const getAlbumScanMountSet = (): Set<string> => {
   const db = useDB()
   const rows = db
     .select({ id: scanLibraries.id })
     .from(scanLibraries)
     .where(
-      and(eq(scanLibraries.asAlbum, true), eq(scanLibraries.enabled, true)),
+      and(
+        inArray(scanLibraries.displayMode, ['album', 'both']),
+        eq(scanLibraries.enabled, true),
+      ),
     )
     .all()
   return new Set(rows.map((r) => scanMountName(r.id)))
@@ -453,7 +461,8 @@ export const getAlbumScanMountSet = (): Set<string> => {
 /**
  * 应从首页全局画廊隐藏的扫描库挂载名集合。
  * 包含两类：
- * 1) 转为相簿展示的库（asAlbum=true，照片只在相册页展示）；
+ * 1) 纯相簿展示的库（displayMode='album'，照片只在相册页展示；
+ *    共存 both 不隐藏，相册页与画廊同时展示）；
  * 2) 已被禁用/停止的库（enabled=false，外部库不再可用，其缩略图应立即从画廊隐藏，
  *    避免"关闭了还在首页显示"），删除的库则由 deleteScanLibrary 直接清理 DB 记录。
  */
@@ -464,7 +473,7 @@ export const getGalleryHiddenScanMountSet = (): Set<string> => {
     .from(scanLibraries)
     .where(
       or(
-        eq(scanLibraries.asAlbum, true),
+        eq(scanLibraries.displayMode, 'album'),
         eq(scanLibraries.enabled, false),
       ),
     )
@@ -643,7 +652,12 @@ export const listScanAlbumRoots = async (
   const rows = db
     .select()
     .from(scanLibraries)
-    .where(and(eq(scanLibraries.asAlbum, true), eq(scanLibraries.enabled, true)))
+    .where(
+      and(
+        inArray(scanLibraries.displayMode, ['album', 'both']),
+        eq(scanLibraries.enabled, true),
+      ),
+    )
     .all()
   const out: ScanAlbumNode[] = []
   for (const row of rows) {
@@ -744,7 +758,7 @@ export const getScanAlbumDetail = async (
   children: ScanAlbumNode[]
 } | null> => {
   const lib = getScanLibraryRow(libId)
-  if (!lib || !lib.asAlbum || !lib.enabled) return null
+  if (!lib || lib.displayMode === 'gallery' || !lib.enabled) return null
 
   const normalized =
     relPath

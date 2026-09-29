@@ -393,7 +393,13 @@ interface ScanLibraryItem {
   rootPath: string
   provider: 'local'
   enabled: boolean
-  asAlbum: boolean
+  /**
+   * 展示方式（三态）：
+   * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
+   * - album：相簿照片（相册页显示，首页全局画廊隐藏）
+   * - both：共存（相册页显示 + 首页全局画廊也显示）
+   */
+  displayMode: 'gallery' | 'album' | 'both'
   watchIntervalMs: number
   lastScanAt: string | null
   lastScanResult: string | null
@@ -414,15 +420,15 @@ const scanLibraryFormState = reactive<{
   name: string
   rootPath: string
   enabled: boolean
-  /** 作为「相簿」在相册页展示（同时从首页全局画廊隐藏） */
-  asAlbum: boolean
+  /** 展示方式：gallery=照片画廊 / album=相簿照片（画廊隐藏）/ both=共存 */
+  displayMode: 'gallery' | 'album' | 'both'
   watchIntervalMs: number
 }>({
   editId: null,
   name: '',
   rootPath: '',
   enabled: true,
-  asAlbum: false,
+  displayMode: 'gallery',
   watchIntervalMs: 60000,
 })
 
@@ -431,7 +437,7 @@ const resetScanLibraryForm = () => {
   scanLibraryFormState.name = ''
   scanLibraryFormState.rootPath = ''
   scanLibraryFormState.enabled = true
-  scanLibraryFormState.asAlbum = false
+  scanLibraryFormState.displayMode = 'gallery'
   scanLibraryFormState.watchIntervalMs = 60000
 }
 
@@ -453,7 +459,7 @@ const openScanLibraryEdit = (lib: ScanLibraryItem) => {
   scanLibraryFormState.name = lib.name
   scanLibraryFormState.rootPath = lib.rootPath
   scanLibraryFormState.enabled = lib.enabled
-  scanLibraryFormState.asAlbum = lib.asAlbum
+  scanLibraryFormState.displayMode = lib.displayMode ?? 'gallery'
   scanLibraryFormState.watchIntervalMs = lib.watchIntervalMs
   Object.assign(scanLibSlideover, { open: true, mode: 'edit', lib })
 }
@@ -462,7 +468,7 @@ const scanLibraryPayload = () => ({
   name: scanLibraryFormState.name || undefined,
   rootPath: scanLibraryFormState.rootPath,
   enabled: scanLibraryFormState.enabled,
-  asAlbum: scanLibraryFormState.asAlbum,
+  displayMode: scanLibraryFormState.displayMode,
   watchIntervalMs: scanLibraryFormState.watchIntervalMs,
 })
 
@@ -1320,7 +1326,7 @@ const storageInfoConfigEntries = computed(() => {
                       {{ $t('settings.storage.scanLibrary.form.asAlbumLabel') }}
                     </span>
 
-                    <!-- 胶囊样式分段选项：照片画廊 / 相簿照片 -->
+                    <!-- 胶囊样式分段选项：照片画廊 / 相簿照片 / 共存 -->
                     <div
                       role="radiogroup"
                       class="inline-flex w-fit items-center gap-0.5 rounded-full border border-neutral-200 bg-neutral-100/80 p-0.5 dark:border-neutral-800 dark:bg-neutral-900/50"
@@ -1328,10 +1334,10 @@ const storageInfoConfigEntries = computed(() => {
                       <button
                         type="button"
                         class="flex items-center justify-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors"
-                        :class="!scanLibraryFormState.asAlbum
+                        :class="scanLibraryFormState.displayMode === 'gallery'
                           ? 'bg-success-500 text-white shadow-sm'
                           : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'"
-                        @click="scanLibraryFormState.asAlbum = false"
+                        @click="scanLibraryFormState.displayMode = 'gallery'"
                       >
                         <UIcon name="tabler:photo" class="size-3 shrink-0" />
                         {{ $t('settings.storage.scanLibrary.info.modeGallery') }}
@@ -1339,18 +1345,29 @@ const storageInfoConfigEntries = computed(() => {
                       <button
                         type="button"
                         class="flex items-center justify-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors"
-                        :class="scanLibraryFormState.asAlbum
+                        :class="scanLibraryFormState.displayMode === 'album'
                           ? 'bg-success-500 text-white shadow-sm'
                           : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'"
-                        @click="scanLibraryFormState.asAlbum = true"
+                        @click="scanLibraryFormState.displayMode = 'album'"
                       >
                         <UIcon name="tabler:book-2" class="size-3 shrink-0" />
                         {{ $t('settings.storage.scanLibrary.info.modeAlbum') }}
                       </button>
+                      <button
+                        type="button"
+                        class="flex items-center justify-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors"
+                        :class="scanLibraryFormState.displayMode === 'both'
+                          ? 'bg-success-500 text-white shadow-sm'
+                          : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'"
+                        @click="scanLibraryFormState.displayMode = 'both'"
+                      >
+                        <UIcon name="tabler:folders" class="size-3 shrink-0" />
+                        {{ $t('settings.storage.scanLibrary.info.modeBoth') }}
+                      </button>
                     </div>
 
                     <p class="flex items-start gap-1 text-xs text-neutral-400 dark:text-neutral-500">
-                      <UIcon name="tabler:book-2" class="size-3.5 shrink-0 mt-px" />
+                      <UIcon name="tabler:folders" class="size-3.5 shrink-0 mt-px" />
                       {{ $t('settings.storage.scanLibrary.form.asAlbumHint') }}
                     </p>
                   </div>
@@ -1433,13 +1450,21 @@ const storageInfoConfigEntries = computed(() => {
                     </span>
                     <span class="flex max-w-[60%] items-center justify-end gap-1.5 text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">
                       <UIcon
-                        :name="scanLibInfo.asAlbum ? 'tabler:book-2' : 'tabler:photo'"
+                        :name="scanLibInfo.displayMode === 'gallery'
+                          ? 'tabler:photo'
+                          : scanLibInfo.displayMode === 'both'
+                            ? 'tabler:folders'
+                            : 'tabler:book-2'"
                         class="size-4"
-                        :class="scanLibInfo.asAlbum ? 'text-primary-500' : 'text-neutral-400'"
+                        :class="scanLibInfo.displayMode !== 'gallery' ? 'text-primary-500' : 'text-neutral-400'"
                       />
-                      {{ scanLibInfo.asAlbum
-                        ? $t('settings.storage.scanLibrary.info.modeAlbum')
-                        : $t('settings.storage.scanLibrary.info.modeGallery') }}
+                      {{
+                        scanLibInfo.displayMode === 'album'
+                          ? $t('settings.storage.scanLibrary.info.modeAlbum')
+                          : scanLibInfo.displayMode === 'both'
+                            ? $t('settings.storage.scanLibrary.info.modeBoth')
+                            : $t('settings.storage.scanLibrary.info.modeGallery')
+                      }}
                     </span>
                   </div>
                   <div class="bg-neutral-50 dark:bg-neutral-900 flex items-start justify-between gap-4 px-4 py-3">

@@ -1962,7 +1962,7 @@
           "asAlbumLabel": "Display mode",
           "asAlbumStateOn": "Album",
           "asAlbumStateOff": "Gallery",
-          "asAlbumHint": "Show this library as an album in the Albums page and hide its photos from the home gallery. Subfolders appear as nested albums."
+          "asAlbumHint": "Display mode: Gallery (home page only), Album (Albums page only), or Coexist (shown in both Albums page and home gallery). Subfolders appear as nested albums."
         },
         "info": {
           "title": "Scan Library Info",
@@ -1981,6 +1981,7 @@
           "displayMode": "Display mode",
           "modeAlbum": "Album photos",
           "modeGallery": "Photo gallery",
+          "modeBoth": "Coexist",
           "thumbnailDirHint": "Thumbnails are written to internal storage",
           "thumbnailDir": "Internal storage thumbnails directory, not inside the library folder",
           "scanIntervalHint": "Interval at which this folder is auto-polled",
