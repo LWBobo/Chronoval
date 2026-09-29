@@ -322,6 +322,16 @@ const swiperModules = [Navigation, Keyboard, Virtual]
                 class="h-full w-full"
               />
 
+              <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
+              <img
+                v-else-if="isGifPhoto(photo)"
+                :src="photo.originalUrl || ''"
+                :alt="photo.title || ''"
+                draggable="false"
+                class="h-full w-full select-none object-contain"
+                @load="index === props.currentIndex && handleImageLoaded()"
+              />
+
               <!-- 纹理(WebGL)加载：与首页查看器相同的 ProgressiveImage -->
               <ProgressiveImage
                 v-else

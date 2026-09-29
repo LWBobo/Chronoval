@@ -900,6 +900,16 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                       preload="metadata"
                     ></video>
 
+                    <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
+                    <img
+                      v-else-if="isGifPhoto(photo)"
+                      :src="photo.originalUrl!"
+                      :alt="photo.title || ''"
+                      draggable="false"
+                      class="h-full w-full select-none object-contain transition-opacity duration-400"
+                      @load="index === currentIndex && handleImageLoaded()"
+                    />
+
                     <!-- Main Image -->
                     <ProgressiveImage
                       v-else
