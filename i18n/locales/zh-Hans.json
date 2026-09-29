@@ -497,8 +497,6 @@
       "video": {
         "play": "播放",
         "pause": "暂停",
-        "mute": "静音",
-        "unmute": "取消静音",
         "fullscreen": "全屏",
         "exitFullscreen": "退出全屏"
       }

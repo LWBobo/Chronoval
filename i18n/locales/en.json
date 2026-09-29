@@ -497,8 +497,6 @@
       "video": {
         "play": "Play",
         "pause": "Pause",
-        "mute": "Mute",
-        "unmute": "Unmute",
         "fullscreen": "Fullscreen",
         "exitFullscreen": "Exit fullscreen"
       }

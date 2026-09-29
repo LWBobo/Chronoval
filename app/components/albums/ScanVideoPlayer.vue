@@ -1,9 +1,9 @@
 <script lang="ts" setup>
 /**
- * 相簿内嵌视频播放器（自定义 UI）：
- * - 点击画面播放/暂停，双击切换全屏
- * - 底部渐变控制栏：播放/暂停、当前时间、可拖动进度条、音量、全屏
- * - 播放中无操作自动隐藏控制栏，缓冲时显示加载动画
+ * 相簿内嵌视频播放器（简约自定义 UI）：
+ * - 点击画面播放/暂停，双击全屏
+ * - 底部极细白色进度条（可点击/拖动 seek），下方一行最小按钮：播放/暂停 + 时间 + 全屏
+ * - 播放中无操作自动隐藏全部控件，缓冲时显示加载动画
  */
 const props = withDefaults(
   defineProps<{
@@ -27,8 +27,6 @@ const buffering = ref(false)
 const ended = ref(false)
 const duration = ref(0)
 const currentTime = ref(0)
-const volume = ref(1)
-const muted = ref(false)
 const isFullscreen = ref(false)
 const showControls = ref(true)
 const isSeeking = ref(false)
@@ -57,7 +55,6 @@ const onLoadedMetadata = () => {
   const v = videoEl.value
   if (!v) return
   duration.value = v.duration || 0
-  volume.value = v.volume
 }
 
 const onTimeUpdate = () => {
@@ -89,27 +86,6 @@ const onEnded = () => {
   isPlaying.value = false
   ended.value = true
   showControls.value = true
-}
-
-const onVolumeChange = () => {
-  const v = videoEl.value
-  if (!v) return
-  volume.value = v.volume
-  muted.value = v.muted
-}
-
-const toggleMute = () => {
-  const v = videoEl.value
-  if (!v) return
-  v.muted = !v.muted
-}
-
-const onVolumeInput = (e: Event) => {
-  const v = videoEl.value
-  if (!v) return
-  const val = Number((e.target as HTMLInputElement).value)
-  v.volume = val
-  v.muted = val === 0
 }
 
 /* ===== 进度条拖动 ===== */
@@ -152,7 +128,7 @@ const scheduleHide = () => {
   if (hideTimer) clearTimeout(hideTimer)
   hideTimer = setTimeout(() => {
     if (isPlaying.value && !isSeeking.value) showControls.value = false
-  }, 3000)
+  }, 2500)
 }
 
 const onPointerMove = () => {
@@ -222,7 +198,6 @@ watch(
       @waiting="onWaiting"
       @canplay="onCanPlay"
       @ended="onEnded"
-      @volumechange="onVolumeChange"
       @click="togglePlay"
     ></video>
 
@@ -231,109 +206,63 @@ watch(
       v-if="buffering && !ended"
       class="pointer-events-none absolute inset-0 flex items-center justify-center"
     >
-      <div
-        class="size-11 animate-spin rounded-full border-[3px] border-white/25 border-t-white/90"
-      />
+      <div class="size-10 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
     </div>
 
-    <!-- 大播放按钮（暂停/未播放时） -->
-    <button
-      v-if="!isPlaying && !buffering"
-      type="button"
-      class="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/20 transition-opacity"
-      @click="togglePlay"
-    >
-      <span
-        class="flex size-16 items-center justify-center rounded-full bg-white/15 text-white shadow-lg ring-1 ring-white/30 backdrop-blur-md transition-transform hover:scale-105"
-      >
-        <Icon
-          :name="ended ? 'tabler:reload' : 'tabler:player-play-filled'"
-          class="size-8 ml-1"
-        />
-      </span>
-    </button>
-
-    <!-- 底部控制栏 -->
+    <!-- 底部控件：极细进度条 + 最小按钮行，播放中自动隐藏 -->
     <div
       class="absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300"
-      :class="showControls || !isPlaying ? 'opacity-100' : 'opacity-0'"
+      :class="showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'"
       @pointermove.stop
       @click.stop
     >
-      <div class="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/80 to-transparent" />
-      <div class="relative flex items-center gap-3 px-4 pb-3">
+      <!-- 细进度条 -->
+      <div
+        ref="progressEl"
+        class="group/progress relative h-[3px] w-full cursor-pointer transition-[height] duration-150 hover:h-[5px]"
+        @pointerdown="onProgressPointerDown"
+      >
+        <div class="absolute inset-0 bg-white/15">
+          <div
+            class="absolute inset-y-0 left-0 bg-white/90"
+            :style="{ width: `${progress * 100}%` }"
+          />
+        </div>
+        <div
+          class="absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-0 transition-opacity group-hover/progress:opacity-100"
+          :style="{ left: `${progress * 100}%` }"
+        />
+      </div>
+
+      <!-- 按钮行 -->
+      <div class="flex items-center gap-2 px-3 py-2">
         <button
           type="button"
-          class="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+          class="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors hover:bg-white/10"
           :aria-label="isPlaying ? $t('albums.scan.video.pause') : $t('albums.scan.video.play')"
           @click="togglePlay"
         >
           <Icon
             :name="isPlaying ? 'tabler:player-pause-filled' : 'tabler:player-play-filled'"
-            class="size-6"
+            class="size-5"
           />
         </button>
 
-        <span class="shrink-0 text-xs font-medium tabular-nums text-white/90">
+        <span class="shrink-0 text-[11px] font-medium tabular-nums text-white/70">
           {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
         </span>
 
-        <!-- 进度条 -->
-        <div
-          ref="progressEl"
-          class="group/progress relative h-8 min-w-0 flex-1 cursor-pointer py-3"
-          @pointerdown="onProgressPointerDown"
-        >
-          <div class="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25">
-            <div
-              class="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-sky-400 to-violet-400"
-              :style="{ width: `${progress * 100}%` }"
-            />
-          </div>
-          <div
-            class="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md transition-transform group-hover/progress:scale-125"
-            :style="{ left: `${progress * 100}%` }"
-          />
-        </div>
+        <div class="min-w-0 flex-1" />
 
-        <!-- 音量 -->
-        <div class="group/vol relative flex shrink-0 items-center">
-          <button
-            type="button"
-            class="flex size-9 cursor-pointer items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
-            :aria-label="muted || volume === 0 ? $t('albums.scan.video.unmute') : $t('albums.scan.video.mute')"
-            @click="toggleMute"
-          >
-            <Icon
-              :name="muted || volume === 0 ? 'tabler:volume-3' : 'tabler:volume'"
-              class="size-6"
-            />
-          </button>
-          <div
-            class="absolute bottom-full left-1/2 mb-2 hidden w-24 -translate-x-1/2 rounded-xl bg-black/80 p-2 opacity-0 shadow-lg backdrop-blur-md transition-opacity group-hover/vol:opacity-100 group-hover/vol:block"
-          >
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              class="w-full accent-sky-400"
-              :value="muted ? 0 : volume"
-              @input="onVolumeInput"
-            />
-          </div>
-        </div>
-
-        <!-- 全屏 -->
         <button
           type="button"
-          class="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors hover:bg-white/15"
+          class="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10"
           :aria-label="isFullscreen ? $t('albums.scan.video.exitFullscreen') : $t('albums.scan.video.fullscreen')"
           @click="toggleFullscreen"
         >
           <Icon
             :name="isFullscreen ? 'tabler:arrows-minimize' : 'tabler:arrows-maximize'"
-            class="size-6"
+            class="size-4.5"
           />
         </button>
       </div>
