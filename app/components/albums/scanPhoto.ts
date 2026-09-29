@@ -1,5 +1,7 @@
-// 扫描相簿目录照片的轻量结构：仅含缩略图/原图/长宽比/标题/拍摄时间，
-// 供扫描相簿的瀑布流卡片与 WebGL 纹理查看器消费（不与全局 Photo 类型耦合）
+// 扫描相簿目录照片：缩略图/原图供瀑布流与查看器使用，
+// exif 与尺寸等字段供查看器的表态和拍摄参数面板使用。
+import type { NeededExif } from '~~/shared/types/photo'
+
 export interface ScanPhoto {
   id: string
   thumbnailUrl: string | null
@@ -10,4 +12,17 @@ export interface ScanPhoto {
   title?: string | null
   /** 拍摄时间（ISO 字符串），供查看器工具栏展示 */
   dateTaken?: string | null
+  isLivePhoto?: number
+  livePhotoVideoUrl?: string | null
+  exif?: NeededExif | null
+  width?: number | null
+  height?: number | null
+  fileSize?: number | null
+  storageKey?: string | null
+  tags?: string[] | null
+  latitude?: number | null
+  longitude?: number | null
+  city?: string | null
+  country?: string | null
+  type?: 'image' | 'video'
 }

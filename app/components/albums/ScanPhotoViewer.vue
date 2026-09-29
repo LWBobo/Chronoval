@@ -9,6 +9,10 @@ import 'swiper/swiper-bundle.css'
 import LoadingIndicator from '../photo/LoadingIndicator.vue'
 import type { LoadingIndicatorRef } from '../photo/LoadingIndicator.vue'
 import ProgressiveImage from '../photo/ProgressiveImage.vue'
+import InfoPanel from '../photo/InfoPanel.vue'
+import ReactionPicker from '../photo/ReactionPicker.vue'
+import ReactionConfetti from '../photo/ReactionConfetti.vue'
+import { REACTION_ICON_MAP } from '../photo/reaction-definitions'
 import type { ScanPhoto } from './scanPhoto'
 
 interface Props {
@@ -24,9 +28,71 @@ const emit = defineEmits<{
 }>()
 
 const isMobile = useMediaQuery('(max-width: 768px)')
+const toast = useToast()
 const swiperRef = ref<SwiperType>()
 const loadingIndicatorRef = ref<LoadingIndicatorRef>()
 const isZoomed = ref(false)
+const currentTextureReady = ref(false)
+const showExifPanel = ref(false)
+const isDesktopInspectorVisible = ref(false)
+
+const showReactionPicker = ref(false)
+const reactionButtonRef = ref<HTMLButtonElement | null>(null)
+const shouldCloseReactionPickerOnClick = ref(false)
+const selectedReaction = ref<string | null>(null)
+const reactionCounts = ref<Record<string, number>>({})
+const isLoadingReaction = ref(false)
+const confettiIcon = ref<string | null>(null)
+const confettiTriggerCount = ref(0)
+
+const currentReactionIcon = computed(() => {
+  const reactionId = selectedReaction.value
+  if (!reactionId) return null
+  return REACTION_ICON_MAP[reactionId as keyof typeof REACTION_ICON_MAP] || null
+})
+
+const totalReactions = computed(() =>
+  Object.values(reactionCounts.value).reduce((sum, count) => sum + count, 0),
+)
+
+const infoPhoto = computed(() => {
+  const p = currentPhoto.value
+  if (!p) return null
+  return {
+    id: p.id,
+    title: p.title ?? null,
+    description: null,
+    width: p.width ?? null,
+    height: p.height ?? null,
+    aspectRatio: p.aspectRatio,
+    dateTaken: p.dateTaken ?? null,
+    storageKey: p.storageKey ?? null,
+    thumbnailKey: null,
+    fileSize: p.fileSize ?? null,
+    lastModified: null,
+    originalUrl: p.originalUrl,
+    thumbnailUrl: p.thumbnailUrl,
+    thumbnailHash: p.thumbnailHash,
+    tags: p.tags ?? null,
+    exif: p.exif ?? null,
+    latitude: p.latitude ?? null,
+    longitude: p.longitude ?? null,
+    country: p.country ?? null,
+    city: p.city ?? null,
+    locationName: null,
+    isLivePhoto: p.isLivePhoto ?? 0,
+    livePhotoVideoUrl: p.livePhotoVideoUrl ?? null,
+    livePhotoVideoKey: null,
+    isPanorama: null,
+    panoYaw: null,
+    panoPitch: null,
+    type: p.type ?? 'image',
+    source: 'library' as const,
+    libraryMount: null,
+    libraryPath: null,
+    deletedAt: null,
+  }
+})
 
 // 缩放倍率指示（与首页查看器一致）：缩放变化或纹理构建完成后短暂显示「1.0x」，2 秒后隐藏
 const showZoomLevel = ref(false)
@@ -64,6 +130,13 @@ watch(
     document.body.style.overflow = open ? 'hidden' : ''
     if (!open) {
       isZoomed.value = false
+      currentTextureReady.value = false
+      showExifPanel.value = false
+      isDesktopInspectorVisible.value = false
+      showReactionPicker.value = false
+      selectedReaction.value = null
+      confettiIcon.value = null
+      confettiTriggerCount.value = 0
       if (zoomLevelTimer.value) {
         clearTimeout(zoomLevelTimer.value)
         zoomLevelTimer.value = null
@@ -83,6 +156,8 @@ watch(
       swiperRef.value.slideTo(idx, 300)
     }
     isZoomed.value = false
+    currentTextureReady.value = false
+    showReactionPicker.value = false
   },
 )
 
@@ -143,6 +218,7 @@ const handleImageLoaded = () => {
 
 // 纹理（WebGL）构建完成后短暂显示缩放倍率指示 2 秒；无倍率时以 1.0x 兜底
 const handleTextureReady = () => {
+  currentTextureReady.value = true
   if (!zoomLevel.value) {
     zoomLevel.value = 1
   }
@@ -192,6 +268,116 @@ onBeforeUnmount(() => {
     clearTimeout(zoomLevelTimer.value)
     zoomLevelTimer.value = null
   }
+})
+
+const loadPhotoReactions = async (photoId: string) => {
+  try {
+    const data = (await $fetch(`/api/photos/${photoId}/reactions`)) as {
+      userReaction?: string | null
+      reactions?: Record<string, number>
+    }
+    selectedReaction.value = data.userReaction || null
+    reactionCounts.value = data.reactions || {}
+  } catch (error) {
+    console.error('Failed to load reactions:', error)
+  }
+}
+
+const decreaseReactionCountSafely = (reactionId: string) => {
+  const currentCount = reactionCounts.value[reactionId] || 0
+  reactionCounts.value[reactionId] = Math.max(0, currentCount - 1)
+}
+
+const clearConfetti = useDebounceFn(() => {
+  confettiIcon.value = null
+}, 1600)
+
+const handleReactionSelect = async (reactionId: string, iconName: string) => {
+  if (!currentPhoto.value || isLoadingReaction.value) return
+
+  const photoId = currentPhoto.value.id
+  const previousSelectedReaction = selectedReaction.value
+  const previousReactionCounts = { ...reactionCounts.value }
+  const isRemovingCurrentReaction = previousSelectedReaction === reactionId
+
+  isLoadingReaction.value = true
+  showReactionPicker.value = false
+
+  if (isRemovingCurrentReaction) {
+    selectedReaction.value = null
+    decreaseReactionCountSafely(reactionId)
+  } else {
+    if (previousSelectedReaction) {
+      decreaseReactionCountSafely(previousSelectedReaction)
+    }
+    selectedReaction.value = reactionId
+    reactionCounts.value[reactionId] =
+      (reactionCounts.value[reactionId] || 0) + 1
+  }
+
+  try {
+    if (isRemovingCurrentReaction) {
+      await $fetch(`/api/photos/${photoId}/reactions`, { method: 'DELETE' })
+    } else {
+      await $fetch(`/api/photos/${photoId}/reactions`, {
+        method: 'POST',
+        body: { reactionType: reactionId },
+      })
+      confettiIcon.value = iconName
+      confettiTriggerCount.value++
+      clearConfetti()
+    }
+  } catch (error: any) {
+    selectedReaction.value = previousSelectedReaction
+    reactionCounts.value = previousReactionCounts
+    console.error('Failed to update reaction:', error)
+    toast.add({
+      icon: 'tabler:alert-circle',
+      title: $t('viewer.reaction.error.title'),
+      description:
+        error?.statusCode === 429
+          ? $t('viewer.reaction.error.rateLimited')
+          : error instanceof Error
+            ? error.message
+            : $t('common.unknownError'),
+      color: 'warning',
+    })
+  } finally {
+    isLoadingReaction.value = false
+  }
+}
+
+const toggleReactionPicker = () => {
+  if (shouldCloseReactionPickerOnClick.value) {
+    showReactionPicker.value = false
+    shouldCloseReactionPickerOnClick.value = false
+    return
+  }
+  showReactionPicker.value = !showReactionPicker.value
+}
+
+const handleReactionButtonPointerDown = () => {
+  shouldCloseReactionPickerOnClick.value = showReactionPicker.value
+}
+
+watch(
+  () => (props.isOpen ? currentPhoto.value?.id : null),
+  (photoId) => {
+    if (photoId) loadPhotoReactions(photoId)
+  },
+  { immediate: true },
+)
+
+const refitSwiper = () => {
+  const swiper = swiperRef.value
+  if (!swiper) return
+  swiper.update()
+  swiper.virtual?.update(true)
+  swiper.slideTo(swiper.activeIndex, 0, false)
+}
+
+watch(isDesktopInspectorVisible, () => {
+  nextTick(() => refitSwiper())
 })
 
 const swiperModules = [Navigation, Keyboard, Virtual]
@@ -253,10 +439,20 @@ const swiperModules = [Navigation, Keyboard, Virtual]
       >
         <!-- 顶部工具栏：左=照片标题+拍摄时间，右=关闭；与首页查看器一致，仅去掉分享卡片 -->
         <div
-          class="pointer-events-none absolute z-30 flex items-center justify-between gap-3"
+          class="pointer-events-none absolute z-40 flex items-center justify-between gap-3"
           :class="isMobile ? 'top-2 right-2 left-2' : 'top-4 right-4 left-4'"
         >
           <div class="pointer-events-auto flex min-w-0 items-center gap-2">
+            <button
+              v-if="isMobile"
+              type="button"
+              aria-label="info"
+              class="flex size-9 shrink-0 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
+              :class="showExifPanel ? 'bg-black/55' : ''"
+              @click="showExifPanel = !showExifPanel"
+            >
+              <Icon name="tabler:info-circle" class="size-5" />
+            </button>
             <span
               class="truncate rounded-full bg-black/35 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
             >
@@ -269,15 +465,36 @@ const swiperModules = [Navigation, Keyboard, Virtual]
               {{ currentDateLabel }}
             </span>
           </div>
-          <button
-            type="button"
-            aria-label="close"
-            class="pointer-events-auto flex size-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
-            @click="emit('close')"
-          >
-            <Icon name="tabler:x" class="size-5" />
-          </button>
+          <div class="pointer-events-auto flex items-center gap-2">
+            <button
+              v-if="!isMobile"
+              type="button"
+              :aria-label="isDesktopInspectorVisible ? 'collapse info' : 'expand info'"
+              class="flex size-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
+              @click="isDesktopInspectorVisible = !isDesktopInspectorVisible"
+            >
+              <Icon
+                :name="isDesktopInspectorVisible
+                  ? 'tabler:layout-sidebar-right-collapse'
+                  : 'tabler:layout-sidebar-right-expand'"
+                class="size-5"
+              />
+            </button>
+            <button
+              type="button"
+              aria-label="close"
+              class="flex size-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
+              @click="emit('close')"
+            >
+              <Icon name="tabler:x" class="size-5" />
+            </button>
+          </div>
         </div>
+
+        <div
+          class="relative h-full w-full"
+          :style="{ paddingRight: !isMobile && isDesktopInspectorVisible ? '320px' : '0px' }"
+        >
 
         <!-- 底部计数：n / M，与首页查看器一致 -->
         <div
@@ -358,6 +575,81 @@ const swiperModules = [Navigation, Keyboard, Virtual]
           </SwiperSlide>
         </Swiper>
 
+        <AnimatePresence>
+          <motion.div
+            v-if="!isZoomed && currentTextureReady"
+            :initial="{ opacity: 0, scale: 0.8, y: 20 }"
+            :animate="{ opacity: 1, scale: 1, y: 0 }"
+            :exit="{ opacity: 0, scale: 0.8, y: 20 }"
+            :transition="{ type: 'spring', stiffness: 300, damping: 20, delay: 0.1 }"
+            class="absolute bottom-4 right-4 z-20"
+          >
+            <div class="relative">
+              <ReactionPicker
+                :is-open="showReactionPicker"
+                :trigger-el="reactionButtonRef"
+                :selected-reaction="selectedReaction"
+                :reaction-counts="reactionCounts"
+                @select="handleReactionSelect"
+                @close="showReactionPicker = false"
+              />
+              <ReactionConfetti
+                v-if="confettiIcon"
+                :icon-name="confettiIcon"
+                :trigger-count="confettiTriggerCount"
+              />
+              <motion.button
+                ref="reactionButtonRef"
+                type="button"
+                :animate="{ scale: showReactionPicker ? 0.92 : 1 }"
+                :class="[
+                  'pointer-events-auto flex items-center justify-center gap-2 cursor-pointer',
+                  'px-4 h-11 rounded-full',
+                  'backdrop-blur-xl border shadow-lg',
+                  'transition-all duration-200',
+                  selectedReaction
+                    ? 'bg-blue-500/90 border-blue-400/50 text-white shadow-blue-500/30'
+                    : 'bg-white/90 dark:bg-neutral-800/90 border-neutral-200/50 dark:border-white/10 text-neutral-700 dark:text-white/80 shadow-black/10 dark:shadow-black/30',
+                ]"
+                @pointerdown="handleReactionButtonPointerDown"
+                @click="toggleReactionPicker"
+              >
+                <Icon
+                  v-if="selectedReaction && currentReactionIcon"
+                  :name="currentReactionIcon"
+                  class="text-xl leading-none select-none"
+                />
+                <Icon
+                  v-else
+                  name="tabler:mood-smile"
+                  class="text-xl"
+                />
+                <div class="flex flex-col items-start gap-0.5">
+                  <span class="text-sm font-medium leading-none">
+                    {{
+                      selectedReaction
+                        ? $t('viewer.reaction.change')
+                        : $t('viewer.reaction.add')
+                    }}
+                  </span>
+                  <span
+                    v-if="totalReactions > 0"
+                    class="text-[10px] leading-none opacity-70"
+                  >
+                    {{
+                      $t(
+                        'viewer.reaction.count',
+                        { count: totalReactions },
+                        totalReactions,
+                      )
+                    }}
+                  </span>
+                </div>
+              </motion.button>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+
         <!-- 桌面端悬停导航 -->
         <template v-if="!isMobile">
           <button
@@ -379,6 +671,16 @@ const swiperModules = [Navigation, Keyboard, Virtual]
             <Icon name="tabler:chevron-right" class="size-6" />
           </button>
         </template>
+        </div>
+
+        <InfoPanel
+          v-if="props.isOpen && infoPhoto"
+          :key="infoPhoto.id"
+          :current-photo="infoPhoto"
+          :exif-data="infoPhoto.exif"
+          :visible="isMobile ? showExifPanel : isDesktopInspectorVisible"
+          :on-close="() => isMobile ? (showExifPanel = false) : (isDesktopInspectorVisible = false)"
+        />
       </motion.div>
     </AnimatePresence>
   </Teleport>

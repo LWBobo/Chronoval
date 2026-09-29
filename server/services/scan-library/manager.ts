@@ -8,6 +8,7 @@ import {
 } from '~~/server/services/storage/events'
 import { applyScanAlbumMeta, getScanAlbumMeta } from './album-meta'
 import { scanLibraries } from '~~/server/database/schema'
+import type { NeededExif } from '~~/shared/types/photo'
 import {
   type LibraryMount,
   IMAGE_EXTENSIONS,
@@ -769,6 +770,17 @@ export const getScanAlbumDetail = async (
     dateTaken: string | null
     isLivePhoto: number
     livePhotoVideoUrl: string | null
+    exif: NeededExif | null
+    width: number | null
+    height: number | null
+    fileSize: number | null
+    storageKey: string | null
+    tags: string[] | null
+    latitude: number | null
+    longitude: number | null
+    city: string | null
+    country: string | null
+    type: 'image' | 'video'
   }>
   children: ScanAlbumNode[]
 } | null> => {
@@ -823,6 +835,17 @@ export const getScanAlbumDetail = async (
       dateTaken: p.dateTaken,
       isLivePhoto: p.isLivePhoto,
       livePhotoVideoUrl: p.livePhotoVideoUrl,
+      exif: p.exif ?? null,
+      width: p.width,
+      height: p.height,
+      fileSize: p.fileSize,
+      storageKey: p.storageKey,
+      tags: p.tags ?? null,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      city: p.city,
+      country: p.country,
+      type: p.type,
     }))
 
   const children: ScanAlbumNode[] = await Promise.all(
