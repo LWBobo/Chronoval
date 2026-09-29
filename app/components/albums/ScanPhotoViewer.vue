@@ -313,16 +313,14 @@ const swiperModules = [Navigation, Keyboard, Virtual]
               style="user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;"
               @contextmenu.prevent=""
             >
-              <!-- 视频媒体：内置播放器播放（支持控制条，点开即可播放各种视频文件） -->
-              <video
+              <!-- 视频媒体：自定义播放器（进度条/音量/全屏，自动隐藏控制栏） -->
+              <AlbumsScanVideoPlayer
                 v-if="photo.type === 'video'"
                 :src="photo.originalUrl || ''"
-                class="h-full w-full object-contain"
-                :poster="photo.thumbnailUrl || undefined"
-                controls
-                playsinline
-                preload="metadata"
-              ></video>
+                :poster="photo.thumbnailUrl || null"
+                :active="index === props.currentIndex"
+                class="h-full w-full"
+              />
 
               <!-- 纹理(WebGL)加载：与首页查看器相同的 ProgressiveImage -->
               <ProgressiveImage

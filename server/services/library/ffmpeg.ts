@@ -15,7 +15,9 @@ export const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg'
 export const FFPROBE_BIN = process.env.FFPROBE_PATH || 'ffprobe'
 
 /**
- * 使用 ffprobe 读取视频元数据（分辨率、时长）
+ * 使用 ffprobe 读取视频元数据（分辨率、时长）。
+ * 分辨率按 rotation metadata 转正（竖拍视频 width/height 互换），
+ * 与抽帧/缩略图（ffmpeg 默认 autorotate 转正）保持一致，避免缩略图被拉伸裁剪。
  */
 export const probeVideo = async (filePath: string): Promise<VideoProbeInfo | null> => {
   try {
@@ -24,7 +26,7 @@ export const probeVideo = async (filePath: string): Promise<VideoProbeInfo | nul
       [
         '-v', 'error',
         '-select_streams', 'v:0',
-        '-show_entries', 'stream=width,height,duration:format=duration',
+        '-show_entries', 'stream=width,height,duration:stream_tags=rotate:format=duration',
         '-of', 'json',
         filePath,
       ],
@@ -36,9 +38,16 @@ export const probeVideo = async (filePath: string): Promise<VideoProbeInfo | nul
       return { width: 0, height: 0, duration: 0, hasVideo: false }
     }
     const duration = Number(stream.duration || data?.format?.duration || 0) || 0
+    let width = Number(stream.width || 0)
+    let height = Number(stream.height || 0)
+    // rotation 为 90/270 时实际显示为横屏：交换宽高使 aspectRatio 与转正缩略图一致
+    const rotate = Number(stream?.tags?.rotate || 0)
+    if (width > 0 && height > 0 && (rotate === 90 || rotate === 270)) {
+      ;[width, height] = [height, width]
+    }
     return {
-      width: Number(stream.width || 0),
-      height: Number(stream.height || 0),
+      width,
+      height,
       duration,
       hasVideo: true,
     }
@@ -75,6 +84,7 @@ export const extractVideoFrame = async (
     const args = [
       '-v', 'error',
       '-ss', String(Math.max(time, 0)),
+      '-autorotate',
       '-i', filePath,
       '-frames:v', '1',
       '-vf', 'scale=600:-1',

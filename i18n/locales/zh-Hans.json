@@ -493,7 +493,15 @@
       "redirecting": "正在跳转到相簿…",
       "customUrlRedirect": "相簿跳转",
       "backToAlbums": "返回相册",
-      "backToParent": "返回上一级"
+      "backToParent": "返回上一级",
+      "video": {
+        "play": "播放",
+        "pause": "暂停",
+        "mute": "静音",
+        "unmute": "取消静音",
+        "fullscreen": "全屏",
+        "exitFullscreen": "退出全屏"
+      }
     },
     "layout": {
       "switchLabel": "样式布局",

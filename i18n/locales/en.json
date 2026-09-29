@@ -493,7 +493,15 @@
       "redirecting": "Redirecting to album…",
       "customUrlRedirect": "Album redirect",
       "backToAlbums": "Back to albums",
-      "backToParent": "Back to parent"
+      "backToParent": "Back to parent",
+      "video": {
+        "play": "Play",
+        "pause": "Pause",
+        "mute": "Mute",
+        "unmute": "Unmute",
+        "fullscreen": "Fullscreen",
+        "exitFullscreen": "Exit fullscreen"
+      }
     },
     "layout": {
       "switchLabel": "Layout",
