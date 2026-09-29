@@ -330,8 +330,8 @@ const selectView = (v: 'photos' | 'subs') => {
     <!-- 顶部导航 / 标题区 -->
     <div class="px-6 pt-6">
       <div class="mb-6 flex items-center justify-between gap-3 text-sm text-neutral-500 dark:text-neutral-400">
-        <nav class="flex h-6 min-w-0 shrink items-center gap-0.5 rounded-full bg-(--ui-bg-elevated) px-1 ring-1 ring-(--ui-border)">
-          <!-- 返回上一级 -->
+        <nav class="flex h-6 shrink items-center gap-0.5 rounded-full bg-(--ui-bg-elevated) px-1 ring-1 ring-(--ui-border)">
+          <!-- 返回上一级（仅保留返回按钮，面包屑在移动端易被挤压） -->
           <NuxtLink
             :to="backTarget"
             class="flex h-full items-center gap-1 rounded-full px-1.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-(--ui-bg) hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
@@ -339,32 +339,6 @@ const selectView = (v: 'photos' | 'subs') => {
             <Icon name="tabler:arrow-left" class="size-3.5" />
             <span>{{ backLabel }}</span>
           </NuxtLink>
-
-          <template v-if="crumbs.length">
-            <Icon name="tabler:chevron-right" class="size-3 shrink-0 self-center text-neutral-400 dark:text-neutral-500" />
-            <template v-for="(seg, i) in crumbs" :key="seg">
-              <!-- 中间层级：可点击跳转的路径 -->
-              <NuxtLink
-                v-if="i < crumbs.length - 1"
-                :to="`/albums/scan/${libKey}/${crumbs.slice(0, i + 1).join('/')}`"
-                class="flex h-full max-w-[14ch] items-center truncate rounded-full px-1.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-(--ui-bg) hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
-              >
-                {{ seg }}
-              </NuxtLink>
-              <!-- 当前层级：主题色高亮胶囊，不可点击 -->
-              <span
-                v-else
-                class="flex h-full max-w-[14ch] items-center truncate rounded-full bg-(--ui-primary)/10 px-1.5 text-xs font-semibold text-(--ui-primary)"
-              >
-                {{ seg }}
-              </span>
-              <Icon
-                v-if="i < crumbs.length - 1"
-                name="tabler:chevron-right"
-                class="size-3 shrink-0 self-center text-neutral-400 dark:text-neutral-500"
-              />
-            </template>
-          </template>
         </nav>
 
         <!-- 右上角胶囊组：圆球在相簿首页与子相簿都显示；右侧独立「返回相簿」胶囊仅子相簿显示 -->
