@@ -581,6 +581,15 @@ const childSegmentsOf = (
   return Array.from(segs)
 }
 
+/** 稳定的伪随机索引：同 relPath 每次请求挑到同一张子相簿封面，避免刷新封面闪烁 */
+const stableSeedOf = (s: string): number => {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0
+  }
+  return h
+}
+
 const buildScanAlbumNode = (
   lib: {
     id: number
@@ -608,6 +617,30 @@ const buildScanAlbumNode = (
       thumbnailHash: p.thumbnailHash,
       aspectRatio: p.aspectRatio,
     }))
+  // 本层无直接图片（如只有子相簿）时：默认从后代子相簿照片中随机挑选一张作封面。
+  // 仅作默认兜底，自定义封面会由 applyScanAlbumMeta 覆盖；同相簿稳定挑同一张避免刷新闪烁。
+  const fallbackCovers: ScanAlbumCover[] = []
+  if (covers.length === 0) {
+    const prefix = relPath ? `${relPath}/` : ''
+    const descendantPhotos = photos.filter(
+      (p) =>
+        p.libraryMount === mount &&
+        (p.libraryPath || '').startsWith(prefix) &&
+        dirOfScanPath(p.libraryPath || '') !== relPath &&
+        p.type !== 'video',
+    )
+    if (descendantPhotos.length > 0) {
+      const pick =
+        descendantPhotos[stableSeedOf(`${mount}:${relPath}`) % descendantPhotos.length]!
+      fallbackCovers.push({
+        id: pick.id,
+        thumbnailUrl: pick.thumbnailUrl,
+        thumbnailHash: pick.thumbnailHash,
+        aspectRatio: pick.aspectRatio,
+      })
+    }
+  }
+  const effectiveCovers = covers.length > 0 ? covers : fallbackCovers
   const seg = relPath.split('/').filter(Boolean).pop()
   const title = relPath === '' ? lib.name : decodeURIComponent(seg || relPath)
   // 公开链接优先使用 urlKey（base36 时间戳），回退到数字 id 兼容存量
@@ -636,8 +669,8 @@ const buildScanAlbumNode = (
     randomQuotesTag: null,
     photoCount: dirPhotos.filter((p) => p.type !== 'video').length,
     videoCount: dirPhotos.filter((p) => p.type === 'video').length,
-    coverPhotoId: covers[0]?.id ?? null,
-    covers,
+    coverPhotoId: effectiveCovers[0]?.id ?? null,
+    covers: effectiveCovers,
     // 相簿级密码由 applyScanAlbumMeta 依据 scan_album_meta.password_hash 覆盖
     passwordProtected: false,
     hasChildren: childSegmentsOf(mount, relPath, photos).length > 0,
