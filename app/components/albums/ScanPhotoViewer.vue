@@ -49,13 +49,6 @@ const handleBlurLoad = () => {
   persistentBlur.value = currentBlur.value
 }
 
-// 拍摄时间格式化（左上角简写：月-日 时:分，避免长格式挤压右侧操作按钮）
-const dayjs = useDayjs()
-const currentDateLabel = computed(() => {
-  const dt = currentPhoto.value?.dateTaken
-  return dt ? dayjs(dt).format('MM-DD HH:mm') : null
-})
-
 // 打开/关闭时锁定/释放页面滚动（仅客户端；SSR 无 document）
 watch(
   () => props.isOpen,
@@ -251,24 +244,11 @@ const swiperModules = [Navigation, Keyboard, Virtual]
         :style="{ touchAction: isMobile ? 'manipulation' : 'none' }"
         @click.self="emit('close')"
       >
-        <!-- 顶部工具栏：左=照片标题+拍摄时间，右=关闭；与首页查看器一致，仅去掉分享卡片 -->
+        <!-- 顶部工具栏：仅保留右上角关闭按钮（不显示照片标题/日期标签） -->
         <div
-          class="pointer-events-none absolute z-30 flex items-center justify-between gap-3"
+          class="pointer-events-none absolute z-30 flex items-center justify-end gap-3"
           :class="isMobile ? 'top-2 right-2 left-2' : 'top-4 right-4 left-4'"
         >
-          <div class="pointer-events-auto flex min-w-0 items-center gap-2">
-            <span
-              class="max-w-[40vw] truncate rounded-full bg-black/35 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm sm:max-w-[28rem]"
-            >
-              {{ currentPhoto?.title || `${props.currentIndex + 1} / ${props.photos.length}` }}
-            </span>
-            <span
-              v-if="currentDateLabel"
-              class="shrink-0 rounded-full bg-black/35 px-3 py-1 text-xs text-white/70 backdrop-blur-sm"
-            >
-              {{ currentDateLabel }}
-            </span>
-          </div>
           <button
             type="button"
             aria-label="close"
