@@ -535,8 +535,10 @@ export interface ScanAlbumNode {
   randomQuotesTag: 'ancient' | 'modern' | null
   /** 相簿背景音乐（音乐盒）；null=不播放 BGM */
   bgmMusicId?: number | null
-  /** 该层目录直接包含的照片数（不含更深的子目录） */
+  /** 该层目录直接包含的图片数（不含更深的子目录；视频另计） */
   photoCount: number
+  /** 该层目录直接包含的视频数（不含更深的子目录）；无视频时省略或为 0 */
+  videoCount: number
   coverPhotoId: string | null
   covers: ScanAlbumCover[]
   passwordProtected: boolean
@@ -632,7 +634,8 @@ const buildScanAlbumNode = (
     randomQuotesEnabled: true,
     randomQuotes: null,
     randomQuotesTag: null,
-    photoCount: dirPhotos.length,
+    photoCount: dirPhotos.filter((p) => p.type !== 'video').length,
+    videoCount: dirPhotos.filter((p) => p.type === 'video').length,
     coverPhotoId: covers[0]?.id ?? null,
     covers,
     // 相簿级密码由 applyScanAlbumMeta 依据 scan_album_meta.password_hash 覆盖

@@ -41,6 +41,7 @@ export default eventHandler(async (event) => {
         thumbnailHash: tables.photos.thumbnailHash,
         aspectRatio: tables.photos.aspectRatio,
         libraryMount: tables.photos.libraryMount,
+        type: tables.photos.type,
       })
       .from(tables.albumPhotos)
       .leftJoin(tables.photos, eq(tables.albumPhotos.photoId, tables.photos.id))
@@ -105,7 +106,8 @@ export default eventHandler(async (event) => {
       bgm: (album.bgmMusicId && musicMap.get(album.bgmMusicId)) || null,
       // 即使是空相册，也返回空数组而不是 undefined
       photoIds,
-      photoCount: photoIds.length,
+      photoCount: rows.filter((r) => r.type !== 'video').length,
+      videoCount: rows.filter((r) => r.type === 'video').length,
     })
   }
 

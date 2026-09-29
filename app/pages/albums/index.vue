@@ -13,6 +13,7 @@ interface AlbumItem extends Album {
   covers?: ScanAlbumCover[]
   link?: string
   photoCount?: number
+  videoCount?: number
   passwordProtected?: boolean
   bgm?: { id: number; title: string } | null
   // 外部库（扫描库）相簿：库根定位字段
@@ -358,15 +359,24 @@ const hoveredAlbum = ref<number | null>(null)
             </div>
             -->
 
-            <!-- 照片数浮标：右下角；扫描相簿用书本图标标识来源，不带文字 -->
+            <!-- 媒体数浮标：右下角；图片数 + 视频数（仅当相簿含视频时追加视频计数） -->
             <div
               class="pointer-events-none absolute right-2 bottom-2 z-10 flex items-center gap-1.5 rounded-full bg-neutral-950/55 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm"
             >
-              <Icon
-                :name="album.kind === 'scan' ? 'tabler:book-2' : 'tabler:photo'"
-                class="size-3.5"
-              />
-              {{ album.photoCount ?? 0 }}
+              <span class="flex items-center gap-1">
+                <Icon
+                  :name="album.kind === 'scan' ? 'tabler:book-2' : 'tabler:photo'"
+                  class="size-3.5"
+                />
+                {{ album.photoCount ?? 0 }}
+              </span>
+              <span
+                v-if="(album.videoCount ?? 0) > 0"
+                class="flex items-center gap-1"
+              >
+                <Icon name="tabler:movie" class="size-3.5" />
+                {{ album.videoCount }}
+              </span>
             </div>
           </div>
 

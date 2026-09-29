@@ -180,6 +180,7 @@
     "createdAt": "Created {time}",
     "metadata": {
       "photos": "Photos",
+      "videos": "Videos",
       "dateRange": "Date Range",
       "created": "Created"
     },

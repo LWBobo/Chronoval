@@ -10,6 +10,7 @@ interface ScanChildNode {
   title: string
   link: string
   photoCount: number
+  videoCount?: number
   coverPhotoId: string | null
   covers: ScanPhoto[]
   passwordProtected: boolean
@@ -20,6 +21,7 @@ interface ScanAlbumPayload {
     title: string
     relPath: string
     photoCount?: number
+    videoCount?: number
     description?: string | null
     createdAt?: string | null
   }
@@ -163,7 +165,18 @@ const backLabel = computed(() =>
 const photoCount = computed(() => {
   const n = data.value?.node?.photoCount
   if (typeof n === 'number') return n
-  return data.value?.dirPhotos.length ?? 0
+  return (
+    data.value?.dirPhotos.filter((p) => p.type !== 'video').length ?? 0
+  )
+})
+
+/** 本相簿直接视频数（与 photoCount 一致，仅统计本层目录；无视频时返回 0） */
+const videoCount = computed(() => {
+  const n = data.value?.node?.videoCount
+  if (typeof n === 'number') return n
+  return (
+    data.value?.dirPhotos.filter((p) => p.type === 'video').length ?? 0
+  )
 })
 
 /** 根据目录照片拍摄时间推导日期范围文本（格式与普通相簿一致） */
@@ -432,7 +445,7 @@ const selectView = (v: 'photos' | 'subs') => {
         <div class="flex items-center gap-1">
           <Icon
             name="tabler:photo"
-            class="size-4 -mt-0.5 text-neutral-400 dark:text-neutral-500"
+            class="size-4 shrink-0 text-neutral-400 dark:text-neutral-500"
           />
           <span class="text-neutral-700 dark:text-neutral-200">
             <span class="font-medium text-neutral-900 dark:text-white">
@@ -444,10 +457,25 @@ const selectView = (v: 'photos' | 'subs') => {
           </span>
         </div>
 
+        <div v-if="(videoCount ?? 0) > 0" class="flex items-center gap-1">
+          <Icon
+            name="tabler:movie"
+            class="size-4 shrink-0 text-neutral-400 dark:text-neutral-500"
+          />
+          <span class="text-neutral-700 dark:text-neutral-200">
+            <span class="font-medium text-neutral-900 dark:text-white">
+              {{ videoCount }}
+            </span>
+            <span class="text-neutral-500 dark:text-neutral-400 ml-1">
+              {{ t('album.metadata.videos') }}
+            </span>
+          </span>
+        </div>
+
         <div v-if="dateRangeText" class="flex items-center gap-1">
           <Icon
             name="tabler:calendar"
-            class="size-4 -mt-0.5 text-neutral-400 dark:text-neutral-500"
+            class="size-4 shrink-0 text-neutral-400 dark:text-neutral-500"
           />
           <span class="text-neutral-700 dark:text-neutral-200">
             {{ dateRangeText }}
@@ -457,7 +485,7 @@ const selectView = (v: 'photos' | 'subs') => {
         <div v-if="createdAt" class="flex items-center gap-1">
           <Icon
             name="tabler:clock-plus"
-            class="size-4 -mt-0.5 text-neutral-400 dark:text-neutral-500"
+            class="size-4 shrink-0 text-neutral-400 dark:text-neutral-500"
           />
           <span class="text-neutral-700 dark:text-neutral-200">
             {{ t('album.metadata.created') }}
@@ -728,10 +756,19 @@ const selectView = (v: 'photos' | 'subs') => {
                 class="absolute right-2 top-2 size-4 text-white drop-shadow"
               />
               <span
-                class="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md"
+                class="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-md"
               >
-                <Icon name="tabler:photo" class="size-3" />
-                {{ child.photoCount }}
+                <span class="flex items-center gap-0.5 leading-none">
+                  <Icon name="tabler:photo" class="size-3 shrink-0" />
+                  <span class="leading-none">{{ child.photoCount }}</span>
+                </span>
+                <span
+                  v-if="(child.videoCount ?? 0) > 0"
+                  class="flex items-center gap-0.5 leading-none"
+                >
+                  <Icon name="tabler:movie" class="size-3 shrink-0" />
+                  <span class="leading-none">{{ child.videoCount }}</span>
+                </span>
               </span>
             </div>
             <div class="flex min-w-0 items-center gap-2 px-2.5 py-2">
