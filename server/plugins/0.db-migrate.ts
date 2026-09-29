@@ -33,13 +33,17 @@ async function runMigrations() {
   await runDataMigrations(dbPath)
 }
 
-export default defineNitroPlugin(async () => {
+/** 供其它启动插件等待。Nitro 不会 await 插件，队列不能在迁移结束前查表。 */
+export function whenDatabaseReady(): Promise<void> {
   if (!migrationPromise) {
     migrationPromise = runMigrations().catch((error) => {
       migrationLogger.error('Database migration failed', error)
       throw error
     })
   }
+  return migrationPromise
+}
 
-  await migrationPromise
+export default defineNitroPlugin(async () => {
+  await whenDatabaseReady()
 })

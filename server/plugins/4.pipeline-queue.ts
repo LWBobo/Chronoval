@@ -1,7 +1,9 @@
 import { WorkerPool } from '../services/pipeline-queue'
+import { whenDatabaseReady } from './0.db-migrate'
 
 export default defineNitroPlugin(async (_nitroApp) => {
   const _logger = logger.dynamic('queue')
+  await whenDatabaseReady()
 
   const workerPool = new WorkerPool(
     {
