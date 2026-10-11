@@ -7,6 +7,58 @@ interface FilterOptions {
   search: string // 搜索关键词
 }
 
+interface FacetPhoto {
+  tags?: string[] | null
+  city?: string | null
+  exif?: {
+    Make?: string
+    Model?: string
+    LensMake?: string
+    LensModel?: string
+    Rating?: number
+  } | null
+}
+
+/** EXIF / 标签分面是否命中。语义搜索结果与画廊分面做 AND 时共用。 */
+export function photoMatchesFacets(
+  photo: FacetPhoto,
+  filters: Pick<
+    FilterOptions,
+    'tags' | 'cameras' | 'lenses' | 'cities' | 'ratings'
+  >,
+) {
+  if (filters.tags.length > 0) {
+    const photoTags = photo.tags || []
+    if (!filters.tags.some((tag) => photoTags.includes(tag))) return false
+  }
+
+  if (filters.cameras.length > 0) {
+    const photoCamera =
+      photo.exif?.Make && photo.exif?.Model
+        ? `${photo.exif.Make} ${photo.exif.Model}`
+        : null
+    if (!photoCamera || !filters.cameras.includes(photoCamera)) return false
+  }
+
+  if (filters.lenses.length > 0) {
+    const photoLens =
+      photo.exif?.LensMake && photo.exif?.LensModel
+        ? `${photo.exif.LensMake} ${photo.exif.LensModel}`
+        : photo.exif?.LensModel || null
+    if (!photoLens || !filters.lenses.includes(photoLens)) return false
+  }
+
+  if (filters.cities.length > 0) {
+    if (!photo.city || !filters.cities.includes(photo.city)) return false
+  }
+
+  if (filters.ratings > 0) {
+    if ((photo.exif?.Rating || 0) < filters.ratings) return false
+  }
+
+  return true
+}
+
 interface FilterStats {
   tags: Map<string, number>
   cameras: Map<string, number>
@@ -158,54 +210,7 @@ export function usePhotoFilters() {
         }
       }
 
-      // 标签筛选
-      if (activeFilters.value.tags.length > 0) {
-        const photoTags = photo.tags || []
-        const hasMatchingTag = activeFilters.value.tags.some((tag) =>
-          photoTags.includes(tag),
-        )
-        if (!hasMatchingTag) return false
-      }
-
-      // 相机筛选
-      if (activeFilters.value.cameras.length > 0) {
-        const photoCamera =
-          photo.exif?.Make && photo.exif?.Model
-            ? `${photo.exif.Make} ${photo.exif.Model}`
-            : null
-        if (
-          !photoCamera ||
-          !activeFilters.value.cameras.includes(photoCamera)
-        ) {
-          return false
-        }
-      }
-
-      // 镜头筛选
-      if (activeFilters.value.lenses.length > 0) {
-        const photoLens =
-          photo.exif?.LensMake && photo.exif?.LensModel
-            ? `${photo.exif.LensMake} ${photo.exif.LensModel}`
-            : photo.exif?.LensModel || null
-        if (!photoLens || !activeFilters.value.lenses.includes(photoLens)) {
-          return false
-        }
-      }
-
-      // 城市筛选
-      if (activeFilters.value.cities.length > 0) {
-        if (!photo.city || !activeFilters.value.cities.includes(photo.city)) {
-          return false
-        }
-      }
-
-      // 评分筛选
-      if (activeFilters.value.ratings > 0) {
-        const photoRating = photo.exif?.Rating || 0
-        if (photoRating < activeFilters.value.ratings) {
-          return false
-        }
-      }
+      if (!photoMatchesFacets(photo, activeFilters.value)) return false
 
       return true
     })

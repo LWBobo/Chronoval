@@ -170,6 +170,14 @@ export class LibraryScanner {
           result.indexed++
           await db.insert(tables.photos).values({ id: photoId, ...entry }).run()
         }
+
+        // 入库成功后异步入队 ML（CLIP / 人脸 / OCR），失败不影响扫描主流程
+        try {
+          const { enqueueMlJobsForPhoto } = await import('../ml/enqueue')
+          await enqueueMlJobsForPhoto(photoId)
+        } catch {
+          /* ML enqueue optional */
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         result.errors.push(`${path.basename(absFile)}: ${msg}`)

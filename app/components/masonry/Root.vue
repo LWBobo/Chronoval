@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { motion } from 'motion-v'
 import { isPanorama } from '~/utils/panorama'
+import { buildTimelineLayout, type TimelineDayGroup } from '~/utils/timeline'
+
 interface Props {
   photos: Photo[]
   columns?: number | 'auto'
@@ -12,6 +13,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const dayjs = useDayjs()
 const router = useRouter()
+const { t } = useI18n()
 
 const { filteredPhotos, hasActiveFilters } = usePhotoFilters()
 const { sortedPhotos } = usePhotoSort()
@@ -23,94 +25,89 @@ const displayPhotos = computed(() => {
 const { currentPhotoIndex, isViewerOpen } = storeToRefs(useViewerState())
 const { openPanoramaViewer } = useViewerState()
 
-const FIRST_SCREEN_ITEMS_COUNT = 50
-const MASONRY_GAP = 4
+const { batchProcessLivePhotos } = useLivePhotoProcessor()
+const processedBatch = ref(new Set<string>())
 
-// 增量渲染：首屏只挂载有限数量的照片，滚动到接近底部时再逐步追加。
-// 避免大图库一次性创建全部卡片（content-visibility 只是跳过绘制，仍需逐张挂载组件），
-// 这是进入首页首帧与可交互时间（TBT/INP）的最大瓶颈。
-const INCREMENT_INITIAL_VIEWPORT_FACTOR = 1.6
-const INCREMENT_STEP = 96
-const renderedCount = ref(0)
+const isMobile = useMediaQuery('(max-width: 768px)')
+const containerRef = ref<HTMLElement>()
+const containerWidth = ref(0)
+
+const showFloatingActions = ref(false)
+const dateRange = ref<string>()
+const visibleCities = ref<string>()
+const visiblePhotos = ref(new Set<number>())
+
+const scrollPercent = ref(0)
+const isScrubbing = ref(false)
+
+// Virtualization: only mount day groups near the viewport
+const VIEWPORT_PAD = 800
+const viewportTop = ref(0)
+const viewportBottom = ref(1200)
+
+// Incremental day mounting for first paint
+const renderedDayCount = ref(0)
+const INCREMENT_DAYS = 12
 const sentinelRef = ref<HTMLElement>()
 const loadMoreObserver = ref<IntersectionObserver | null>(null)
 
-const hasAnimated = ref(false)
-const showFloatingActions = ref(false)
-const dateRange = ref<string>()
-const visiblePhotos = ref(new Set<number>())
-
-const isMobile = useMediaQuery('(max-width: 768px)')
-const { batchProcessLivePhotos } = useLivePhotoProcessor()
-
-const processedBatch = ref(new Set<string>())
-
-// 密排自适应瀑布流（1:1 对齐 Afilmory MasonryView 的列宽与列数策略）：
-//   - 目标列宽：移动 150 / 桌面 250
-//   - 列数由容器宽度按目标列宽自动派生（vue-masonry-wall 内做最短列填充）
-//   - 列通过 flex-grow:1 撑满容器，随宽度自适应增减列数，避免右侧空缺
-//   - 桌面端最多 8 列（与 Afilmory maxColumns=8 一致），超出时按宽度均摊列宽
-const TARGET_COL_WIDTH = 250
-const TARGET_COL_WIDTH_MOBILE = 150
-const MAX_COLUMNS = 8
-
-const columnWidth = computed(() => {
-  if (props.columns !== 'auto') {
-    return 280
-  }
-  return isMobile.value ? TARGET_COL_WIDTH_MOBILE : TARGET_COL_WIDTH
-})
-
-const maxColumns = computed(() => {
-  if (props.columns !== 'auto') {
-    return props.columns
-  }
-  return MAX_COLUMNS
-})
-
-const minColumns = computed(() => {
-  if (props.columns !== 'auto') {
-    return props.columns
-  }
-  return 1
-})
-
-// 首屏渲染量：按列数 × 行数 × 视口倍数估算（移动 4 列 / 桌面 8 列），下限 36
-const initialRenderedCount = () => {
-  const cols = isMobile.value ? 4 : 8
-  const rows = isMobile.value ? 8 : 12
-  return Math.max(36, Math.ceil(cols * rows * INCREMENT_INITIAL_VIEWPORT_FACTOR))
+const measureWidth = () => {
+  if (!containerRef.value) return
+  // Reserve scrubber gutter on desktop
+  const gutter = isMobile.value ? 4 : 56
+  containerWidth.value = Math.max(0, containerRef.value.clientWidth - gutter)
 }
 
-// Prepare items for masonry-wall（只取已"激活"的前 N 张；滚动接近底部由哨兵追加）
-const masonryItems = computed(() => {
+const timeline = computed(() => {
   const list = displayPhotos.value ?? []
-  const end = Math.min(renderedCount.value || 0, list.length)
-  return list.slice(0, end).map((photo, index) => ({
-    id: photo.id,
-    photo,
-    originalIndex: index,
-  }))
+  if (!list.length || containerWidth.value <= 0) {
+    return { days: [] as TimelineDayGroup[], months: [], totalHeight: 0 }
+  }
+  return buildTimelineLayout(list, {
+    containerWidth: containerWidth.value,
+    isMobile: isMobile.value,
+    dayjs,
+    t,
+  })
 })
 
-// 数据就绪 / 列表变化（筛选、排序、刷新）时，把渲染窗口重置回首屏量。
-// 增量追加由底部哨兵负责，避免新一屏数据仍挂着上次滑过的尽头。
+const visibleDays = computed(() => {
+  const days = timeline.value.days
+  const end = Math.min(renderedDayCount.value || 0, days.length)
+  return days.slice(0, end)
+})
+
 watch(
-  () => displayPhotos.value,
-  (list) => {
-    if (!list) return
-    renderedCount.value = list.length
-      ? Math.min(initialRenderedCount(), list.length)
-      : 0
+  () => [displayPhotos.value, containerWidth.value, isMobile.value] as const,
+  (curr, prev) => {
+    const n = timeline.value.days.length
+    const photosChanged = !prev || curr[0] !== prev[0]
+    if (photosChanged || renderedDayCount.value === 0) {
+      renderedDayCount.value = n ? Math.min(INCREMENT_DAYS, n) : 0
+    } else if (renderedDayCount.value > n) {
+      renderedDayCount.value = n
+    }
+    nextTick(() => updateViewport())
   },
   { immediate: true },
 )
 
-// 追加下一批：张开渲染窗口，允许水墙继续向下生长
-const appendBatch = () => {
-  const total = displayPhotos.value?.length ?? 0
-  if (renderedCount.value >= total) return
-  renderedCount.value = Math.min(renderedCount.value + INCREMENT_STEP, total)
+const appendDays = () => {
+  const total = timeline.value.days.length
+  if (renderedDayCount.value >= total) return
+  renderedDayCount.value = Math.min(
+    renderedDayCount.value + INCREMENT_DAYS,
+    total,
+  )
+}
+
+const isDayActive = (day: TimelineDayGroup) => {
+  const top = day.top
+  const bottom = day.top + day.height
+  return (
+    bottom >= viewportTop.value - VIEWPORT_PAD &&
+    top <= viewportBottom.value + VIEWPORT_PAD
+  )
 }
 
 const handleVisibilityChange = ({
@@ -127,14 +124,9 @@ const handleVisibilityChange = ({
     visiblePhotos.value.delete(index)
   }
   updateDateRange()
-
-  // Process LivePhotos for visible photos
-  nextTick(() => {
-    processVisibleLivePhotos()
-  })
+  nextTick(() => processVisibleLivePhotos())
 }
 
-// Process LivePhotos for currently visible photos
 const processVisibleLivePhotos = async () => {
   const visiblePhotosArray = Array.from(visiblePhotos.value)
   const livePhotosToProcess = visiblePhotosArray
@@ -149,12 +141,10 @@ const processVisibleLivePhotos = async () => {
 
   if (livePhotosToProcess.length === 0) return
 
-  // Mark as processed to avoid reprocessing
   livePhotosToProcess.forEach((photo) => {
     processedBatch.value.add(photo.id)
   })
 
-  // Start background processing
   batchProcessLivePhotos(
     livePhotosToProcess.map((photo) => ({
       id: photo.id,
@@ -162,8 +152,6 @@ const processVisibleLivePhotos = async () => {
     })),
   )
 }
-
-const visibleCities = ref<string>()
 
 const updateDateRange = () => {
   if (visiblePhotos.value.size === 0) {
@@ -174,14 +162,12 @@ const updateDateRange = () => {
 
   const visiblePhotosArray = Array.from(visiblePhotos.value)
 
-  // Calculate visible dates
   const visibleDates = visiblePhotosArray
     .map((index) => displayPhotos.value[index]?.dateTaken)
     .filter((date): date is string => Boolean(date))
     .map((date) => dayjs(date))
     .sort((a, b) => (a.isBefore(b) ? -1 : 1))
 
-  // Calculate visible cities
   const cities = visiblePhotosArray
     .map((index) => displayPhotos.value[index]?.city)
     .filter((city): city is string => Boolean(city))
@@ -197,7 +183,7 @@ const updateDateRange = () => {
   } else {
     visibleCities.value =
       `${uniqueCities.slice(0, 2).join('、')} ` +
-      $t('ui.indexPanelCountCity', { count: uniqueCities.length })
+      t('ui.indexPanelCountCity', { count: uniqueCities.length })
   }
 
   if (visibleDates.length === 0) {
@@ -207,52 +193,162 @@ const updateDateRange = () => {
 
   const startDate = visibleDates[0]
   const endDate = visibleDates[visibleDates.length - 1]
-
   if (!startDate || !endDate) {
     dateRange.value = undefined
     return
   }
 
-  // Check if dates are the same day
   if (startDate.isSame(endDate, 'day')) {
-    // Same day
     dateRange.value = startDate.format('ll')
   } else if (startDate.isSame(endDate, 'month')) {
-    // Same month
     dateRange.value = startDate.format('MMM YYYY')
   } else if (startDate.isSame(endDate, 'year')) {
-    // Same year, different months
     dateRange.value = `${startDate.format('MMM')} - ${endDate.format('MMM YYYY')}`
   } else {
-    // Different years
     dateRange.value = `${startDate.format('ll')} - ${endDate.format('ll')}`
   }
 }
 
-const handleScroll = () => {
+/** Scroll position measured from the timeline box, not the document top.
+ *  The filter banner sits above the timeline, so window scroll and day.top
+ *  are different coordinate systems. */
+const timelineOrigin = () => {
+  const el = containerRef.value
+  if (!el) return 0
   const scrollTop = window.pageYOffset || document.documentElement.scrollTop
-  showFloatingActions.value = scrollTop > 500
+  return el.getBoundingClientRect().top + scrollTop
 }
 
-const scrollToTop = () => {
+const updateViewport = () => {
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop
+  const vh = window.innerHeight
+  const origin = timelineOrigin()
+  const localTop = scrollTop - origin
+  viewportTop.value = localTop
+  viewportBottom.value = localTop + vh
+  showFloatingActions.value = scrollTop > 500
+
+  const total = timeline.value.totalHeight
+  if (total > 0 && !isScrubbing.value) {
+    scrollPercent.value = Math.min(1, Math.max(0, localTop / total))
+  }
+}
+
+// 筛选结果变了之后，把时间轴顶部滚进视口。否则窗口还停在旧位置，
+// 而缓冲区只挂载最前面的几天，画面里就没有照片。
+watch(
+  () =>
+    hasActiveFilters.value
+      ? displayPhotos.value.map((photo) => photo.id).join('\0')
+      : '',
+  (key, prev) => {
+    if (!key || prev === undefined) return
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        const el = containerRef.value
+        if (el) {
+          const scrollTop =
+            window.pageYOffset || document.documentElement.scrollTop
+          const top = el.getBoundingClientRect().top + scrollTop - 48
+          window.scrollTo({ top: Math.max(0, top), behavior: 'auto' })
+        }
+        updateViewport()
+      })
+    })
+  },
+)
+
+const onScrub = (percent: number) => {
+  scrollPercent.value = percent
+  // Ensure day groups near the seek target are mounted
+  const targetY = percent * Math.max(timeline.value.totalHeight, 1)
+  const dayIdx = timeline.value.days.findIndex(
+    (d) => d.top + d.height >= targetY,
+  )
+  if (dayIdx >= 0) {
+    renderedDayCount.value = Math.max(
+      renderedDayCount.value,
+      Math.min(timeline.value.days.length, dayIdx + INCREMENT_DAYS),
+    )
+  }
+  const maxScroll = Math.max(
+    1,
+    document.documentElement.scrollHeight - window.innerHeight,
+  )
+  const galleryTop = containerRef.value?.offsetTop ?? 0
   window.scrollTo({
-    top: 0,
-    behavior: 'smooth',
+    top: Math.min(maxScroll, galleryTop + targetY),
+    behavior: 'auto',
   })
 }
 
-onMounted(() => {
-  window.addEventListener('scroll', handleScroll, { passive: true })
+const handleOpenViewer = (index: number) => {
+  const photo = displayPhotos.value[index]
+  if (photo && isPanorama(photo)) {
+    openPanoramaViewer(photo)
+    return
+  }
+  router.push(`/${photo?.id}`)
+}
 
-  // 底部哨兵：滚动接近传感器时，增量追加下一批照片
+const scrollToPhoto = (photoIndex: number) => {
+  if (!displayPhotos.value[photoIndex]) return
+  const photoId = displayPhotos.value[photoIndex].id
+
+  // Ensure the day containing this photo is rendered
+  const dayIdx = timeline.value.days.findIndex((d) =>
+    d.photos.some((p) => p.photo.id === photoId),
+  )
+  if (dayIdx >= 0 && dayIdx >= renderedDayCount.value) {
+    renderedDayCount.value = Math.min(
+      dayIdx + INCREMENT_DAYS,
+      timeline.value.days.length,
+    )
+  }
+
+  nextTick(() => {
+    const photoElement = document.querySelector(`[data-photo-id="${photoId}"]`)
+    if (!photoElement) return
+    const elementRect = photoElement.getBoundingClientRect()
+    const windowHeight = window.innerHeight
+    const currentScrollY = window.pageYOffset
+    const targetScrollY =
+      currentScrollY +
+      elementRect.top -
+      windowHeight / 2 +
+      elementRect.height / 2
+    window.scrollTo({
+      top: Math.max(0, targetScrollY),
+      behavior: 'smooth',
+    })
+  })
+}
+
+watch(currentPhotoIndex, (newIndex) => {
+  if (isViewerOpen.value && newIndex >= 0) {
+    nextTick(() => scrollToPhoto(newIndex))
+  }
+})
+
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  measureWidth()
+  updateViewport()
+  window.addEventListener('scroll', updateViewport, { passive: true })
+  window.addEventListener('resize', measureWidth, { passive: true })
+
+  if (containerRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => measureWidth())
+    resizeObserver.observe(containerRef.value)
+  }
+
   if (sentinelRef.value) {
     loadMoreObserver.value = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) {
-          appendBatch()
-        }
+        if (entries[0]?.isIntersecting) appendDays()
       },
-      { rootMargin: '1400px 0px 0px 0px', threshold: 0 },
+      { rootMargin: '1600px 0px 0px 0px', threshold: 0 },
     )
     loadMoreObserver.value.observe(sentinelRef.value)
   }
@@ -265,114 +361,60 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('scroll', handleScroll)
+  window.removeEventListener('scroll', updateViewport)
+  window.removeEventListener('resize', measureWidth)
+  resizeObserver?.disconnect()
   loadMoreObserver.value?.disconnect()
   loadMoreObserver.value = null
-})
-
-const handleOpenViewer = (index: number) => {
-  const photo = displayPhotos.value[index]
-  // 360° 全景照片走独立球面查看器，不进入普通照片查看器
-  if (photo && isPanorama(photo)) {
-    openPanoramaViewer(photo)
-    return
-  }
-  router.push(`/${photo?.id}`)
-}
-
-const scrollToPhoto = (photoIndex: number) => {
-  if (!displayPhotos.value[photoIndex]) return
-
-  const photoId = displayPhotos.value[photoIndex].id
-
-  const performScroll = () => {
-    const photoElement = document.querySelector(`[data-photo-id="${photoId}"]`)
-    if (!photoElement) return
-
-    const elementRect = photoElement.getBoundingClientRect()
-    const windowHeight = window.innerHeight
-    const currentScrollY = window.pageYOffset
-
-    // 让图片在视口中央
-    const targetScrollY =
-      currentScrollY +
-      elementRect.top -
-      windowHeight / 2 +
-      elementRect.height / 2
-
-    window.scrollTo({
-      top: Math.max(0, targetScrollY),
-      behavior: 'smooth',
-    })
-  }
-
-  // 若目标照片尚未被增量渲染出来，先张开水墙窗口，待 DOM 就绪后再滚动
-  if (photoIndex >= renderedCount.value) {
-    renderedCount.value = Math.min(
-      photoIndex + INCREMENT_STEP,
-      displayPhotos.value.length,
-    )
-    nextTick(performScroll)
-  } else {
-    performScroll()
-  }
-}
-
-watch(currentPhotoIndex, (newIndex) => {
-  if (isViewerOpen.value && newIndex >= 0) {
-    nextTick(() => {
-      scrollToPhoto(newIndex)
-    })
-  }
 })
 </script>
 
 <template>
   <div class="relative w-full">
-    <!-- 活跃筛选器全宽展示区（Afilmory 风格） -->
     <MasonryActiveFiltersHero v-if="hasActiveFilters" />
 
-    <!-- Afilmory 式浮动操作按钮（仅桌面端显示，移动端右下角隐藏） -->
     <div class="hidden md:block">
       <MasonryFloatingActionButton :show-floating="showFloatingActions" />
     </div>
 
-    <div
-      :class="isMobile ? 'pb-1' : ''"
-    >
-      <div ref="containerRef" class="relative">
-        <!-- Masonry Wall -->
-        <MasonryWall
-          :items="masonryItems"
-          :column-width="columnWidth"
-          :gap="MASONRY_GAP"
-          :min-columns="minColumns"
-          :max-columns="maxColumns"
-          :ssr-columns="2"
-          :key-mapper="
-            (_item, _column, _row, index) =>
-              masonryItems[index]?.originalIndex ?? index
-          "
-        >
-          <template #default="{ item }">
-            <!-- Photo Items -->
-            <MasonryItem
-              v-if="item.photo && typeof item.originalIndex === 'number'"
-              :key="item.photo.id"
-              :photo="item.photo"
-              :index="item.originalIndex"
-              :column-width="columnWidth"
-              :has-animated
-              :first-screen-items="FIRST_SCREEN_ITEMS_COUNT"
-              @visibility-change="handleVisibilityChange"
-              @open-viewer="handleOpenViewer($event)"
-            />
-          </template>
-        </MasonryWall>
+    <!-- Floating date range (wired from visible photos) -->
+    <UiDateRangeIndicator
+      :date-range="dateRange"
+      :locations="visibleCities"
+      :is-visible="!!dateRange && !isScrubbing"
+      :is-mobile="isMobile"
+    />
 
-        <!-- 增量渲染哨兵：接近底部时触发 appendBatch，继续加载更多照片 -->
+    <!-- Side timeline scrubber -->
+    <TimelineScrubber
+      v-if="timeline.months.length > 0"
+      :months="timeline.months"
+      :total-height="timeline.totalHeight"
+      :scroll-percent="scrollPercent"
+      @scrub="onScrub"
+      @scrub-start="isScrubbing = true"
+      @scrub-stop="isScrubbing = false"
+    />
+
+    <div :class="isMobile ? 'pb-1' : 'pr-12'">
+      <div ref="containerRef" class="relative w-full px-0.5 sm:px-1">
         <div
-          v-if="renderedCount < (displayPhotos?.length ?? 0)"
+          class="relative w-full"
+          :style="{ height: `${timeline.totalHeight || 0}px` }"
+        >
+          <TimelineDayGroup
+            v-for="day in visibleDays"
+            :key="day.key"
+            :group="day"
+            :is-mobile="isMobile"
+            :active="isDayActive(day)"
+            @open-viewer="handleOpenViewer"
+            @visibility-change="handleVisibilityChange"
+          />
+        </div>
+
+        <div
+          v-if="renderedDayCount < timeline.days.length"
           ref="sentinelRef"
           class="h-px w-full"
           aria-hidden="true"
@@ -381,7 +423,3 @@ watch(currentPhotoIndex, (newIndex) => {
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 列随容器宽度自适应撑满（vue-masonry-wall 默认 flex-grow:1，Afilmory 观感） */
-</style>

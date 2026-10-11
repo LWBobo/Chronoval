@@ -48,8 +48,8 @@ export default eventHandler(async (event) => {
     where.push(notInArray(tables.photos.id, hiddenPhotoIds))
   }
 
-  // 排除已「转为相簿」或被禁用的扫描库照片（只在相册页展示，不再出现在首页全局画廊）。
-  // 过滤必须进 SQL：分页时事后 filter 会造成某页缺行，客户端会误判"已到末页"。
+  // 排除纯相簿展示（displayMode=album）或已禁用的扫描库照片。
+  // 共存模式（both）仍留在首页画廊。过滤必须进 SQL，避免分页事后过滤缺行。
   const hiddenScanMounts = getGalleryHiddenScanMountSet()
   if (hiddenScanMounts.size > 0) {
     // library_mount 可能为 NULL（上传照片）：NOT IN 会把 NULL 行排除掉，

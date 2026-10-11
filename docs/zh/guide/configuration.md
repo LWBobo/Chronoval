@@ -52,6 +52,11 @@
 | NUXT_UPLOAD_MIME_WHITELIST_ENABLED       | 是否启用上传文件 MIME 类型白名单验证                 | `true`                                | 否                                                                    |
 | NUXT_UPLOAD_MIME_WHITELIST               | 上传文件允许的 MIME 类型列表（逗号分隔）             | 见下方说明                            | 否                                                                    |
 | ALLOW_INSECURE_COOKIE                    | 是否允许非安全 Cookie（仅在开发环境使用）            | `false`                               | 否                                                                    |
+| CHRONOVAL_ML_URL                         | 机器学习侧车根地址                                   | `http://127.0.0.1:3003`               | 否                                                                    |
+| ML_NIGHTLY_INTERVAL_MS                   | 人物聚合夜间扫描间隔                                 | `86400000`（24 小时）                 | 否                                                                    |
+| ML_NIGHTLY_INITIAL_DELAY_MS              | 首次人物聚合扫描延迟                                 | `300000`（5 分钟）                    | 否                                                                    |
+
+智能搜图、人物与 OCR 见 [机器学习](/zh/guide/ml)。
 
 ## 上传文件类型白名单
 

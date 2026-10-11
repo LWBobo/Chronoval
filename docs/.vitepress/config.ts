@@ -46,6 +46,7 @@ export default defineConfig({
         items: [
           { text: 'Getting Started', link: '/guide/getting-started' },
           { text: 'Configuration', link: '/guide/configuration' },
+          { text: 'Machine learning', link: '/guide/ml' },
           { text: 'Update Guide', link: '/guide/updates' },
         ],
       },

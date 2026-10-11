@@ -15,6 +15,7 @@ data
 
 # Node dependencies
 node_modules
+.tools
 
 # Logs
 logs
@@ -48,3 +49,6 @@ Caddyfile
 _hash*.mjs
 _off_*.mjs
 _set_realhash.mjs
+
+.cursor
+.pnpm-store

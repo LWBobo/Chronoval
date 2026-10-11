@@ -143,6 +143,54 @@
       "totalPhotosWithRange": "{range}, 共 @:plural.photo",
       "noPhotosTip": "还没有照片，快去上传一些吧！"
     },
+    "timeline": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "unknownDate": "未知日期",
+      "scrubberLabel": "时间线导航",
+      "photoCount": "{count} 张"
+    },
+    "people": {
+      "title": "人物",
+      "unnamed": "未命名",
+      "empty": "还没有识别到人物",
+      "faces": "{count} 张面孔",
+      "photos": "{count} 张照片",
+      "count": "{count} 位人物",
+      "retry": "重试",
+      "namePlaceholder": "人物名称",
+      "save": "保存",
+      "saved": "已保存",
+      "saveFailed": "保存失败",
+      "hide": "隐藏",
+      "show": "取消隐藏",
+      "merge": "合并到此人",
+      "mergePick": "选择要合并的人物",
+      "merged": "已合并",
+      "mergeFailed": "合并失败",
+      "reassign": "改派人物",
+      "reassignSaved": "人脸已改派",
+      "reassignFailed": "改派失败",
+      "unassign": "取消归属",
+      "newPerson": "新人物名称",
+      "create": "新建",
+      "cancel": "取消",
+      "noPhotos": "还没有照片"
+    },
+    "search": {
+      "smartPlaceholder": "用描述或图中文字搜索照片…",
+      "headerPlaceholder": "搜索照片",
+      "empty": "没有匹配的照片",
+      "ocrHit": "文字",
+      "failed": "搜索失败",
+      "modeAll": "语义 + 文字",
+      "modeClip": "仅语义",
+      "modeOcr": "仅图中文字",
+      "dateFrom": "开始日期",
+      "dateTo": "结束日期",
+      "anyAlbum": "全部相簿",
+      "facetsApplied": "已叠加画廊筛选"
+    },
     "indexPanelCountCity": "等 {count} 个城市",
     "album": {
       "noImage": "空相簿",
@@ -467,9 +515,12 @@
     "privacySettings": "隐私设置",
     "systemSettings": "系统设置",
     "analyticsSettings": "分析与追踪",
+    "mlSettings": "机器学习",
     "securitySettings": "安全设置",
     "mapAndLocation": "地图和位置",
-    "location": "位置服务"
+    "location": "位置服务",
+    "search": "智能搜索",
+    "people": "人物"
   },
   "albums": {
     "scan": {
@@ -1327,7 +1378,9 @@
         "clearAll": "清理全部",
         "retrySelected": "重试选中",
         "retryAll": "重试全部失败",
-        "clearNonActive": "清理非活跃任务"
+        "clearNonActive": "清理非活跃任务",
+        "mlMissing": "补跑缺失",
+        "mlAll": "全量重跑"
       },
       "table": {
         "id": "任务ID",
@@ -1357,7 +1410,11 @@
         "photo": "照片处理",
         "live-photo-video": "LivePhoto视频",
         "photo-reverse-geocoding": "照片逆地理编码",
-        "photo-erase-location": "照片位置信息抹除"
+        "photo-erase-location": "照片位置信息抹除",
+        "photo-smart-search": "智能搜图",
+        "photo-face-detection": "人脸检测",
+        "photo-face-recognition": "人物聚合",
+        "photo-ocr": "图中文字"
       },
       "stages": {
         "preprocessing": "预处理",
@@ -1367,7 +1424,11 @@
         "motion-photo": "动态照片处理",
         "reverse-geocoding": "地理解析",
         "live-photo": "LivePhoto处理",
-        "location-erase": "位置信息抹除"
+        "location-erase": "位置信息抹除",
+        "smart-search": "智能搜图",
+        "face-detection": "人脸检测",
+        "face-recognition": "人物聚合",
+        "ocr": "图中文字"
       },
       "buttons": {
         "retry": "重试",
@@ -1385,7 +1446,10 @@
         "clearFailed": "清理任务失败",
         "batchRetrySuccessDescription": "重试了 {count} 个任务",
         "batchRetryFailed": "批量重试失败",
-        "deleteFailed": "删除任务失败"
+        "deleteFailed": "删除任务失败",
+        "mlQueued": "已加入机器学习队列",
+        "mlQueuedDescription": "已入队 {count} 个任务",
+        "mlReindexConfirm": "全量重跑会为每张照片重新编码、检脸并做 OCR，耗时较长。确定继续？"
       },
       "filters": {
         "all": "全部",
@@ -1973,7 +2037,15 @@
           "asAlbumLabel": "展示方式",
           "asAlbumStateOn": "相簿",
           "asAlbumStateOff": "画廊",
-          "asAlbumHint": "展示方式：照片画廊（仅首页画廊显示）、相簿照片（仅相册页显示）、共存（相册页与首页画廊同时显示）。库内子文件夹会自动嵌套为子相簿。"
+          "asAlbumHint": "展示方式：照片画廊（仅首页画廊显示）、相簿照片（仅相册页显示）、共存（相册页与首页画廊同时显示）。库内子文件夹会自动嵌套为子相簿。",
+          "childInParentLabel": "在父相簿中显示子相簿",
+          "childInParentStateOn": "显示",
+          "childInParentStateOff": "不显示",
+          "childInParentHint": "开启后，进入父相簿的照片页时，子相簿会占用照片格子显示。关闭后，子相簿只出现在右上角切换出的子相簿列表里。",
+          "childPositionLabel": "子相簿位置",
+          "childPositionStart": "开头",
+          "childPositionEnd": "末尾",
+          "childPositionHint": "子相簿格子排在本层照片的前面，或跟在全部照片后面。"
         },
         "info": {
           "title": "扫描库信息",
@@ -1993,6 +2065,12 @@
           "modeAlbum": "相簿照片",
           "modeGallery": "照片画廊",
           "modeBoth": "共存",
+          "childInParent": "父相簿中的子相簿",
+          "childInParentOn": "显示",
+          "childInParentOff": "不显示",
+          "childPosition": "显示位置",
+          "childPositionStart": "开头",
+          "childPositionEnd": "末尾",
           "thumbnailDirHint": "缩略图统一写入程序内部存储",
           "thumbnailDir": "本地存储 thumbnails 目录，非相册目录",
           "scanIntervalHint": "自动轮询扫描该目录的间隔",
@@ -2028,6 +2106,81 @@
         "label": "Body 脚本",
         "description": "包含 script 标签的 HTML 片段，注入到 body 开头。",
         "help": "粘贴完整的 script 标签（支持多个）。适用于需要在 body 开始处执行的脚本。"
+      }
+    },
+    "ml": {
+      "sectionDescription": "配置机器学习侧车服务：智能搜图、人脸聚合与 OCR。",
+      "enabled": {
+        "label": "启用 ML 功能",
+        "description": "智能搜索、人脸识别与 OCR 的总开关。",
+        "help": "关闭后不再入队新的 ML 任务，智能搜索与人物相关能力会降级。"
+      },
+      "url": {
+        "label": "ML 服务地址",
+        "description": "chronoval-ml 的 HTTP 根地址。留空则使用 CHRONOVAL_ML_URL。",
+        "help": "例如：http://chronoval-ml:3003"
+      },
+      "clip": {
+        "enabled": {
+          "label": "CLIP 智能搜图",
+          "description": "对图片与文本编码，实现语义搜图。",
+          "help": "需要 ML 侧车已加载 CLIP 模型。"
+        },
+        "model": {
+          "label": "CLIP 模型",
+          "description": "图文模型标识。默认使用本机飞牛相册的 img2vec / txt2vec 权重。",
+          "help": "默认 fnos/img2vec-large-1.0.0。换过这个标识后，需要重新跑一遍智能搜图，旧向量不会再参与检索。"
+        },
+        "topK": {
+          "label": "CLIP 返回数量",
+          "description": "每次查询最多返回的 CLIP 结果数。",
+          "help": "数值越大候选越多，但可能更慢。"
+        },
+        "minScore": {
+          "label": "最低相似度",
+          "description": "描述搜索只保留余弦相似度不低于该值、且接近最佳结果的照片。",
+          "help": "默认 0.2。调高会更严格，调低会放出更多弱相关照片。"
+        }
+      },
+      "face": {
+        "enabled": {
+          "label": "人脸检测与人物",
+          "description": "检测人脸并聚合成人物。",
+          "help": "通过 ML 侧车调用 InsightFace。"
+        },
+        "model": {
+          "label": "人脸模型",
+          "description": "InsightFace 模型包名称。",
+          "help": "默认 buffalo_l。更换后需重新做人脸检测。"
+        },
+        "minScore": {
+          "label": "人脸最低置信度",
+          "description": "检测置信度下限（0–1）。",
+          "help": "越低检出越多，但可能增加误检。"
+        },
+        "maxDistance": {
+          "label": "人脸最大距离",
+          "description": "同一人物聚类时允许的最大余弦距离。",
+          "help": "越小越严格；Immich 默认为 0.5。"
+        },
+        "minFaces": {
+          "label": "最少人脸数",
+          "description": "创建/归属人物所需的最少邻近人脸数。",
+          "help": "越高越不易产生碎人物簇。"
+        }
+      },
+      "ocr": {
+        "enabled": {
+          "label": "OCR 文字搜索",
+          "description": "从照片提取文字以供关键词检索。",
+          "help": "可选；与 CLIP 同时开启时结果会合并。"
+        }
+      },
+      "jobs": {
+        "title": "任务",
+        "online": "侧车在线",
+        "offline": "侧车不可达，入库和浏览不受影响，任务会失败并可重试",
+        "lastSweep": "上次人物聚合扫描"
       }
     },
     "security": {

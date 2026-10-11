@@ -23,10 +23,9 @@ export default eventHandler(async (event) => {
 
   const where = [isNull(tables.photos.deletedAt)]
 
-  // 首页画廊数据源（?gallery=1）：即使管理员登录，也不返回「已转为相簿」的扫描库照片，
-  // 与后台 /dashboard 区分——后台仍需完整数据以便管理，画廊则遵循「相簿只在相册页显示」。
-  // 过滤条件必须放进 SQL（而非查完再 filter）：分页时事后过滤会造成某页缺行、
-  // 客户端误判"已到末页"。
+  // 首页画廊（?gallery=1，以及非管理员）：隐藏纯相簿展示（displayMode=album）
+  // 和已禁用的扫描库。共存模式（both）仍留在画廊。后台管理（管理员且非 gallery=1）
+  // 保留全量，方便管理。过滤必须进 SQL：分页时事后 filter 会造成某页缺行。
   if (!(isAdmin && !galleryOnly)) {
     const hiddenScanMounts = getGalleryHiddenScanMountSet()
     if (hiddenScanMounts.size > 0) {

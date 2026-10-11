@@ -19,32 +19,52 @@ const isLoading = ref(false)
 const selectedTasks = ref<number[]>([])
 const statusFilter = ref<string>('all')
 const typeFilter = ref<string>('all')
+const pageSize = 100
+const page = ref(1)
 
-// 数据获取
-const { data: queueData, refresh: refreshQueue } = await useFetch(
-  '/api/queue/task/list',
-  {
+watch([statusFilter, typeFilter], () => {
+  page.value = 1
+})
+
+// 仅客户端拉取，分页限制，避免 SSR/全表拖死页面
+const { data: queueData, refresh: refreshQueue, status: fetchStatus } =
+  await useFetch('/api/queue/task/list', {
+    server: false,
+    lazy: true,
     query: computed(() => ({
+      limit: pageSize,
+      offset: (page.value - 1) * pageSize,
       ...(statusFilter.value !== 'all' && { status: statusFilter.value }),
       ...(typeFilter.value !== 'all' && { type: typeFilter.value }),
     })),
-  },
+  })
+
+watch(fetchStatus, (s) => {
+  isLoading.value = s === 'pending'
+})
+
+const queueStats = computed(() => {
+  return (
+    queueData.value?.statusCounts || {
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+    }
+  )
+})
+
+const totalTasks = computed(() => Number(queueData.value?.total || 0))
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(totalTasks.value / pageSize)),
 )
 
-// 队列统计数据
-const queueStats = computed(() => {
-  if (!queueData.value?.data)
-    return { pending: 0, processing: 0, completed: 0, failed: 0 }
-
-  const stats = { pending: 0, processing: 0, completed: 0, failed: 0 }
-  queueData.value.data.forEach((task) => {
-    if (task.status === 'pending') stats.pending++
-    else if (task.status === 'in-stages') stats.processing++
-    else if (task.status === 'completed') stats.completed++
-    else if (task.status === 'failed') stats.failed++
-  })
-  return stats
-})
+const goPrevPage = () => {
+  if (page.value > 1) page.value -= 1
+}
+const goNextPage = () => {
+  if (page.value < totalPages.value) page.value += 1
+}
 
 // 刷新数据
 const refreshData = async () => {
@@ -109,6 +129,36 @@ const retryTask = async (taskId: number) => {
       description: error?.message || $t('dashboard.queue.messages.retryFailed'),
       color: 'error',
     })
+  }
+}
+
+const queueMlJobs = async (mode: 'missing' | 'all') => {
+  if (mode === 'all') {
+    const ok = window.confirm($t('dashboard.queue.messages.mlReindexConfirm'))
+    if (!ok) return
+  }
+  try {
+    isLoading.value = true
+    const result = await $fetch('/api/ml/jobs/queue-all', {
+      method: 'POST',
+      body: { type: 'all', mode },
+    })
+    toast.add({
+      title: $t('dashboard.queue.messages.mlQueued'),
+      description: $t('dashboard.queue.messages.mlQueuedDescription', {
+        count: result.enqueued,
+      }),
+      color: result.success ? 'success' : 'warning',
+    })
+    await refreshData()
+  } catch (error: any) {
+    toast.add({
+      title: $t('dashboard.queue.messages.operationFailed'),
+      description: error?.data?.message || error?.message,
+      color: 'error',
+    })
+  } finally {
+    isLoading.value = false
   }
 }
 
@@ -206,6 +256,22 @@ const typeOptions = computed(() => [
     label: $t('dashboard.queue.types.photo-erase-location'),
     value: 'photo-erase-location',
   },
+  {
+    label: $t('dashboard.queue.types.photo-smart-search'),
+    value: 'photo-smart-search',
+  },
+  {
+    label: $t('dashboard.queue.types.photo-face-detection'),
+    value: 'photo-face-detection',
+  },
+  {
+    label: $t('dashboard.queue.types.photo-face-recognition'),
+    value: 'photo-face-recognition',
+  },
+  {
+    label: $t('dashboard.queue.types.photo-ocr'),
+    value: 'photo-ocr',
+  },
 ])
 
 // 展开行状态
@@ -268,10 +334,13 @@ const columns = computed<TableColumn<any>[]>(() => [
   },
 ])
 
-// 自动刷新
-const refreshInterval = setInterval(refreshData, 10000) // 每10秒刷新一次
+// 自动刷新：仅在客户端挂载后启动，避免 SSR 调用 setInterval 卡住页面
+let refreshInterval: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  refreshInterval = setInterval(refreshData, 10000)
+})
 onBeforeUnmount(() => {
-  clearInterval(refreshInterval)
+  if (refreshInterval) clearInterval(refreshInterval)
 })
 </script>
 
@@ -312,6 +381,25 @@ onBeforeUnmount(() => {
 
     <template #body>
       <div class="flex flex-col gap-6">
+        <div class="flex flex-wrap items-center gap-2">
+          <UButton
+            icon="tabler:sparkles"
+            variant="soft"
+            :loading="isLoading"
+            @click="queueMlJobs('missing')"
+          >
+            {{ $t('dashboard.queue.actions.mlMissing') }}
+          </UButton>
+          <UButton
+            icon="tabler:refresh-alert"
+            color="warning"
+            variant="soft"
+            :loading="isLoading"
+            @click="queueMlJobs('all')"
+          >
+            {{ $t('dashboard.queue.actions.mlAll') }}
+          </UButton>
+        </div>
         <!-- 状态指示器 -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <DashboardIndicator
@@ -536,6 +624,37 @@ onBeforeUnmount(() => {
                 </div>
               </template>
             </UTable>
+
+            <div
+              v-if="totalTasks > pageSize"
+              class="flex items-center justify-between gap-3 pt-2"
+            >
+              <span class="text-sm text-neutral-500">
+                {{ (page - 1) * pageSize + 1 }}–{{
+                  Math.min(page * pageSize, totalTasks)
+                }}
+                / {{ totalTasks }}
+              </span>
+              <div class="flex items-center gap-2">
+                <UButton
+                  size="sm"
+                  variant="soft"
+                  icon="tabler:chevron-left"
+                  :disabled="page <= 1 || isLoading"
+                  @click="goPrevPage"
+                />
+                <span class="text-sm tabular-nums">
+                  {{ page }} / {{ totalPages }}
+                </span>
+                <UButton
+                  size="sm"
+                  variant="soft"
+                  icon="tabler:chevron-right"
+                  :disabled="page >= totalPages || isLoading"
+                  @click="goNextPage"
+                />
+              </div>
+            </div>
           </div>
         </UCard>
       </div>

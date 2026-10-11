@@ -30,10 +30,10 @@ function removeFilter(type: string, value?: string | number) {
     :initial="{ opacity: 0, y: -20 }"
     :animate="{ opacity: 1, y: 0 }"
     :transition="{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }"
-    class="relative left-1/2 w-screen -translate-x-1/2 overflow-hidden border-y border-white/5 bg-black shadow-[0_25px_60px_rgba(0,0,0,0.55)]"
+    class="relative left-1/2 w-screen -translate-x-1/2 overflow-hidden border-y border-white/5 bg-neutral-900 shadow-[0_25px_60px_rgba(0,0,0,0.35)]"
   >
-    <!-- 背景照片网格 -->
-    <div class="grid h-full w-full grid-cols-4 grid-rows-3 gap-[2px] opacity-90">
+    <!-- 背景铺在横幅内部，高度跟内容走，避免缩略图把时间轴顶出屏幕 -->
+    <div class="absolute inset-0 grid grid-cols-4 grid-rows-3 gap-[2px]">
       <template v-if="backgroundPhotos.length">
         <img
           v-for="photo in backgroundPhotos"
@@ -52,11 +52,10 @@ function removeFilter(type: string, value?: string | number) {
     </div>
 
     <!-- 暗色渐变覆盖 -->
-    <div class="pointer-events-none absolute inset-0 bg-linear-to-b from-black/80 via-black/90 to-black/95" />
-    <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12),rgba(0,0,0,0)_60%)] opacity-70" />
+    <div class="pointer-events-none absolute inset-0 bg-linear-to-b from-black/25 via-black/45 to-black/70" />
 
     <!-- 内容区 -->
-    <div class="relative z-10 flex min-h-[300px] flex-col justify-center px-6 py-10 sm:px-10">
+    <div class="relative z-10 flex flex-col justify-end px-6 py-8 sm:px-10">
       <p
         v-if="hasActiveFilters"
         class="text-xs font-medium uppercase tracking-[0.5em] text-white/60"

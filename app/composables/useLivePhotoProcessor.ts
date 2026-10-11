@@ -14,6 +14,56 @@ const processedLivePhotos = ref<Map<string, LivePhotoProcessingState>>(
   new Map(),
 )
 
+/**
+ * 智能内存管理：清理过期或不需要的缓存（模块级，供单例定时器复用）
+ */
+const cleanupExpiredCache = () => {
+  const now = Date.now()
+  const cacheExpiry = 24 * 60 * 60 * 1000 // 24小时
+  const maxCacheSize = 50 // 最大缓存50个LivePhoto
+
+  const entries = Array.from(processedLivePhotos.value.entries())
+  const expiredEntries: string[] = []
+
+  entries.forEach(([photoId, state]) => {
+    if (state.lastProcessed && now - state.lastProcessed > cacheExpiry) {
+      expiredEntries.push(photoId)
+    }
+  })
+
+  expiredEntries.forEach((photoId) => {
+    const state = processedLivePhotos.value.get(photoId)
+    if (state?.mp4Blob) {
+      state.mp4Blob = null
+    }
+    processedLivePhotos.value.delete(photoId)
+  })
+
+  if (processedLivePhotos.value.size > maxCacheSize) {
+    const sortedEntries = entries
+      .filter(([photoId]) => !expiredEntries.includes(photoId))
+      .sort((a, b) => (a[1].lastProcessed || 0) - (b[1].lastProcessed || 0))
+
+    const toRemove = sortedEntries.slice(
+      0,
+      processedLivePhotos.value.size - maxCacheSize,
+    )
+    toRemove.forEach(([photoId, state]) => {
+      if (state.mp4Blob) {
+        state.mp4Blob = null
+      }
+      processedLivePhotos.value.delete(photoId)
+    })
+  }
+}
+
+let cleanupIntervalStarted = false
+function ensureCleanupInterval() {
+  if (cleanupIntervalStarted || typeof window === 'undefined') return
+  cleanupIntervalStarted = true
+  setInterval(cleanupExpiredCache, 10 * 60 * 1000)
+}
+
 export const useLivePhotoProcessor = () => {
   /**
    * 将 MOV 文件转换为 MP4 blob
@@ -40,20 +90,25 @@ export const useLivePhotoProcessor = () => {
       }
 
       if (existing.isProcessing) {
-        // 使用Promise而不是轮询，提高性能
+        // 等待进行中的转换完成；超时必须清掉 interval，避免泄漏
         return new Promise((resolve) => {
-          const timeout = setTimeout(() => {
-            resolve(null) // 超时返回null
-          }, 30000) // 30秒超时
+          let settled = false
+          const finish = (blob: Blob | null) => {
+            if (settled) return
+            settled = true
+            clearInterval(checkInterval)
+            clearTimeout(timeout)
+            resolve(blob)
+          }
 
           const checkInterval = setInterval(() => {
             const current = processedLivePhotos.value.get(photoId)
             if (current && !current.isProcessing) {
-              clearInterval(checkInterval)
-              clearTimeout(timeout)
-              resolve(current.mp4Blob)
+              finish(current.mp4Blob)
             }
           }, 100)
+
+          const timeout = setTimeout(() => finish(null), 30000)
         })
       }
     }
@@ -289,57 +344,6 @@ export const useLivePhotoProcessor = () => {
   }
 
   /**
-   * 智能内存管理：清理过期或不需要的缓存
-   */
-  const cleanupExpiredCache = () => {
-    const now = Date.now()
-    const cacheExpiry = 24 * 60 * 60 * 1000 // 24小时
-    const maxCacheSize = 50 // 最大缓存50个LivePhoto
-
-    const entries = Array.from(processedLivePhotos.value.entries())
-    const expiredEntries: string[] = []
-
-    // 查找过期的条目
-    entries.forEach(([photoId, state]) => {
-      if (state.lastProcessed && now - state.lastProcessed > cacheExpiry) {
-        expiredEntries.push(photoId)
-      }
-    })
-
-    // 清理过期条目
-    expiredEntries.forEach((photoId) => {
-      const state = processedLivePhotos.value.get(photoId)
-      if (state?.mp4Blob) {
-        // 这里可以安全地清理，因为已过期
-        state.mp4Blob = null
-      }
-      processedLivePhotos.value.delete(photoId)
-    })
-
-    // 如果缓存仍然太大，清理最老的条目
-    if (processedLivePhotos.value.size > maxCacheSize) {
-      const sortedEntries = entries
-        .filter(([photoId]) => !expiredEntries.includes(photoId))
-        .sort((a, b) => (a[1].lastProcessed || 0) - (b[1].lastProcessed || 0))
-
-      const toRemove = sortedEntries.slice(
-        0,
-        processedLivePhotos.value.size - maxCacheSize,
-      )
-      toRemove.forEach(([photoId, state]) => {
-        if (state.mp4Blob) {
-          state.mp4Blob = null
-        }
-        processedLivePhotos.value.delete(photoId)
-      })
-    }
-
-    console.log(
-      `Cleaned up ${expiredEntries.length} expired LivePhoto cache entries`,
-    )
-  }
-
-  /**
    * 获取缓存统计信息
    */
   const getCacheStats = () => {
@@ -383,10 +387,8 @@ export const useLivePhotoProcessor = () => {
     console.log('All LivePhoto cache cleared')
   }
 
-  // 定期清理过期缓存（每10分钟）
-  if (typeof window !== 'undefined') {
-    setInterval(cleanupExpiredCache, 10 * 60 * 1000)
-  }
+  // 全局单例定时清理：避免每次调用 composable 都新建 setInterval
+  ensureCleanupInterval()
 
   return {
     convertMovToMp4,

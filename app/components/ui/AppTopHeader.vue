@@ -42,6 +42,27 @@ const avatarUrl = computed(
 const siteTitle = computed(() => (getSetting('app:title') as string) || '')
 const photoCount = computed(() => photos.value?.length ?? 0)
 
+const route = useRoute()
+const router = useRouter()
+const headerQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
+
+watch(
+  () => route.query.q,
+  (q) => {
+    headerQuery.value = typeof q === 'string' ? q : ''
+  },
+)
+
+function submitHeaderSearch() {
+  const q = headerQuery.value.trim()
+  headerQuery.value = q
+  if (!q) {
+    router.push('/search')
+    return
+  }
+  router.push({ path: '/search', query: { q } })
+}
+
 // 顶栏玻璃层不再用 JS 的 :style 绑定（避免 SSR 阶段按 colorMode.value 渲染成深色、
 // 客户端再被主题优先级强制纠正，造成刷新时顶栏闪烁/竞态），改为纯 CSS 类
 // `.header-glass` 驱动，跟随 html 上的 .dark 类（Nuxt colorMode 在 SSR 与客户端
@@ -59,26 +80,60 @@ const photoCount = computed(() => photos.value?.length ?? 0)
     <!-- 内容条：h-11，仅有 LinearBlur 模糊，无背景色块、无分割线（Afilmory 1:1） -->
     <div class="flex h-11 items-center justify-between gap-2 px-3 lg:h-11 lg:gap-3 lg:px-4">
       <!-- 左侧：头像 + 站点名 + 照片数量（跟随主题文字色，浅色下深色可读） -->
-      <div class="flex items-center gap-2">
+      <NuxtLink
+        to="/"
+        class="relative z-10 flex min-w-0 shrink-0 items-center gap-2"
+        :aria-label="$t('ui.action.home.tooltip')"
+        :title="$t('ui.action.home.tooltip')"
+      >
         <img
           :src="avatarUrl"
-          class="size-7 rounded-lg object-cover lg:size-8"
+          class="size-7 shrink-0 rounded-lg object-cover lg:size-8"
           :alt="siteTitle"
         />
-        <div class="flex items-center gap-1.5">
-          <h1 class="truncate text-sm font-semibold text-(--glass-text) lg:text-base">
+        <div class="hidden min-w-0 items-center gap-1.5 sm:flex">
+          <h1 class="max-w-40 truncate text-sm font-semibold text-(--glass-text) lg:max-w-56 lg:text-base">
             {{ siteTitle }}
           </h1>
           <span class="text-xs text-(--glass-muted) lg:text-sm">{{ photoCount }}</span>
         </div>
-      </div>
+      </NuxtLink>
 
       <!-- 右侧：操作按钮（保留现有图标，Afilmory 圆形幽灵按钮 + material 胶囊） -->
       <AuthState>
         <template #default="{ loggedIn, clear }">
-          <div class="flex items-center gap-1.5 lg:gap-2">
+          <div class="flex min-w-0 flex-1 items-center justify-end gap-1.5 lg:gap-2">
+            <form
+              class="relative z-0 min-w-0 flex-1 sm:max-w-56 md:max-w-72"
+              @submit.prevent="submitHeaderSearch"
+            >
+              <label class="relative block">
+                <span class="sr-only">{{ $t('title.search') }}</span>
+                <Icon
+                  name="tabler:search"
+                  class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-(--glass-muted)"
+                />
+                <input
+                  v-model="headerQuery"
+                  type="search"
+                  enterkeyhint="search"
+                  :placeholder="$t('ui.search.headerPlaceholder')"
+                  class="header-search h-8 w-full rounded-full pr-3 pl-8 text-sm text-(--glass-text) outline-none placeholder:text-(--glass-muted)"
+                />
+              </label>
+            </form>
             <!-- 主操作按钮组：Afilmory 圆形幽灵按钮，无胶囊底色（浅色下不出现“透明卡片”） -->
-            <div class="flex items-center gap-1">
+            <div class="flex shrink-0 items-center gap-1">
+              <UTooltip :text="$t('title.people')">
+                <UButton
+                  variant="ghost"
+                  color="neutral"
+                  class="cursor-pointer rounded bg-transparent text-(--glass-muted) hover:bg-(--glass-hover) hover:text-(--glass-text)"
+                  icon="tabler:users"
+                  size="sm"
+                  to="/people"
+                />
+              </UTooltip>
               <UTooltip :text="$t('ui.action.globe.tooltip')">
                 <UButton
                   variant="ghost"
@@ -260,6 +315,23 @@ const photoCount = computed(() => photos.value?.length ?? 0)
     transparent 100%
   );
 }
+.header-search {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.62);
+}
+.header-search:focus {
+  border-color: rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.88);
+}
+html.dark .header-search {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.1);
+}
+html.dark .header-search:focus {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.16);
+}
+
 html.dark .header-glass {
   background: rgba(18, 18, 24, 0.45);
   backdrop-filter: blur(26px) saturate(1.3);

@@ -134,6 +134,13 @@
       "totalPhotosWithRange": "{range}，共 @:plural.photo",
       "noPhotosTip": "還沒有照片，快去上傳一些吧！"
     },
+    "timeline": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "unknownDate": "未知日期",
+      "scrubberLabel": "時間線導航",
+      "photoCount": "{count} 張"
+    },
     "album": {
       "noImage": "空相簿",
       "emptyAlbumTip": "新增相片開始吧",

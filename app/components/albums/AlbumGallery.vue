@@ -1,17 +1,27 @@
 <script lang="ts" setup>
 import type { AlbumLayout } from '~~/shared/types/album'
 
+import { buildTimelineLayout } from '~/utils/timeline'
+
 /**
  * 相簿照片展示容器：负责「瀑布流 / 统一网格 / 时间线」几种布局的骨架与顶部切换控件。
  * 具体卡片由父组件通过具名插槽提供（保留普通相簿丰富的卡片能力）：
- *   - #waterfall-card="{ photo, index }"  瀑布流卡片
- *   - #grid-card="{ photo, index }"       统一网格卡片（时间线分组内复用此卡片）
+ *   - #waterfall-card="{ photo, index, boxWidth?, boxHeight? }"  瀑布流 / 时间线 justified 卡片
+ *   - #grid-card="{ photo, index }"       统一网格卡片
+ *   - #lead="{ lead, variant }"           与照片同一格的前置项（如子相簿），位置由 leadPosition 决定
  */
-const props = defineProps<{
-  photos: any[]
-  /** 是否展示右上角「样式布局」切换控件（相簿详情默认展示） */
-  showSwitch?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    photos: any[]
+    /** 与照片同一套布局格子里展示的项（如子相簿） */
+    leads?: any[]
+    /** 这些格子排在照片开头还是末尾 */
+    leadPosition?: 'start' | 'end'
+    /** 是否展示右上角「样式布局」切换控件（相簿详情默认展示） */
+    showSwitch?: boolean
+  }>(),
+  { leads: () => [], leadPosition: 'start' },
+)
 
 const emit = defineEmits<{
   (e: 'open-random', index: number): void
@@ -28,8 +38,29 @@ const columnWidth = computed(() => (isMobile.value ? 280 : 280))
 const maxColumns = computed(() => (isMobile.value ? 2 : 8))
 const minColumns = computed(() => (isMobile.value ? 2 : 2))
 
-const masonryItems = computed(() =>
-  props.photos.map((photo, index) => ({ id: photo.id, photo, originalIndex: index })),
+const leadList = computed(() => props.leads ?? [])
+const leadAtEnd = computed(() => props.leadPosition === 'end')
+
+const masonryItems = computed(() => {
+  const leads = leadList.value.map((lead, index) => ({
+    id: String(lead.id ?? lead.link ?? `lead-${index}`),
+    lead,
+    photo: null as any,
+    originalIndex: -1,
+    isLead: true,
+  }))
+  const photos = props.photos.map((photo, index) => ({
+    id: photo.id,
+    lead: null as any,
+    photo,
+    originalIndex: index,
+    isLead: false,
+  }))
+  return leadAtEnd.value ? [...photos, ...leads] : [...leads, ...photos]
+})
+
+const hasItems = computed(
+  () => props.photos.length > 0 || leadList.value.length > 0,
 )
 
 const LAYOUT_OPTIONS: { value: AlbumLayout; label: string; icon: string }[] = [
@@ -130,46 +161,87 @@ const optionsStyle = computed(() => ({
     : 'opacity 150ms ease-out 0ms',
 }))
 
-// —— 时间线分组：按拍摄日期（dateTaken）归类，组内复用网格卡片 ——
+// —— Immich 式时间线：按日分组 + justified 行布局 + 侧边 scrubber ——
 const dayjs = useDayjs()
+const timelineContainerRef = ref<HTMLElement | null>(null)
+const timelineWidth = ref(0)
+const timelineScrollPercent = ref(0)
+const timelineScrubbing = ref(false)
 
-const timelineGroups = computed(() => {
-  const order = new Map<string, Array<{ photo: any; index: number }>>()
-  for (let i = 0; i < props.photos.length; i++) {
-    const photo = props.photos[i]
-    const raw = photo?.dateTaken as string | null | undefined
-    const key = raw
-      ? dayjs(raw).format('YYYY-MM-DD')
-      : '__unknown__'
-    if (!order.has(key)) order.set(key, [])
-    order.get(key)!.push({ photo, index: i })
+const measureTimelineWidth = () => {
+  if (!timelineContainerRef.value) return
+  const gutter = isMobile.value ? 4 : 56
+  timelineWidth.value = Math.max(
+    0,
+    timelineContainerRef.value.clientWidth - gutter,
+  )
+}
+
+const albumTimeline = computed(() => {
+  if (layout.value !== 'timeline' || !props.photos.length || timelineWidth.value <= 0) {
+    return { days: [], months: [], totalHeight: 0 }
   }
-  // 组间按日期倒序（最新在前），无日期组放最后
-  return [...order.entries()]
-    .sort((a, b) => {
-      if (a[0] === '__unknown__') return 1
-      if (b[0] === '__unknown__') return -1
-      return b[0] < a[0] ? -1 : 1
-    })
-    .map(([key, items]) => {
-      // 组内涉及的展示城市（去重、过滤缺失值），用于"时光线"组头标注
-      const citiesSet = new Set<string>()
-      for (const { photo } of items) {
-        const c = (
-          photo?.city ||
-          photo?.locationName ||
-          photo?.country ||
-          ''
-        ).trim()
-        if (c) citiesSet.add(c)
-      }
-      return {
-        key,
-        dates: key === '__unknown__' ? null : dayjs(key),
-        photos: items,
-        cities: [...citiesSet],
-      }
-    })
+  return buildTimelineLayout(props.photos as Photo[], {
+    containerWidth: timelineWidth.value,
+    isMobile: isMobile.value,
+    dayjs,
+    t,
+  })
+})
+
+const onTimelineScrub = (percent: number) => {
+  timelineScrollPercent.value = percent
+  const el = timelineContainerRef.value
+  if (!el) return
+  const top = el.getBoundingClientRect().top + window.pageYOffset
+  window.scrollTo({
+    top: top + percent * Math.max(albumTimeline.value.totalHeight, 1),
+    behavior: 'auto',
+  })
+}
+
+const onTimelineWindowScroll = () => {
+  if (layout.value !== 'timeline' || timelineScrubbing.value) return
+  const el = timelineContainerRef.value
+  if (!el) return
+  const top = el.getBoundingClientRect().top + window.pageYOffset
+  const h = Math.max(albumTimeline.value.totalHeight, 1)
+  const y = window.pageYOffset - top
+  timelineScrollPercent.value = Math.min(1, Math.max(0, y / h))
+}
+
+watch(layout, (v) => {
+  if (v === 'timeline') {
+    nextTick(() => measureTimelineWidth())
+  }
+})
+
+let timelineResizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  nextTick(() => measureTimelineWidth())
+  window.addEventListener('scroll', onTimelineWindowScroll, { passive: true })
+  if (typeof ResizeObserver !== 'undefined') {
+    timelineResizeObserver = new ResizeObserver(() => measureTimelineWidth())
+    watch(
+      timelineContainerRef,
+      (el, _, onCleanup) => {
+        timelineResizeObserver?.disconnect()
+        if (el) {
+          timelineResizeObserver?.observe(el)
+          measureTimelineWidth()
+        }
+        onCleanup(() => timelineResizeObserver?.disconnect())
+      },
+      { immediate: true, flush: 'post' },
+    )
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', onTimelineWindowScroll)
+  timelineResizeObserver?.disconnect()
+  timelineResizeObserver = null
 })
 </script>
 
@@ -178,7 +250,7 @@ const timelineGroups = computed(() => {
     <!-- 顶部切换控件：仅在有照片且需要展示时渲染 -->
     <!-- 单一胶囊：收起态显示山体+数量，点击后胶囊从中心向左右平滑展开，露出四个布局选项 -->
     <div
-      v-if="photos.length > 0"
+      v-if="hasItems"
       ref="switchRoot"
       class="relative z-[40] mb-2 flex h-9 items-center justify-center"
     >
@@ -239,7 +311,8 @@ const timelineGroups = computed(() => {
             </span>
           </button>
 
-          <!-- 分隔线 -->
+          <!-- 分隔线 + 魔百盒：没有照片时不提供随机预览 -->
+          <template v-if="photos.length">
           <span class="h-4 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" aria-hidden="true" />
 
           <!-- 魔百盒：点击随机预览一张相簿照片 -->
@@ -255,6 +328,7 @@ const timelineGroups = computed(() => {
               class="shrink-0 size-4 text-neutral-500 transition-transform duration-500 group-hover:-rotate-12 group-hover:scale-110 group-active:scale-90 dark:text-neutral-400"
             />
           </button>
+          </template>
         </div>
 
         <!-- 展开态内容：四个布局选项，每个为独立胶囊，文字图标不挤压，一行契合排列 -->
@@ -300,11 +374,18 @@ const timelineGroups = computed(() => {
       :ssr-columns="2"
       :key-mapper="
         (_item, _column, _row, index) =>
-          masonryItems[index]?.originalIndex ?? index
+          masonryItems[index]?.id ?? index
       "
     >
       <template #default="{ item }">
         <slot
+          v-if="item.isLead"
+          name="lead"
+          :lead="item.lead"
+          variant="waterfall"
+        />
+        <slot
+          v-else
           name="waterfall-card"
           :photo="item.photo"
           :index="item.originalIndex"
@@ -317,44 +398,119 @@ const timelineGroups = computed(() => {
       v-else-if="layout === 'grid'"
       class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
     >
+      <template v-if="!leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="grid" />
+        </div>
+      </template>
       <div v-for="(photo, index) in photos" :key="photo.id">
         <slot name="grid-card" :photo="photo" :index="index" />
       </div>
+      <template v-if="leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="`end-${lead.id ?? lead.link ?? index}`">
+          <slot name="lead" :lead="lead" variant="grid" />
+        </div>
+      </template>
     </div>
 
     <!-- 沉浸式看图：单列全幅，向下滚动逐张浏览 -->
     <div v-else-if="layout === 'immersive'" class="mx-auto flex w-full flex-col gap-4 px-2 sm:px-4">
+      <template v-if="!leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="immersive" />
+        </div>
+      </template>
       <div v-for="(photo, index) in photos" :key="photo.id">
         <slot name="immersive-card" :photo="photo" :index="index" />
       </div>
+      <template v-if="leadAtEnd">
+        <div v-for="(lead, index) in leadList" :key="`end-${lead.id ?? lead.link ?? index}`">
+          <slot name="lead" :lead="lead" variant="immersive" />
+        </div>
+      </template>
     </div>
 
-    <!-- 时光线：按拍摄日期分组，组头标注城市，组内复用网格卡片 -->
-    <div v-else-if="layout === 'timeline'" class="space-y-10">
-      <div v-for="group in timelineGroups" :key="group.key" class="space-y-3">
-        <!-- 日期/城市头：吸顶便于滚动浏览大分组 -->
-        <div class="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-white/90 px-1 py-2 backdrop-blur-sm dark:bg-neutral-950/90">
-          <div class="flex items-baseline gap-2">
-            <span class="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
-              {{ group.dates ? group.dates.format('YYYY-MM-DD') : t('albums.layout.unknownDate') }}
-            </span>
-            <span class="text-xs text-neutral-400 dark:text-neutral-500">
-              {{ group.photos.length }} {{ t('albums.layout.photoCount') }}
-            </span>
-          </div>
-          <span
-            v-for="city in group.cities"
-            :key="city"
-            class="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-          >
-            <Icon name="tabler:map-pin" class="size-3" />
-            {{ city }}
-          </span>
+    <!-- Immich 式时光线：按日分组 + justified 行布局 + 侧边 scrubber -->
+    <div v-else-if="layout === 'timeline'" class="relative space-y-6">
+      <div
+        v-if="leadList.length && !leadAtEnd"
+        class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
+      >
+        <div v-for="(lead, index) in leadList" :key="lead.id ?? lead.link ?? index">
+          <slot name="lead" :lead="lead" variant="grid" />
         </div>
-        <div class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8">
-          <div v-for="item in group.photos" :key="item.photo.id">
-            <slot name="grid-card" :photo="item.photo" :index="item.index" />
+      </div>
+
+      <TimelineScrubber
+        v-if="albumTimeline.months.length > 0"
+        :months="albumTimeline.months"
+        :total-height="albumTimeline.totalHeight"
+        :scroll-percent="timelineScrollPercent"
+        @scrub="onTimelineScrub"
+        @scrub-start="timelineScrubbing = true"
+        @scrub-stop="timelineScrubbing = false"
+      />
+
+      <div
+        ref="timelineContainerRef"
+        class="relative w-full"
+        :class="isMobile ? '' : 'pr-12'"
+        :style="{ height: `${albumTimeline.totalHeight || 40}px` }"
+      >
+        <section
+          v-for="day in albumTimeline.days"
+          :key="day.key"
+          class="absolute left-0 w-full"
+          :style="{ top: `${day.top}px`, height: `${day.height}px` }"
+        >
+          <header
+            class="flex items-baseline gap-2 px-1"
+            :style="{ height: isMobile ? '32px' : '48px' }"
+          >
+            <h2 class="text-sm font-semibold text-neutral-800 dark:text-neutral-100 sm:text-base">
+              {{ day.title }}
+            </h2>
+            <span
+              v-if="day.cities.length"
+              class="truncate text-xs text-neutral-500 dark:text-neutral-400"
+            >
+              {{ day.cities.slice(0, 2).join(' · ') }}
+            </span>
+            <span class="ml-auto text-xs tabular-nums text-neutral-400">
+              {{ day.photos.length }}
+            </span>
+          </header>
+          <div class="relative w-full" :style="{ height: `${day.contentHeight}px` }">
+            <div
+              v-for="item in day.photos"
+              :key="item.photo.id"
+              class="absolute overflow-hidden"
+              :data-photo-id="item.photo.id"
+              :style="{
+                top: `${item.box.top}px`,
+                left: `${item.box.left}px`,
+                width: `${item.box.width}px`,
+                height: `${item.box.height}px`,
+              }"
+            >
+              <slot
+                name="waterfall-card"
+                :photo="item.photo"
+                :index="item.index"
+                :box-width="item.box.width"
+                :box-height="item.box.height"
+              />
+            </div>
           </div>
+        </section>
+      </div>
+
+      <div
+        v-if="leadList.length && leadAtEnd"
+        class="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8"
+      >
+        <div v-for="(lead, index) in leadList" :key="`end-${lead.id ?? lead.link ?? index}`">
+          <slot name="lead" :lead="lead" variant="grid" />
         </div>
       </div>
     </div>

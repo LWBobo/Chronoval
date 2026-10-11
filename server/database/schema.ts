@@ -4,6 +4,7 @@ import {
   text,
   integer,
   real,
+  blob,
   uniqueIndex,
   index,
 } from 'drizzle-orm/sqlite-core'
@@ -28,6 +29,25 @@ type PipelineQueuePayload =
     }
   | {
       type: 'photo-erase-location'
+      photoId: string
+    }
+  | {
+      type: 'photo-smart-search'
+      photoId: string
+    }
+  | {
+      type: 'photo-face-detection'
+      photoId: string
+      /** Full reindex batch: defer recognition until all detections finish. */
+      reindexBatch?: boolean
+    }
+  | {
+      type: 'photo-face-recognition'
+      faceId?: string
+      deferred?: boolean
+    }
+  | {
+      type: 'photo-ocr'
       photoId: string
     }
 
@@ -163,6 +183,10 @@ export const pipelineQueue = sqliteTable('pipeline_queue', {
       'reverse-geocoding',
       'live-photo',
       'location-erase',
+      'smart-search',
+      'face-detection',
+      'face-recognition',
+      'ocr',
     ],
   }),
   errorMessage: text('error_message'),
@@ -470,6 +494,14 @@ export const scanLibraries = sqliteTable(
   displayMode: text('display_mode', { enum: ['gallery', 'album', 'both'] })
     .default('gallery')
     .notNull(),
+  /** 进入父相簿时，是否把子相簿以照片格插进本层照片流 */
+  childInParent: integer('child_in_parent', { mode: 'boolean' })
+    .default(true)
+    .notNull(),
+  /** 子相簿格子相对本层照片的位置：开头 / 末尾 */
+  childPosition: text('child_position', { enum: ['start', 'end'] })
+    .default('start')
+    .notNull(),
   /** 相簿访问密码（哈希）；为空表示不设密码 */
   passwordHash: text('password_hash'),
   /** 自动监控轮询间隔（毫秒），默认 60s */
@@ -491,3 +523,121 @@ export const scanLibraries = sqliteTable(
   },
   (table) => [uniqueIndex('scan_libraries_url_key_unique').on(table.urlKey)],
 )
+
+// —— ML / AI：内容搜索、人脸、人物、OCR ——
+
+/** CLIP 图像向量（一期 SQLite blob；检索时可暴力余弦） */
+export const photoEmbeddings = sqliteTable(
+  'photo_embeddings',
+  {
+    photoId: text('photo_id')
+      .primaryKey()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    model: text('model').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+    dim: integer('dim').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+)
+
+/** 人物（一期单租户扁平模型；owner_id 预留给以后的多用户） */
+export const people = sqliteTable(
+  'people',
+  {
+    id: text('id').primaryKey(),
+    name: text('name'),
+    /** Reserved. Null while Chronoval is single-tenant. */
+    ownerId: text('owner_id'),
+    isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
+    thumbnailFaceId: text('thumbnail_face_id'),
+    faceCount: integer('face_count').default(0).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [index('idx_people_name').on(table.name)],
+)
+
+/** 检测到的人脸框 */
+export const assetFaces = sqliteTable(
+  'asset_faces',
+  {
+    id: text('id').primaryKey(),
+    photoId: text('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    personId: text('person_id').references(() => people.id, {
+      onDelete: 'set null',
+    }),
+    /** 相对坐标 0–1，便于不同分辨率缩略图对齐 */
+    x1: real('x1').notNull(),
+    y1: real('y1').notNull(),
+    x2: real('x2').notNull(),
+    y2: real('y2').notNull(),
+    imageWidth: integer('image_width').notNull(),
+    imageHeight: integer('image_height').notNull(),
+    score: real('score').notNull(),
+    source: text('source', { enum: ['ml', 'manual'] })
+      .default('ml')
+      .notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_asset_faces_photo').on(table.photoId),
+    index('idx_asset_faces_person').on(table.personId),
+  ],
+)
+
+/** 人脸 ArcFace embedding */
+export const faceEmbeddings = sqliteTable('face_embeddings', {
+  faceId: text('face_id')
+    .primaryKey()
+    .references(() => assetFaces.id, { onDelete: 'cascade' }),
+  model: text('model').notNull(),
+  embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+  dim: integer('dim').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+})
+
+/** OCR 全文（配合 FTS5 虚拟表 photo_ocr_fts） */
+export const photoOcr = sqliteTable('photo_ocr', {
+  photoId: text('photo_id')
+    .primaryKey()
+    .references(() => photos.id, { onDelete: 'cascade' }),
+  text: text('text').notNull().default(''),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+})
+
+/**
+ * Face-detection sentinel (incl. 0-face results).
+ * Without this, "queue missing" cannot tell "scanned, no faces" from "never scanned".
+ */
+export const photoFaceScans = sqliteTable('photo_face_scans', {
+  photoId: text('photo_id')
+    .primaryKey()
+    .references(() => photos.id, { onDelete: 'cascade' }),
+  faceCount: integer('face_count').default(0).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+})
+
+/** ML 任务水位（夜间聚类等） */
+export const mlState = sqliteTable('ml_state', {
+  key: text('key').primaryKey(),
+  value: text('value'),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+})

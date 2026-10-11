@@ -6,7 +6,7 @@ import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/ma
  * 不含 EXIF/完整 JSON，用于前端只有在集合发生变化时才触发一次完整 refresh。
  *
  * 可见性规则与画廊各数据源保持一致：
- * - 管理员（相册页/后台画廊 ?gallery=1）：全部照片，排除「已转为相簿」的扫描库；
+ * - 管理员（首页画廊 ?gallery=1）：排除已禁用、以及未勾选瀑布流的扫描库；
  * - 公开画廊（/api/photos/visible）：额外排除隐藏相簿内的照片。
  */
 export default eventHandler(async (event) => {

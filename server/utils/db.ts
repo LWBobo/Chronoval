@@ -32,6 +32,13 @@ export function useDB() {
   return dbInstance
 }
 
+/** Raw better-sqlite3 handle for FTS / ad-hoc SQL */
+export function useSqlite() {
+  useDB()
+  if (!sqliteInstance) throw new Error('SQLite not initialized')
+  return sqliteInstance
+}
+
 // 优雅关闭数据库连接
 export function closeDB() {
   if (sqliteInstance) {

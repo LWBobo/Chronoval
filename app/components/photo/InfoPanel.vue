@@ -22,6 +22,7 @@ interface Album {
 
 const dayjs = useDayjs()
 const router = useRouter()
+const { t } = useI18n()
 const { localizeExif } = useExifLocalization()
 
 const props = defineProps<Props>()
@@ -35,6 +36,32 @@ const { data: _albums } = useFetch<Album[]>(
 )
 
 const albums = computed(() => _albums.value || [])
+
+const { data: _facesPayload } = useFetch<{
+  faces: Array<{
+    id: string
+    personId?: string | null
+    personName?: string | null
+    thumbnailUrl?: string
+  }>
+}>(() => `/api/photos/${props.currentPhoto.id}/faces`, {
+  watch: [() => props.currentPhoto.id],
+})
+
+const photoFaces = computed(() => _facesPayload.value?.faces || [])
+const linkedPeople = computed(() => {
+  const map = new Map<string, { id: string; name: string; thumb?: string }>()
+  for (const f of photoFaces.value) {
+    if (!f.personId) continue
+    if (map.has(f.personId)) continue
+    map.set(f.personId, {
+      id: f.personId,
+      name: f.personName || t('ui.people.unnamed'),
+      thumb: f.thumbnailUrl,
+    })
+  }
+  return [...map.values()]
+})
 
 const isMobile = useMediaQuery('(max-width: 768px)')
 
@@ -584,6 +611,29 @@ const onAlbumClick = (albumId: number) => {
           <PhotoInfoRow v-if="exifData?.artist" :label="$t('exif.artist')" :value="exifData?.artist" />
           <PhotoInfoRow v-if="exifData?.copyright" :label="$t('exif.copyright')" :value="exifData?.copyright" />
           <PhotoInfoRow v-if="exifData?.software" :label="$t('exif.software')" :value="exifData?.software" />
+        </div>
+
+        <!-- 人物（AI） -->
+        <div v-if="linkedPeople.length" class="mt-4">
+          <h4 class="mb-2 text-sm font-medium text-neutral-600 dark:text-neutral-400">
+            {{ $t('ui.people.title') }}
+          </h4>
+          <div class="flex flex-wrap gap-2">
+            <NuxtLink
+              v-for="person in linkedPeople"
+              :key="person.id"
+              :to="`/people/${person.id}`"
+              class="inline-flex items-center gap-2 rounded-full border border-neutral-200/80 bg-white/70 px-2 py-1 text-xs text-neutral-800 backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/70 dark:text-neutral-100"
+            >
+              <img
+                v-if="person.thumb"
+                :src="person.thumb"
+                alt=""
+                class="size-6 rounded-full object-cover"
+              />
+              <span>{{ person.name }}</span>
+            </NuxtLink>
+          </div>
         </div>
 
         <!-- 拍摄参数 chips（afilmory 风格：磨砂玻璃 pill，更大字号、更宽松间距，

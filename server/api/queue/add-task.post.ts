@@ -24,6 +24,24 @@ export default defineEventHandler(async (event) => {
         type: z.literal('photo-erase-location'),
         photoId: z.string().min(1),
       }),
+      z.object({
+        type: z.literal('photo-smart-search'),
+        photoId: z.string().min(1),
+      }),
+      z.object({
+        type: z.literal('photo-face-detection'),
+        photoId: z.string().min(1),
+      }),
+      z.object({
+        type: z.literal('photo-face-recognition'),
+        photoId: z.string().min(1).optional(),
+        faceId: z.string().min(1).optional(),
+        deferred: z.boolean().optional(),
+      }),
+      z.object({
+        type: z.literal('photo-ocr'),
+        photoId: z.string().min(1),
+      }),
     ])
 
     const { payload, priority, maxAttempts } = await readValidatedBody(

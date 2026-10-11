@@ -17,7 +17,7 @@ import type { DataMigration } from './types'
  *   CURRENT_DATA_VERSION 表示「当前应用期望的数据版本」。数据库中通过
  *   app_meta.data_version 记录已到达的版本。启动时自动把旧数据迁移到该版本。
  */
-export const CURRENT_DATA_VERSION = 3
+export const CURRENT_DATA_VERSION = 4
 
 /** 生成不透明的公开相簿 UID（与 server/utils/albumUid.ts 的生成规则一致） */
 function generateAlbumUid(): string {
@@ -111,6 +111,27 @@ export const MIGRATIONS: DataMigration[] = [
       ctx.report(
         res.changes,
         '存量 as_album 已回填；display_mode 为 NULL 的行补为 gallery',
+      )
+    },
+  },
+
+  // ===== v4 =====
+  {
+    version: 4,
+    id: 'backfill-photo-face-scans',
+    description: '按已有 asset_faces 回填 photo_face_scans（有脸的照片标记为已检测）',
+    run: (ctx) => {
+      const res = ctx.sqlite
+        .prepare(
+          `INSERT OR IGNORE INTO photo_face_scans (photo_id, face_count, updated_at)
+             SELECT photo_id, COUNT(*), unixepoch()
+               FROM asset_faces
+              GROUP BY photo_id`,
+        )
+        .run()
+      ctx.report(
+        res.changes,
+        '已从 asset_faces 回填检测哨兵；历史上 0 脸照片仍会在下次补跑缺失时重检一次',
       )
     },
   },

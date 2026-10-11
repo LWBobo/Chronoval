@@ -37,7 +37,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/xiaomengr/chronoval:latest
+    image: ghcr.io/lwbobo/chronoval:1.7
     container_name: chronoval
     restart: unless-stopped
     ports:
@@ -47,6 +47,21 @@ services:
       # 从 .env 读取配置（管理员账号、会话密钥、站点信息等）。
       # 本地存储与媒体库的默认值已固化在镜像内（Dockerfile ENV），无需在此重复配置。
       - .env
+    environment:
+      # 覆盖 .env 里的地址：同一 Compose 网络内用服务名访问侧车。
+      - CHRONOVAL_ML_URL=http://chronoval-ml:3003
+    depends_on:
+      chronoval-ml:
+        condition: service_healthy
+    devices:
+      - /dev/dri:/dev/dri # Intel 或 AMD GPU 硬件转码
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       # 程序运行目录：数据库 + 配置（必需，可写）
       - ./data:/app/data
@@ -54,7 +69,7 @@ services:
       - ./storage:/app/storage
       # ── 可选：外部扫描库（默认不挂载）────────────────────────────
       # 需要“放图自动识别相册”时取消下面一行注释，并先执行：mkdir -p data/library
-      # - ./data/library:/app/library
+      - /vol2/1000/photos/shares:/app/library
     healthcheck:
       test:
         - CMD
@@ -67,3 +82,58 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    networks:
+      - fnosnet
+
+  # CLIP / 人脸 / OCR。镜像已在本机构建为 chronoval-ml:1.5（CPU 版 PyTorch）。
+  # 模型在首次调用时下载到 ml-cache，大约数百 MB 到 1GB 以上。
+  chronoval-ml:
+    image: chronoval-ml:1.7
+    container_name: chronoval-ml
+    restart: unless-stopped
+    ports:
+      - '3003:3003'
+    environment:
+      - CACHE_DIR=/cache
+      - PORT=3003
+      - CLIP_FN_IMG=/opt/models/fnos/img2vec.onnx
+      - CLIP_FN_TXT=/opt/models/fnos/txt2vec.onnx
+      - CLIP_FN_SP=/opt/models/fnos/sp.model
+      - CLIP_MODEL_NAME=fnos
+      - CLIP_PRETRAINED=img2vec-large-1.0.0
+      - CLIP_DIM=1024
+    devices:
+      - /dev/dri:/dev/dri # Intel 或 AMD GPU 硬件转码
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./ml-cache:/cache
+      # 飞牛图文权重的本地副本，只读挂载，不打进镜像。
+      - /home/liuwb/test/Chronoval-liuwb/chronoval-ml/models/fnos/img2vec.onnx:/opt/models/fnos/img2vec.onnx:ro
+      - /home/liuwb/test/Chronoval-liuwb/chronoval-ml/models/fnos/txt2vec.onnx:/opt/models/fnos/txt2vec.onnx:ro
+      - /home/liuwb/test/Chronoval-liuwb/chronoval-ml/models/fnos/sp.model:/opt/models/fnos/sp.model:ro
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:3003/ping
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - fnosnet
+
+# 飞牛已有网络，两个容器必须在同一网络里，主服务才能解析 chronoval-ml。
+networks:
+  fnosnet:
+    external: true
+
+volumes:
+  ml-cache:

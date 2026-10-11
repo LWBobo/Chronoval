@@ -49,6 +49,11 @@ Whether using Docker or Docker Compose (.env) deployment, configuration is done 
 | NUXT_UPLOAD_MIME_WHITELIST_ENABLED       | Enable MIME type whitelist validation for uploads               | `true`                                | No                                                   |
 | NUXT_UPLOAD_MIME_WHITELIST               | Allowed MIME types for uploads (comma-separated)                | See below                             | No                                                   |
 | ALLOW_INSECURE_COOKIE                    | Allow insecure cookies (only for development environment)       | `false`                               | No                                                   |
+| CHRONOVAL_ML_URL                         | Machine-learning sidecar base URL                               | `http://127.0.0.1:3003`               | No                                                   |
+| ML_NIGHTLY_INTERVAL_MS                   | How often to queue a face-recognition sweep                     | `86400000` (24h)                      | No                                                   |
+| ML_NIGHTLY_INITIAL_DELAY_MS              | Delay before the first recognition sweep                        | `300000` (5 min)                      | No                                                   |
+
+Smart search, people, and OCR are documented in [Machine learning](/guide/ml).
 
 ## Upload File Type Whitelist
 

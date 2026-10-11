@@ -64,6 +64,22 @@ docker compose up -d
 # 只有从源码本地构建时才用：docker compose up -d --build
 ```
 
+## 机器学习侧车（智能搜图 / 人物 / OCR）
+
+`docker-compose.yml` 会同时启动 `chronoval` 与 `chronoval-ml`。Chronoval 通过 `CHRONOVAL_ML_URL=http://chronoval-ml:3003` 调用侧车；模型缓存在卷 `ml-cache`（容器内 `/cache`）。
+
+```bash
+# 侧车源码在仓库同级目录 chronoval-ml
+docker compose up -d --build
+```
+
+- 首次 CLIP、InsightFace、OCR 请求会把权重下载到 `ml-cache`，体积大约数百 MB 到 1GB 以上，请预留磁盘。
+- 默认镜像使用 CPU。人脸检测并发为 1，CLIP 为 1，OCR 为 2；人物聚类全局串行。
+- 侧车不可达时，上传、扫描和浏览照常进行，对应任务记为失败，可在「队列管理」或「机器学习」设置里补跑。
+- 有 NVIDIA GPU 时需要自行换 CUDA 版 PyTorch / `onnxruntime-gpu` 后重建 `chronoval-ml`。CLIP 会在 `torch.cuda` 可用时用 GPU；人脸会在 ONNX Runtime 提供 `CUDAExecutionProvider` 时用 GPU。
+
+细节、模型名和阈值见 [机器学习](/zh/guide/ml)。
+
 ## 方式二：预构建镜像
 
 工作流构建后会推送镜像到 GitHub 容器镜像仓库（GHCR），可直接拉取运行：

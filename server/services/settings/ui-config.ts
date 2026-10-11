@@ -231,6 +231,77 @@ export const ANALYTICS_SETTINGS_UI: Record<string, FieldUIConfig> = {
   },
 }
 
+export const ML_SETTINGS_UI: Record<string, FieldUIConfig> = {
+  enabled: {
+    type: 'toggle',
+    help: 'settings.ml.enabled.help',
+  },
+  url: {
+    type: 'url',
+    placeholder: 'http://chronoval-ml:3003',
+    help: 'settings.ml.url.help',
+  },
+  'clip.enabled': {
+    type: 'toggle',
+    help: 'settings.ml.clip.enabled.help',
+  },
+  'clip.model': {
+    type: 'input',
+    placeholder: 'fnos/img2vec-large-1.0.0',
+    help: 'settings.ml.clip.model.help',
+    visibleIf: { fieldKey: 'clip.enabled', value: true },
+  },
+  'clip.topK': {
+    type: 'number',
+    min: 1,
+    max: 500,
+    help: 'settings.ml.clip.topK.help',
+    visibleIf: { fieldKey: 'clip.enabled', value: true },
+  },
+  'clip.minScore': {
+    type: 'number',
+    min: 0,
+    max: 1,
+    help: 'settings.ml.clip.minScore.help',
+    visibleIf: { fieldKey: 'clip.enabled', value: true },
+  },
+  'face.enabled': {
+    type: 'toggle',
+    help: 'settings.ml.face.enabled.help',
+  },
+  'face.model': {
+    type: 'input',
+    placeholder: 'buffalo_l',
+    help: 'settings.ml.face.model.help',
+    visibleIf: { fieldKey: 'face.enabled', value: true },
+  },
+  'face.minScore': {
+    type: 'number',
+    min: 0,
+    max: 1,
+    help: 'settings.ml.face.minScore.help',
+    visibleIf: { fieldKey: 'face.enabled', value: true },
+  },
+  'face.maxDistance': {
+    type: 'number',
+    min: 0,
+    max: 2,
+    help: 'settings.ml.face.maxDistance.help',
+    visibleIf: { fieldKey: 'face.enabled', value: true },
+  },
+  'face.minFaces': {
+    type: 'number',
+    min: 1,
+    max: 50,
+    help: 'settings.ml.face.minFaces.help',
+    visibleIf: { fieldKey: 'face.enabled', value: true },
+  },
+  'ocr.enabled': {
+    type: 'toggle',
+    help: 'settings.ml.ocr.enabled.help',
+  },
+}
+
 export const SYSTEM_SETTINGS_UI: Record<string, FieldUIConfig> = {
   'upload.maxFileSize': {
     type: 'number',
@@ -463,6 +534,7 @@ export function getSettingUIConfig(
     location: LOCATION_SETTINGS_UI,
     storage: STORAGE_SETTINGS_UI,
     analytics: ANALYTICS_SETTINGS_UI,
+    ml: ML_SETTINGS_UI,
   }
 
   return uiConfigMap[namespace]?.[key]

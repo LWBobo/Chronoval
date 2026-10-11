@@ -1,8 +1,12 @@
 import { WorkerPool } from '../services/pipeline-queue'
+import { whenDatabaseReady } from './0.db-migrate'
 
 export default defineNitroPlugin(async (_nitroApp) => {
   const _logger = logger.dynamic('queue')
+  await whenDatabaseReady()
 
+  // ML concurrency is capped in services/ml/limit.ts (CLIP/faces 1, OCR 2)
+  // and recognition-lock (clustering is serial). Thumbnail workers stay at 5.
   const workerPool = new WorkerPool(
     {
       workerCount: 5,

@@ -16,9 +16,20 @@ const props = defineProps<{
   }
   index: number
   columnWidth?: number
+  /** Fixed justified-layout cell (timeline mode) */
+  boxWidth?: number
+  boxHeight?: number
 }>()
 
 const emit = defineEmits<{ open: [index: number] }>()
+
+const fillMode = computed(
+  () =>
+    props.boxWidth != null &&
+    props.boxHeight != null &&
+    props.boxWidth > 0 &&
+    props.boxHeight > 0,
+)
 
 const aspectRatio = computed(() => {
   if (props.photo.aspectRatio) return props.photo.aspectRatio
@@ -29,6 +40,7 @@ const aspectRatio = computed(() => {
 
 // 给 content-visibility 提供正确固有高度，避免滚动跳动
 const intrinsicSize = computed(() => {
+  if (fillMode.value) return Math.round(props.boxHeight!)
   const height = Math.round((props.columnWidth || 280) / aspectRatio.value)
   return Math.max(height, 100)
 })
@@ -36,11 +48,16 @@ const intrinsicSize = computed(() => {
 
 <template>
   <div
-    class="photo-card group relative w-full cursor-zoom-in overflow-hidden bg-neutral-900"
+    class="photo-card group relative cursor-zoom-in overflow-hidden bg-neutral-900"
+    :class="fillMode ? 'h-full w-full' : 'w-full'"
     :style="{ 'contain-intrinsic-size': `auto ${intrinsicSize}px` }"
     @click="emit('open', index)"
   >
-    <div class="w-full" :style="{ aspectRatio }">
+    <div
+      class="relative"
+      :class="fillMode ? 'h-full w-full' : 'w-full'"
+      :style="fillMode ? undefined : { aspectRatio }"
+    >
       <!-- 视频：优先服务端缩略图，缺失/失败时用浏览器抽取首帧兜底 -->
       <AlbumsVideoThumb
         v-if="photo.type === 'video'"

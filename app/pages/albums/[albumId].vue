@@ -434,13 +434,15 @@ onBeforeMount(() => {
             :photos="sortedAlbumPhotos"
             @open-random="handleOpenRandom($event)"
           >
-            <template #waterfall-card="{ photo, index }">
+            <template #waterfall-card="{ photo, index, boxWidth, boxHeight }">
               <MasonryItem
                 :key="photo.id"
                 :photo="photo"
                 :index="index"
                 :has-animated="false"
                 :first-screen-items="50"
+                :box-width="boxWidth"
+                :box-height="boxHeight"
                 @open-viewer="handleOpenViewer($event)"
               />
             </template>

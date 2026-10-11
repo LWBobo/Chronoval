@@ -33,11 +33,25 @@ export default eventHandler(async (event) => {
     })
   }
 
-  useDB()
-    .update(tables.photos)
+  const db = useDB()
+  db.update(tables.photos)
     .set({ deletedAt: null })
     .where(eq(tables.photos.id, photoId))
     .run()
+
+  const linkedPeople = db
+    .select({ personId: tables.assetFaces.personId })
+    .from(tables.assetFaces)
+    .where(eq(tables.assetFaces.photoId, photoId))
+    .all()
+    .map((f) => f.personId)
+    .filter((id): id is string => Boolean(id))
+  if (linkedPeople.length) {
+    const { reconcilePeople } = await import(
+      '~~/server/services/ml/person.service'
+    )
+    reconcilePeople(linkedPeople)
+  }
 
   logger.image.success(`Photo ${photoId} restored from trash`)
 

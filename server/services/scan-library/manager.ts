@@ -9,6 +9,7 @@ import {
 import { applyScanAlbumMeta, getScanAlbumMeta } from './album-meta'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 import { scanLibraries } from '~~/server/database/schema'
+import type { NeededExif } from '~~/shared/types/photo'
 import {
   type LibraryMount,
   IMAGE_EXTENSIONS,
@@ -37,13 +38,18 @@ export interface ScanLibrary {
   rootPath: string
   provider: 'local'
   enabled: boolean
-  /**
+/**
    * 展示方式（三态）：
    * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
    * - album：相簿照片（相册页显示，首页全局画廊隐藏）
    * - both：共存（相册页显示 + 首页全局画廊也显示）
    */
   displayMode: 'gallery' | 'album' | 'both'
+  /** 进入父相簿时，是否把子相簿插进本层照片流 */
+  childInParent: boolean
+  /** 子相簿格子排在本层照片的开头还是末尾 */
+  childPosition: 'start' | 'end'
+
   watchIntervalMs: number
   lastScanAt: string | null
   lastScanResult: string | null
@@ -61,6 +67,8 @@ export const scanLibraryInputSchema = z.object({
   rootPath: z.string().trim().min(1).max(1024),
   enabled: z.boolean().optional(),
   displayMode: z.enum(['gallery', 'album', 'both']).optional(),
+  childInParent: z.boolean().optional(),
+  childPosition: z.enum(['start', 'end']).optional(),
   watchIntervalMs: z.number().int().min(5000).max(3600000).optional(),
 })
 export type ScanLibraryInput = z.infer<typeof scanLibraryInputSchema>
@@ -145,6 +153,8 @@ export const listScanLibraries = async (): Promise<ScanLibrary[]> => {
     provider: 'local',
     enabled: row.enabled,
     displayMode: row.displayMode ?? 'gallery',
+    childInParent: row.childInParent !== false,
+    childPosition: row.childPosition === 'end' ? 'end' : 'start',
     watchIntervalMs: row.watchIntervalMs,
     lastScanAt: row.lastScanAt ? new Date(row.lastScanAt).toISOString() : null,
     lastScanResult: row.lastScanResult,
@@ -225,6 +235,7 @@ export const getLibraryMounts = (): LibraryMount[] => {
  */
 export const getAllScalableMounts = (): LibraryMount[] => buildLibraryMounts()
 
+
 /** 新增扫描库并返回其 id */
 export const createScanLibrary = async (input: ScanLibraryInput): Promise<number> => {
   const db = useDB()
@@ -239,6 +250,8 @@ export const createScanLibrary = async (input: ScanLibraryInput): Promise<number
       // urlKey 由自增 id 导入后推导（sha256(id) 前 8 位）
       enabled: input.enabled ?? true,
       displayMode: input.displayMode ?? 'gallery',
+      childInParent: input.childInParent ?? true,
+      childPosition: input.childPosition ?? 'start',
       watchIntervalMs: input.watchIntervalMs ?? 60000,
     })
     .returning({ id: scanLibraries.id })
@@ -264,6 +277,8 @@ export const updateScanLibrary = async (
     patch.name = (input.name as string).trim()
   if (input.enabled !== undefined) patch.enabled = input.enabled
   if (input.displayMode !== undefined) patch.displayMode = input.displayMode
+  if (input.childInParent !== undefined) patch.childInParent = input.childInParent
+  if (input.childPosition !== undefined) patch.childPosition = input.childPosition
   if (input.watchIntervalMs !== undefined) patch.watchIntervalMs = input.watchIntervalMs
   const colPatch: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(patch)) {
@@ -271,6 +286,8 @@ export const updateScanLibrary = async (
     else if (k === 'name') colPatch.name = v
     else if (k === 'enabled') colPatch.enabled = v
     else if (k === 'displayMode') colPatch.displayMode = v
+    else if (k === 'childInParent') colPatch.childInParent = v
+    else if (k === 'childPosition') colPatch.childPosition = v
     else if (k === 'watchIntervalMs') colPatch.watchIntervalMs = v
   }
 
@@ -885,6 +902,17 @@ export const getScanAlbumDetail = async (
     dateTaken: string | null
     isLivePhoto: number
     livePhotoVideoUrl: string | null
+    exif: NeededExif | null
+    width: number | null
+    height: number | null
+    fileSize: number | null
+    storageKey: string | null
+    tags: string[] | null
+    latitude: number | null
+    longitude: number | null
+    city: string | null
+    country: string | null
+    type: 'image' | 'video'
   }>
   children: ScanAlbumNode[]
 } | null> => {
@@ -938,6 +966,16 @@ export const getScanAlbumDetail = async (
       dateTaken: p.dateTaken,
       isLivePhoto: p.isLivePhoto,
       livePhotoVideoUrl: p.livePhotoVideoUrl,
+      exif: p.exif ?? null,
+      width: p.width,
+      height: p.height,
+      fileSize: p.fileSize,
+      storageKey: p.storageKey,
+      tags: p.tags ?? null,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      city: p.city,
+      country: p.country,
       type: p.type,
     }))
 

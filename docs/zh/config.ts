@@ -27,6 +27,7 @@ export default defineConfig({
           { text: '本地扫描库', link: '/zh/guide/scan-library' },
           { text: '常见问题', link: '/zh/guide/faq' },
           { text: '配置说明', link: '/zh/guide/configuration' },
+          { text: '机器学习', link: '/zh/guide/ml' },
           { text: '升级指南', link: '/zh/guide/updates' },
         ],
       },

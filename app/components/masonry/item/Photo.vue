@@ -6,11 +6,22 @@ interface Props {
   photo: Photo
   index: number
   columnWidth?: number
+  /** When set with boxHeight, fill a fixed justified-layout cell (Immich-style) */
+  boxWidth?: number
+  boxHeight?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
   columnWidth: 250,
 })
+
+const fillMode = computed(
+  () =>
+    props.boxWidth != null &&
+    props.boxHeight != null &&
+    props.boxWidth > 0 &&
+    props.boxHeight > 0,
+)
 const emit = defineEmits<{
   'visibility-change': [
     { index: number; isVisible: boolean; date: string | Date },
@@ -52,14 +63,14 @@ const intersectionObserverRef = ref<IntersectionObserver | null>(null)
 const processingState = getProcessingState(props.photo.id)
 
 const aspectRatio = computed(() => {
-  // Priority 1: Use aspectRatio from photo data if available
+  // Priority 1: Use aspectRatio from photo data if available (width/height)
   if (props.photo.aspectRatio) {
     return props.photo.aspectRatio
   }
 
-  // Priority 2: Calculate from width and height if available
+  // Priority 2: Calculate from width and height (CSS aspect-ratio = w/h)
   if (props.photo.width && props.photo.height) {
-    return props.photo.height / props.photo.width
+    return props.photo.width / props.photo.height
   }
 
   // Fallback: Default aspect ratio
@@ -70,6 +81,7 @@ const aspectRatio = computed(() => {
 // 用于给 `content-visibility` 跳过渲染的视口外卡片提供正确的固有高度，
 // 避免首帧瀑布流用固定兜底 320px 参与排版导致首页排版错乱（首图莫名放大）。
 const intrinsicSize = computed(() => {
+  if (fillMode.value) return Math.round(props.boxHeight!)
   const height = Math.round((props.columnWidth || 250) / aspectRatio.value)
   return Math.max(height, 100)
 })
@@ -519,7 +531,8 @@ onUnmounted(() => {
 <template>
   <div
     ref="photoRef"
-    class="photo-card w-full transition-transform duration-300 cursor-pointer select-none"
+    class="photo-card transition-transform duration-300 cursor-pointer select-none"
+    :class="fillMode ? 'h-full w-full' : 'w-full'"
     :style="{ 'contain-intrinsic-size': `auto ${intrinsicSize}px`, borderRadius: cardRadius }"
     @click="handleClick"
     @mouseenter="handleMouseEnter"
@@ -532,12 +545,14 @@ onUnmounted(() => {
   >
     <div
       class="relative group overflow-hidden bg-neutral-900 transition-transform duration-300"
+      :class="fillMode ? 'h-full w-full' : ''"
       :style="{ borderRadius: cardRadius }"
     >
-      <!-- Container with fixed aspect ratio -->
+      <!-- Container: aspect-ratio for masonry columns, or fill fixed justified cell -->
       <div
-        class="w-full relative"
-        :style="{ aspectRatio }"
+        class="relative"
+        :class="fillMode ? 'h-full w-full' : 'w-full'"
+        :style="fillMode ? undefined : { aspectRatio }"
       >
         <ThumbImage
           :src="photo.thumbnailUrl || ''"

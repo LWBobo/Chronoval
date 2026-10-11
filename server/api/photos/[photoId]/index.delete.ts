@@ -34,11 +34,26 @@ export default eventHandler(async (event) => {
   // 软删除：仅标记删除时间，不删除任何文件、不删除数据库记录。
   // 原图 / 缩略图 / 实况视频保留在原地，照片从相册/画廊/后台全部隐去，
   // 可在回收站（/dashboard/trash）恢复或彻底删除。
-  useDB()
-    .update(tables.photos)
+  const db = useDB()
+  const linkedPeople = db
+    .select({ personId: tables.assetFaces.personId })
+    .from(tables.assetFaces)
+    .where(eq(tables.assetFaces.photoId, photoId))
+    .all()
+    .map((f) => f.personId)
+    .filter((id): id is string => Boolean(id))
+
+  db.update(tables.photos)
     .set({ deletedAt: new Date() })
     .where(eq(tables.photos.id, photoId))
     .run()
+
+  if (linkedPeople.length) {
+    const { reconcilePeople } = await import(
+      '~~/server/services/ml/person.service'
+    )
+    reconcilePeople(linkedPeople)
+  }
 
   logger.image.success(`Photo ${photoId} moved to trash`)
 

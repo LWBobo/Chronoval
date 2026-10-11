@@ -393,13 +393,16 @@ interface ScanLibraryItem {
   rootPath: string
   provider: 'local'
   enabled: boolean
-  /**
+/**
    * 展示方式（三态）：
    * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
    * - album：相簿照片（相册页显示，首页全局画廊隐藏）
    * - both：共存（相册页显示 + 首页全局画廊也显示）
    */
   displayMode: 'gallery' | 'album' | 'both'
+  childInParent: boolean
+  childPosition: 'start' | 'end'
+
   watchIntervalMs: number
   lastScanAt: string | null
   lastScanResult: string | null
@@ -420,8 +423,13 @@ const scanLibraryFormState = reactive<{
   name: string
   rootPath: string
   enabled: boolean
-  /** 展示方式：gallery=照片画廊 / album=相簿照片（画廊隐藏）/ both=共存 */
+/** 展示方式：gallery=照片画廊 / album=相簿照片（画廊隐藏）/ both=共存 */
   displayMode: 'gallery' | 'album' | 'both'
+  /** 进入父相簿时，是否把子相簿插进本层照片流 */
+  childInParent: boolean
+  /** 子相簿格子排在本层照片的开头还是末尾 */
+  childPosition: 'start' | 'end'
+
   watchIntervalMs: number
 }>({
   editId: null,
@@ -429,6 +437,8 @@ const scanLibraryFormState = reactive<{
   rootPath: '',
   enabled: true,
   displayMode: 'gallery',
+  childInParent: true,
+  childPosition: 'start',
   watchIntervalMs: 60000,
 })
 
@@ -438,6 +448,8 @@ const resetScanLibraryForm = () => {
   scanLibraryFormState.rootPath = ''
   scanLibraryFormState.enabled = true
   scanLibraryFormState.displayMode = 'gallery'
+  scanLibraryFormState.childInParent = true
+  scanLibraryFormState.childPosition = 'start'
   scanLibraryFormState.watchIntervalMs = 60000
 }
 
@@ -460,6 +472,8 @@ const openScanLibraryEdit = (lib: ScanLibraryItem) => {
   scanLibraryFormState.rootPath = lib.rootPath
   scanLibraryFormState.enabled = lib.enabled
   scanLibraryFormState.displayMode = lib.displayMode ?? 'gallery'
+  scanLibraryFormState.childInParent = lib.childInParent !== false
+  scanLibraryFormState.childPosition = lib.childPosition === 'end' ? 'end' : 'start'
   scanLibraryFormState.watchIntervalMs = lib.watchIntervalMs
   Object.assign(scanLibSlideover, { open: true, mode: 'edit', lib })
 }
@@ -469,8 +483,11 @@ const scanLibraryPayload = () => ({
   rootPath: scanLibraryFormState.rootPath,
   enabled: scanLibraryFormState.enabled,
   displayMode: scanLibraryFormState.displayMode,
+  childInParent: scanLibraryFormState.childInParent,
+  childPosition: scanLibraryFormState.childPosition,
   watchIntervalMs: scanLibraryFormState.watchIntervalMs,
 })
+
 
 const onScanLibrarySubmit = async (close?: () => void) => {
   const key = `settings.storage.scanLibrary.messages.`
@@ -1378,13 +1395,82 @@ const storageInfoConfigEntries = computed(() => {
                         {{ $t('settings.storage.scanLibrary.info.modeBoth') }}
                       </button>
                     </div>
-
                     <p class="flex items-start gap-1 text-xs text-neutral-400 dark:text-neutral-500">
-                      <UIcon name="tabler:folders" class="size-3.5 shrink-0 mt-px" />
+<UIcon name="tabler:folders" class="size-3.5 shrink-0 mt-px" />
                       {{ $t('settings.storage.scanLibrary.form.asAlbumHint') }}
+
                     </p>
                   </div>
                 </UFormField>
+                <template v-if="scanLibraryFormState.displayMode !== 'gallery'">
+                  <UFormField
+                    :ui="{ container: 'sm:max-w-full' }"
+                  >
+                    <div class="flex w-full items-center justify-between gap-4 rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-900/40 px-3 py-2.5">
+                      <div class="flex flex-col gap-0.5">
+                        <span class="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                          {{ $t('settings.storage.scanLibrary.form.childInParentLabel') }}
+                        </span>
+                        <span
+                          class="text-xs"
+                          :class="scanLibraryFormState.childInParent
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-neutral-400 dark:text-neutral-500'"
+                        >
+                          {{ scanLibraryFormState.childInParent
+                            ? $t('settings.storage.scanLibrary.form.childInParentStateOn')
+                            : $t('settings.storage.scanLibrary.form.childInParentStateOff') }}
+                        </span>
+                      </div>
+                      <USwitch v-model="scanLibraryFormState.childInParent" color="success" />
+                    </div>
+                    <p class="mt-1.5 flex items-start gap-1 text-xs text-neutral-400 dark:text-neutral-500">
+                      <UIcon name="tabler:info-circle" class="size-3.5 shrink-0 mt-px" />
+                      {{ $t('settings.storage.scanLibrary.form.childInParentHint') }}
+                    </p>
+                  </UFormField>
+                  <UFormField
+                    v-if="scanLibraryFormState.childInParent"
+                    :ui="{ container: 'sm:max-w-full' }"
+                  >
+                    <div class="space-y-2">
+                      <span class="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                        {{ $t('settings.storage.scanLibrary.form.childPositionLabel') }}
+                      </span>
+                      <div
+                        role="radiogroup"
+                        class="inline-flex w-fit items-center gap-0.5 rounded-full border border-neutral-200 bg-neutral-100/80 p-0.5 dark:border-neutral-800 dark:bg-neutral-900/50"
+                      >
+                        <button
+                          type="button"
+                          class="flex items-center justify-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors"
+                          :class="scanLibraryFormState.childPosition === 'start'
+                            ? 'bg-success-500 text-white shadow-sm'
+                            : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'"
+                          @click="scanLibraryFormState.childPosition = 'start'"
+                        >
+                          <UIcon name="tabler:arrow-bar-to-up" class="size-3 shrink-0" />
+                          {{ $t('settings.storage.scanLibrary.form.childPositionStart') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="flex items-center justify-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors"
+                          :class="scanLibraryFormState.childPosition === 'end'
+                            ? 'bg-success-500 text-white shadow-sm'
+                            : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'"
+                          @click="scanLibraryFormState.childPosition = 'end'"
+                        >
+                          <UIcon name="tabler:arrow-bar-to-down" class="size-3 shrink-0" />
+                          {{ $t('settings.storage.scanLibrary.form.childPositionEnd') }}
+                        </button>
+                      </div>
+                      <p class="flex items-start gap-1 text-xs text-neutral-400 dark:text-neutral-500">
+                        <UIcon name="tabler:layout-grid" class="size-3.5 shrink-0 mt-px" />
+                        {{ $t('settings.storage.scanLibrary.form.childPositionHint') }}
+                      </p>
+                    </div>
+                  </UFormField>
+                </template>
               </div>
 
               <div
@@ -1461,7 +1547,7 @@ const storageInfoConfigEntries = computed(() => {
                     <span class="text-sm text-neutral-500 dark:text-neutral-400">
                       {{ $t('settings.storage.scanLibrary.info.displayMode') }}
                     </span>
-                    <span class="flex max-w-[60%] items-center justify-end gap-1.5 text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">
+<span class="flex max-w-[60%] items-center justify-end gap-1.5 text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">
                       <UIcon
                         :name="scanLibInfo.displayMode === 'gallery'
                           ? 'tabler:photo'
@@ -1478,6 +1564,32 @@ const storageInfoConfigEntries = computed(() => {
                             ? $t('settings.storage.scanLibrary.info.modeBoth')
                             : $t('settings.storage.scanLibrary.info.modeGallery')
                       }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="scanLibInfo.displayMode !== 'gallery'"
+                    class="bg-neutral-50 dark:bg-neutral-900 flex items-start justify-between gap-4 px-4 py-3"
+                  >
+                    <span class="text-sm text-neutral-500 dark:text-neutral-400">
+                      {{ $t('settings.storage.scanLibrary.info.childInParent') }}
+                    </span>
+                    <span class="text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                      {{ scanLibInfo.childInParent !== false
+                        ? $t('settings.storage.scanLibrary.info.childInParentOn')
+                        : $t('settings.storage.scanLibrary.info.childInParentOff') }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="scanLibInfo.displayMode !== 'gallery' && scanLibInfo.childInParent !== false"
+                    class="bg-neutral-50 dark:bg-neutral-900 flex items-start justify-between gap-4 px-4 py-3"
+                  >
+                    <span class="text-sm text-neutral-500 dark:text-neutral-400">
+                      {{ $t('settings.storage.scanLibrary.info.childPosition') }}
+                    </span>
+                    <span class="text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                      {{ scanLibInfo.childPosition === 'end'
+                        ? $t('settings.storage.scanLibrary.info.childPositionEnd')
+                        : $t('settings.storage.scanLibrary.info.childPositionStart') }}
                     </span>
                   </div>
                   <div class="bg-neutral-50 dark:bg-neutral-900 flex items-start justify-between gap-4 px-4 py-3">

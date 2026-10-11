@@ -8,11 +8,21 @@ const props = withDefaults(
     hasAnimated: boolean
     firstScreenItems?: number
     columnWidth?: number
+    boxWidth?: number
+    boxHeight?: number
   }>(),
   {
     firstScreenItems: 30,
     columnWidth: 250,
   },
+)
+
+const fillMode = computed(
+  () =>
+    props.boxWidth != null &&
+    props.boxHeight != null &&
+    props.boxWidth > 0 &&
+    props.boxHeight > 0,
 )
 
 const emit = defineEmits<{
@@ -62,7 +72,7 @@ const itemVariants = {
     :variants="shouldAnimate ? itemVariants : undefined"
     :initial="shouldAnimate ? 'hidden' : 'visible'"
     :animate="'visible'"
-    class="w-full"
+    :class="fillMode ? 'h-full w-full' : 'w-full'"
     @animation-complete="
       () => {
         if (shouldAnimate) emit('animationComplete')
@@ -72,7 +82,9 @@ const itemVariants = {
     <MasonryItemPhoto
       :photo="photo"
       :index="index"
-      :column-width="columnWidth"
+      :column-width="boxWidth || columnWidth"
+      :box-width="boxWidth"
+      :box-height="boxHeight"
       @visibility-change="emit('visibility-change', $event)"
       @open-viewer="emit('openViewer', $event)"
     />

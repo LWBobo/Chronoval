@@ -10,6 +10,7 @@ import LoadingIndicator from './LoadingIndicator.vue'
 import ProgressiveImage from './ProgressiveImage.vue'
 import GalleryThumbnail from './GalleryThumbnail.vue'
 import InfoPanel from './InfoPanel.vue'
+import PhotoFaceLayer from './PhotoFaceLayer.vue'
 import ReactionPicker from './ReactionPicker.vue'
 import ReactionConfetti from './ReactionConfetti.vue'
 import { REACTION_ICON_MAP } from './reaction-definitions'
@@ -990,6 +991,14 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                       }"
                       @ended="handleLivePhotoVideoEnded"
                       @contextmenu.prevent=""
+                    />
+
+                    <PhotoFaceLayer
+                      v-if="index === currentIndex && photo.type !== 'video'"
+                      :photo-id="photo.id"
+                      :image-width="photo.width"
+                      :image-height="photo.height"
+                      :hidden="isImageZoomed || isLivePhotoPlaying"
                     />
 
                     <!-- 缩放倍率提示 -->

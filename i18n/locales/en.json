@@ -134,6 +134,54 @@
       "totalPhotosWithRange": "{range}, @:plural.photo total",
       "noPhotosTip": "No photos yet, upload some now!"
     },
+    "timeline": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "unknownDate": "Unknown date",
+      "scrubberLabel": "Timeline scrubber",
+      "photoCount": "{count} photos"
+    },
+    "people": {
+      "title": "People",
+      "unnamed": "Someone",
+      "empty": "No people yet",
+      "faces": "{count} faces",
+      "photos": "{count} photos",
+      "count": "{count} people",
+      "retry": "Retry",
+      "namePlaceholder": "Name",
+      "save": "Save",
+      "saved": "Saved",
+      "saveFailed": "Could not save",
+      "hide": "Hide",
+      "show": "Unhide",
+      "merge": "Merge into this person",
+      "mergePick": "Choose a person to merge",
+      "merged": "Merged",
+      "mergeFailed": "Could not merge",
+      "reassign": "Reassign face",
+      "reassignSaved": "Face reassigned",
+      "reassignFailed": "Could not reassign",
+      "unassign": "Unassign",
+      "newPerson": "New person name",
+      "create": "Create",
+      "cancel": "Cancel",
+      "noPhotos": "No photos"
+    },
+    "search": {
+      "smartPlaceholder": "Search by description or text in photos…",
+      "headerPlaceholder": "Search photos",
+      "empty": "No matching photos",
+      "ocrHit": "OCR",
+      "failed": "Search failed",
+      "modeAll": "Semantic + text",
+      "modeClip": "Semantic only",
+      "modeOcr": "Text in photos",
+      "dateFrom": "From",
+      "dateTo": "To",
+      "anyAlbum": "Any album",
+      "facetsApplied": "Gallery filters applied"
+    },
     "livePhoto": "Live Photo",
     "indexPanelCountCity": "and {count} more cities",
     "album": {
@@ -470,7 +518,10 @@
     "storageSettings": "Storage Settings",
     "systemSettings": "System Settings",
     "analyticsSettings": "Analytics & Tracking",
-    "securitySettings": "Security"
+    "mlSettings": "Machine Learning",
+    "securitySettings": "Security",
+    "search": "Smart Search",
+    "people": "People"
   },
   "albums": {
     "scan": {
@@ -1333,7 +1384,9 @@
         "clearAll": "Clear All",
         "retrySelected": "Retry Selected",
         "retryAll": "Retry All Failed",
-        "clearNonActive": "Clear Non-Active"
+        "clearNonActive": "Clear Non-Active",
+        "mlMissing": "Queue missing",
+        "mlAll": "Reindex all"
       },
       "table": {
         "id": "Task ID",
@@ -1363,7 +1416,11 @@
         "photo": "Photo Processing",
         "live-photo-video": "LivePhoto Video",
         "photo-reverse-geocoding": "Photo Reverse Geocoding",
-        "photo-erase-location": "Photo Location Erasure"
+        "photo-erase-location": "Photo Location Erasure",
+        "photo-smart-search": "Smart search",
+        "photo-face-detection": "Face detection",
+        "photo-face-recognition": "Face recognition",
+        "photo-ocr": "OCR"
       },
       "stages": {
         "preprocessing": "Preprocessing",
@@ -1373,7 +1430,11 @@
         "motion-photo": "Motion Photo Processing",
         "reverse-geocoding": "Geocoding",
         "live-photo": "LivePhoto Processing",
-        "location-erase": "Location Erasure"
+        "location-erase": "Location Erasure",
+        "smart-search": "Smart search",
+        "face-detection": "Face detection",
+        "face-recognition": "Face recognition",
+        "ocr": "OCR"
       },
       "buttons": {
         "retry": "Retry",
@@ -1391,7 +1452,10 @@
         "clearFailed": "Failed to clear tasks",
         "batchRetrySuccessDescription": "Retried {count} tasks",
         "batchRetryFailed": "Batch retry failed",
-        "deleteFailed": "Failed to delete task"
+        "deleteFailed": "Failed to delete task",
+        "mlQueued": "Machine-learning jobs queued",
+        "mlQueuedDescription": "Queued {count} jobs",
+        "mlReindexConfirm": "Reindexing encodes, detects faces, and runs OCR for every photo. This can take a long time. Continue?"
       },
       "filters": {
         "all": "All",
@@ -1979,7 +2043,15 @@
           "asAlbumLabel": "Display mode",
           "asAlbumStateOn": "Album",
           "asAlbumStateOff": "Gallery",
-          "asAlbumHint": "Display mode: Gallery (home page only), Album (Albums page only), or Coexist (shown in both Albums page and home gallery). Subfolders appear as nested albums."
+          "asAlbumHint": "Display mode: Gallery (home page only), Album (Albums page only), or Coexist (shown in both Albums page and home gallery). Subfolders appear as nested albums.",
+          "childInParentLabel": "Show sub-albums inside the parent",
+          "childInParentStateOn": "Shown",
+          "childInParentStateOff": "Hidden",
+          "childInParentHint": "When on, sub-albums occupy photo cells on the parent album's photo page. When off, they only appear in the sub-album list opened from the top-right switch.",
+          "childPositionLabel": "Sub-album position",
+          "childPositionStart": "Start",
+          "childPositionEnd": "End",
+          "childPositionHint": "Place sub-album cells before this folder's photos, or after all of them."
         },
         "info": {
           "title": "Scan Library Info",
@@ -1999,6 +2071,12 @@
           "modeAlbum": "Album photos",
           "modeGallery": "Photo gallery",
           "modeBoth": "Coexist",
+          "childInParent": "Sub-albums in parent",
+          "childInParentOn": "Shown",
+          "childInParentOff": "Hidden",
+          "childPosition": "Position",
+          "childPositionStart": "Start",
+          "childPositionEnd": "End",
           "thumbnailDirHint": "Thumbnails are written to internal storage",
           "thumbnailDir": "Internal storage thumbnails directory, not inside the library folder",
           "scanIntervalHint": "Interval at which this folder is auto-polled",
@@ -2034,6 +2112,81 @@
         "label": "Body Scripts",
         "description": "HTML fragment with script tags to inject at the top of the page body.",
         "help": "Paste full script tags (multiple allowed). Suitable for scripts that should run after the body opens."
+      }
+    },
+    "ml": {
+      "sectionDescription": "Configure the machine-learning sidecar for smart search, face clustering, and OCR.",
+      "enabled": {
+        "label": "Enable ML features",
+        "description": "Master switch for CLIP search, face recognition, and OCR.",
+        "help": "When off, no new ML jobs are enqueued and smart search / people APIs degrade."
+      },
+      "url": {
+        "label": "ML service URL",
+        "description": "HTTP base URL of chronoval-ml. Leave empty to use CHRONOVAL_ML_URL.",
+        "help": "Example: http://chronoval-ml:3003"
+      },
+      "clip": {
+        "enabled": {
+          "label": "CLIP smart search",
+          "description": "Encode photos and text for semantic image search.",
+          "help": "Requires a reachable ML sidecar with CLIP models."
+        },
+        "model": {
+          "label": "CLIP model",
+          "description": "Vision-language model id. The default uses the Feiniu album img2vec and txt2vec weights on this machine.",
+          "help": "Default is fnos/img2vec-large-1.0.0. After changing this id, re-run smart search; old vectors are left out of retrieval."
+        },
+        "topK": {
+          "label": "CLIP top-K",
+          "description": "Maximum number of CLIP results returned per query.",
+          "help": "Higher values return more candidates but may be slower."
+        },
+        "minScore": {
+          "label": "Minimum similarity",
+          "description": "Description search keeps photos at or above this cosine similarity and close to the best hit.",
+          "help": "Default is 0.2. Raise it to be stricter, or lower it to allow weaker matches."
+        }
+      },
+      "face": {
+        "enabled": {
+          "label": "Face detection & people",
+          "description": "Detect faces and cluster them into people.",
+          "help": "Uses InsightFace via the ML sidecar."
+        },
+        "model": {
+          "label": "Face model",
+          "description": "InsightFace model pack name.",
+          "help": "Default is buffalo_l. Re-run face detection after changing it."
+        },
+        "minScore": {
+          "label": "Face min score",
+          "description": "Minimum detection confidence (0–1).",
+          "help": "Lower values detect more faces but may include false positives."
+        },
+        "maxDistance": {
+          "label": "Face max distance",
+          "description": "Maximum cosine distance for clustering faces into the same person.",
+          "help": "Lower = stricter matching; Immich default is 0.5."
+        },
+        "minFaces": {
+          "label": "Face min faces",
+          "description": "Minimum neighbor faces required to create/assign a person.",
+          "help": "Higher values reduce tiny person clusters."
+        }
+      },
+      "ocr": {
+        "enabled": {
+          "label": "OCR text search",
+          "description": "Extract text from photos for keyword search.",
+          "help": "Optional; merges with CLIP results when both are enabled."
+        }
+      },
+      "jobs": {
+        "title": "Jobs",
+        "online": "Sidecar is reachable",
+        "offline": "Sidecar is unreachable. Uploads and browsing still work; jobs fail and can be retried.",
+        "lastSweep": "Last recognition sweep"
       }
     },
     "security": {

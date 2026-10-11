@@ -103,6 +103,12 @@ const navItems = computed<NavigationMenuItem[][]>(() => [
           to: '/dashboard/settings/analytics',
           class: '[&_.iconify]:!text-rose-500',
         },
+        {
+          label: $t('title.mlSettings'),
+          icon: 'tabler:brain',
+          to: '/dashboard/settings/ml',
+          class: '[&_.iconify]:!text-indigo-500',
+        },
       ],
     },
     {

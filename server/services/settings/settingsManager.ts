@@ -164,6 +164,27 @@ export class SettingsManager {
             enum: config.enum ? [...config.enum] : null,
           })
           .run()
+      } else if (
+        config.namespace === 'ml' &&
+        config.key === 'clip.model' &&
+        (existing.value === 'ViT-B-32/openai' ||
+          existing.value === 'ViT-L-14/chinese-clip')
+      ) {
+        // Untouched installs still point at an older CLIP id. Move them to
+        // the Feiniu img2vec weights. A hand-edited model id is left alone.
+        const next = this.serialize(config.defaultValue)
+        db.update(tables.settings)
+          .set({
+            value: next,
+            defaultValue: next,
+          })
+          .where(
+            and(
+              eq(tables.settings.namespace, config.namespace),
+              eq(tables.settings.key, config.key),
+            ),
+          )
+          .run()
       }
     }
   }

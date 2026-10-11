@@ -2,7 +2,7 @@ import type { ConsolaInstance } from 'consola'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'path'
-import { asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, lte, sql } from 'drizzle-orm'
 import { exiftool } from 'exiftool-vendored'
 import type {
   NewPipelineQueueItem,
@@ -156,10 +156,17 @@ export class QueueManager {
 
     // 使用同步事务防止竞态条件
     const task = db.transaction((tx) => {
+      const now = new Date()
+      // createdAt in the future = retry backoff (see markTaskFailed).
       const highestPriorityPendingTask = tx
         .select()
         .from(tables.pipelineQueue)
-        .where(eq(tables.pipelineQueue.status, 'pending'))
+        .where(
+          and(
+            eq(tables.pipelineQueue.status, 'pending'),
+            lte(tables.pipelineQueue.createdAt, now),
+          ),
+        )
         // 优先处理高优先级和较早创建的任务
         .orderBy(
           desc(tables.pipelineQueue.priority),
@@ -180,6 +187,32 @@ export class QueueManager {
     })
 
     return task
+  }
+
+  /**
+   * Put a claimed task back to pending without consuming an attempt
+   * (e.g. recognition lock busy). Optional delay via future createdAt.
+   */
+  async releaseTaskToPending(
+    taskId: number,
+    options?: { delayMs?: number; priority?: number },
+  ): Promise<void> {
+    const db = useDB()
+    const patch: {
+      status: 'pending'
+      createdAt?: Date
+      priority?: number
+    } = { status: 'pending' }
+    if (options?.delayMs && options.delayMs > 0) {
+      patch.createdAt = new Date(Date.now() + options.delayMs)
+    }
+    if (options?.priority !== undefined) {
+      patch.priority = options.priority
+    }
+    await db
+      .update(tables.pipelineQueue)
+      .set(patch)
+      .where(eq(tables.pipelineQueue.id, taskId))
   }
 
   /**
@@ -498,6 +531,17 @@ export class QueueManager {
                 enqueueError,
               )
             }
+          }
+
+          // ML 后续任务：CLIP / 人脸 / OCR（失败不影响入库）
+          try {
+            const { enqueueMlJobsForPhoto } = await import('../ml/enqueue')
+            await enqueueMlJobsForPhoto(photoId, { priority: 0 })
+          } catch (mlErr) {
+            this.logger.warn(
+              `[${taskId}:ml] failed to enqueue ML jobs for ${photoId}`,
+              mlErr,
+            )
           }
 
           this.logger.success(`Task ${taskId} processed successfully`)
@@ -834,6 +878,63 @@ export class QueueManager {
           case 'photo-erase-location':
             await this.processors.eraseLocation(task)
             break
+          case 'photo-smart-search': {
+            await this.updateTaskStage(task.id, 'smart-search')
+            const { processSmartSearch } = await import('../ml/smart-search.service')
+            await processSmartSearch((task.payload as any).photoId)
+            break
+          }
+          case 'photo-face-detection': {
+            await this.updateTaskStage(task.id, 'face-detection')
+            const { processFaceDetection } = await import(
+              '../ml/face-detection.service'
+            )
+            const facePayload = task.payload as {
+              photoId: string
+              reindexBatch?: boolean
+            }
+            await processFaceDetection(facePayload.photoId, {
+              reindexBatch: facePayload.reindexBatch,
+            })
+            break
+          }
+          case 'photo-face-recognition': {
+            await this.updateTaskStage(task.id, 'face-recognition')
+            const { processFaceRecognition } = await import(
+              '../ml/face-recognition.service'
+            )
+            const {
+              tryAcquireRecognitionLock,
+              releaseRecognitionLock,
+            } = await import('../ml/recognition-lock')
+            // Do not park this worker waiting on the lock — requeue and free the slot.
+            if (!tryAcquireRecognitionLock()) {
+              await this.releaseTaskToPending(task.id, {
+                delayMs: 1500,
+                priority: -1,
+              })
+              this.logger.debug(
+                `[${this.workerId}] Recognition busy; requeued task ${task.id}`,
+              )
+              return
+            }
+            try {
+              const p = task.payload as any
+              await processFaceRecognition({
+                faceId: p.faceId,
+                deferred: p.deferred,
+              })
+            } finally {
+              releaseRecognitionLock()
+            }
+            break
+          }
+          case 'photo-ocr': {
+            await this.updateTaskStage(task.id, 'ocr')
+            const { processOcr } = await import('../ml/ocr.service')
+            await processOcr((task.payload as any).photoId)
+            break
+          }
           default:
             throw new Error(`Unknown task type: ${type}`)
         }
