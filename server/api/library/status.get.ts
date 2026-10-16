@@ -6,7 +6,6 @@ import {
 } from '~~/server/services/scan-library/manager'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
   const cfg = getLibraryConfig()
   const db = useDB()
 

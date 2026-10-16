@@ -319,17 +319,38 @@ const albumPublicUrl = computed(() =>
     : manualAlbumPublicUrl.value,
 )
 
+const writeClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.top = '0'
+  area.style.left = '-9999px'
+  document.body.appendChild(area)
+  area.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(area)
+  if (!ok) throw new Error('copy failed')
+}
+
 const copyPublicUrl = async () => {
   const url = albumPublicUrl.value
   if (!url) return
   try {
-    await navigator.clipboard.writeText(`${window.location.origin}${url}`)
+    await writeClipboard(`${window.location.origin}${url}`)
     useToast().add({
       title: $t('dashboard.albums.form.copied'),
       color: 'success',
     })
   } catch {
-    /* 忽略剪贴板权限异常 */
+    useToast().add({
+      title: $t('dashboard.albums.form.copyFailed'),
+      color: 'error',
+    })
   }
 }
 
@@ -859,6 +880,7 @@ const submitButtonLabel = computed(() => {
                     :text="$t('dashboard.albums.form.resetUid')"
                   >
                     <UButton
+                      type="button"
                       icon="tabler:refresh"
                       size="sm"
                       color="error"
@@ -888,6 +910,7 @@ const submitButtonLabel = computed(() => {
                   </div>
                   <UTooltip :text="$t('dashboard.albums.form.copyLink')">
                     <UButton
+                      type="button"
                       icon="tabler:copy"
                       size="sm"
                       color="neutral"

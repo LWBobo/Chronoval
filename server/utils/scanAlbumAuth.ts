@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac } from 'node:crypto'
+import { safeTokenEqual } from './albumAccess'
 
 /**
  * 扫描相簿（外部库转相簿）的访问密码鉴权。
@@ -6,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
  * 密码从「扫描库」下沉到「相簿」级别（存于 scan_album_meta.password_hash，
  * 由后台相册的相簿编辑面板维护）。解锁令牌按 相簿 id + 相对路径 签发，
  * 因此不同子相簿可以各自带密码，互不干扰；密码变更后旧令牌自动失效。
- * - 管理员始终放行（绕过密码）。
+ * - 管理员是否免密由调用方传入（系统开关 scanAlbum.adminBypass），默认不因管理员身份放行。
  * - 无密码时视为开放相簿（直接放行）。
  */
 
@@ -39,25 +40,18 @@ export const scanAlbumToken = (
     .digest('base64url')
 }
 
-const safeEqual = (a: string, b: string): boolean => {
-  const ba = Buffer.from(String(a))
-  const bb = Buffer.from(String(b))
-  if (ba.length !== bb.length) return false
-  return timingSafeEqual(ba, bb)
-}
-
 /**
  * 是否已获得相簿访问权限。
- * @param isAdmin 是否为管理员（管理员直接放行）
+ * @param allowAdmin 是否放行管理员（仅当系统开关 scanAlbum.adminBypass 打开时为真）
  * @param passwordHash 该相簿生效的密码哈希；null 表示未设置密码（开放）
  * @param sessionExempt 当前登录用户是否在相簿配置的免密范围内（由调用方依据会话判定）
  */
 export const hasScanAlbumAccess = (
   event: any,
   opts: { libId: number; relPath: string; passwordHash: string | null; sessionExempt?: boolean },
-  isAdmin: boolean,
+  allowAdmin: boolean,
 ): boolean => {
-  if (isAdmin) return true
+  if (allowAdmin) return true
   // 登录用户在免密范围内（logged_in / 指定用户）
   if (opts.sessionExempt) return true
   // 未设置密码 → 开放，直接放行
@@ -71,7 +65,7 @@ export const hasScanAlbumAccess = (
   const id = Number(stored.slice(0, idx))
   const token = stored.slice(idx + 1)
   const expected = scanAlbumToken(scope, opts.passwordHash)
-  return id === opts.libId && safeEqual(token, expected)
+  return id === opts.libId && safeTokenEqual(token, expected)
 }
 
 /**
@@ -93,7 +87,7 @@ export const hasScanLibraryAccess = (
   const id = Number(stored.slice(0, idx))
   const token = stored.slice(idx + 1)
   const expected = scanAlbumToken(scope, libPasswordHash)
-  return id === libId && safeEqual(token, expected)
+  return id === libId && safeTokenEqual(token, expected)
 }
 
 /** 签发解锁 Cookie（密码校验通过后调用） */

@@ -4,7 +4,6 @@ import { generateAlbumUid } from '~~/server/utils/albumUid'
 import { eq, tables } from '~~/server/utils/db'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const body = await readValidatedBody(
     event,

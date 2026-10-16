@@ -28,11 +28,14 @@ RUN --network=host --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 FROM base AS build
 WORKDIR /usr/src/app
+# Node 老生代堆上限（MB）。机器内存不够时调低，例如 --build-arg BUILD_HEAP=3072
+ARG BUILD_DEPS_HEAP=4096
+ARG BUILD_HEAP=8192
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY --from=deps /usr/src/app/packages/webgl-image/node_modules ./packages/webgl-image/node_modules
 COPY . .
-RUN NODE_OPTIONS="--max-old-space-size=4096" pnpm run build:deps
-RUN NODE_OPTIONS="--max-old-space-size=8192" pnpm run build
+RUN NODE_OPTIONS="--max-old-space-size=${BUILD_DEPS_HEAP}" pnpm run build:deps
+RUN NODE_OPTIONS="--max-old-space-size=${BUILD_HEAP}" pnpm run build
 RUN find ./.output -type f -name '*.map' -delete
 
 FROM node:24.16.0-alpine3.22 AS runtime_deps

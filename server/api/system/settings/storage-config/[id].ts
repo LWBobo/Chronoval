@@ -7,13 +7,6 @@ import {
 } from '~~/server/services/storage'
 
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: 'Forbidden',
-    })
-  }
 
   const { id: storageConfigId } = await getValidatedRouterParams(
     event,

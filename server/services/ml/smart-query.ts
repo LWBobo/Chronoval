@@ -1,6 +1,10 @@
-import { eq, inArray, or } from 'drizzle-orm'
+import type { H3Event } from 'h3'
+import { eq, inArray } from 'drizzle-orm'
 import type { NeededExif } from '~~/shared/types/photo'
-import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
+import {
+  canDiscoverPhoto,
+  loadPhotoAccess,
+} from '~~/server/utils/photo-access'
 import { searchOcr } from './ocr.service'
 import { searchSmart, type SmartSearchHit } from './smart-search.service'
 
@@ -78,54 +82,30 @@ function hasMetadataFilters(filters?: SmartQueryFilters) {
   )
 }
 
-/** Drop photos hidden from the public gallery (hidden albums / disabled scan mounts). */
-export function filterVisibleHits(hits: SmartSearchHit[]): SmartSearchHit[] {
+/** 去掉当前访问者看不到的照片：未登录时的隐藏相簿、未解锁的密码相簿、已禁用扫描库。 */
+export async function filterVisibleHits(
+  event: H3Event,
+  hits: SmartSearchHit[],
+): Promise<SmartSearchHit[]> {
   if (!hits.length) return []
 
-  const db = useDB()
-  const hiddenAlbumPhotos = db
-    .select({ photoId: tables.albumPhotos.photoId })
-    .from(tables.albumPhotos)
-    .innerJoin(tables.albums, eq(tables.albumPhotos.albumId, tables.albums.id))
-    .where(
-      or(
-        eq(tables.albums.isHidden, true),
-        eq(tables.albums.hideFromGallery, true),
-      ),
-    )
-    .all()
-  const hiddenIds = new Set(hiddenAlbumPhotos.map((r) => r.photoId))
-  const hiddenScanMounts = getGalleryHiddenScanMountSet()
+  const access = await loadPhotoAccess(event)
   const ids = hits.map((h) => h.photoId)
-
-  const rows = db
+  const rows = useDB()
     .select({
       id: tables.photos.id,
       deletedAt: tables.photos.deletedAt,
       libraryMount: tables.photos.libraryMount,
+      libraryPath: tables.photos.libraryPath,
     })
     .from(tables.photos)
     .where(inArray(tables.photos.id, ids))
     .all()
 
   const visible = new Set(
-    rows
-      .filter((p) => {
-        if (p.deletedAt) return false
-        if (hiddenIds.has(p.id)) return false
-        if (
-          p.libraryMount &&
-          hiddenScanMounts.size > 0 &&
-          hiddenScanMounts.has(p.libraryMount)
-        ) {
-          return false
-        }
-        return true
-      })
-      .map((p) => p.id),
+    rows.filter((photo) => canDiscoverPhoto(access, photo)).map((photo) => photo.id),
   )
-
-  return hits.filter((h) => visible.has(h.photoId))
+  return hits.filter((hit) => visible.has(hit.photoId))
 }
 
 function applyMetadataFilters(
@@ -174,6 +154,7 @@ function applyMetadataFilters(
 
 /** CLIP and/or OCR search, then gallery visibility and EXIF/date/album filters. */
 export async function querySmart(options: {
+  event: H3Event
   q: string
   limit?: number
   mode?: SmartQueryMode
@@ -214,7 +195,7 @@ export async function querySmart(options: {
     }
   }
 
-  results = filterVisibleHits(results)
+  results = await filterVisibleHits(options.event, results)
   results = applyMetadataFilters(results, options.filters)
   return results.slice(0, limit)
 }

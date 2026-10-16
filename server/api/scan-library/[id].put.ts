@@ -8,10 +8,6 @@ import { libraryScanner } from '~~/server/services/library/scanner'
 import { logger } from '~~/server/utils/logger'
 
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const { id } = await getValidatedRouterParams(
     event,

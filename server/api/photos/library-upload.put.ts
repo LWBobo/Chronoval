@@ -6,7 +6,6 @@ import { getScanLibraryRow } from '~~/server/services/scan-library/manager'
 // 服务端将其写入所选扫描库的挂载目录（rootPath/uploads/），
 // 后续由该库的扫描任务将其索引入库。
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const { library, key } = getQuery(event)
   const libId = Number(library)

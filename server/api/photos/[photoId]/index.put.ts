@@ -50,7 +50,6 @@ const normalizeTags = (tags: string[] | undefined) => {
 }
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const t = await useTranslation(event)
   const { photoId } = paramsSchema.parse(event.context.params ?? {})

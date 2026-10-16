@@ -2,7 +2,6 @@ import { libraryScanner } from '~~/server/services/library/scanner'
 import { getAllScalableMounts } from '~~/server/services/scan-library/manager'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
   const mount = getQuery(event).mount as string | undefined
 
   if (mount) {

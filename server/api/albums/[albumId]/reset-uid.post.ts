@@ -7,7 +7,6 @@ import { generateAlbumUid } from '~~/server/utils/albumUid'
  * 旧的公开链接随即失效。UID 只在管理员显式触发时才会改变，绝不自动变化。
  */
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const { albumId } = await getValidatedRouterParams(
     event,

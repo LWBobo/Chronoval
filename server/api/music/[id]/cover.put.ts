@@ -11,10 +11,6 @@ import { logger } from '~~/server/utils/logger'
  * 成功后将旧封面从存储后端清理掉。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const { id } = await getValidatedRouterParams(
     event,

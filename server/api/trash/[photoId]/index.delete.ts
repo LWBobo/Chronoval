@@ -5,7 +5,6 @@ import { permanentlyDeletePhoto } from '~~/server/services/trash/cleanup'
  * 这是不可逆操作。仅管理员可访问。
  */
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
   const { storageProvider } = useStorageProvider(event)
   const photoId = getRouterParam(event, 'photoId')
 

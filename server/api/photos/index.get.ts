@@ -1,5 +1,6 @@
 import { and, asc, desc, isNull, notInArray, or } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
+import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
 
 export default eventHandler(async (event) => {
   // 确定性排序：先按拍摄时间倒序，再按 id 升序兜底。
@@ -12,8 +13,9 @@ export default eventHandler(async (event) => {
   // 全量返回，后台管理等旧调用方完全兼容。
   const q = getQuery(event)
   const galleryOnly = q.gallery === '1'
-  const session = await getUserSession(event).catch(() => null)
-  const isAdmin = Boolean((session as any)?.user?.isAdmin)
+  const actor = await getActor(event)
+  const isAdmin = actor.isAdmin
+  const loggedIn = Boolean(actor.user)
 
   const limitRaw = parseInt(String(q.limit ?? ''), 10)
   const offsetRaw = parseInt(String(q.offset ?? ''), 10)
@@ -24,9 +26,10 @@ export default eventHandler(async (event) => {
   const where = [isNull(tables.photos.deletedAt)]
 
   // 首页画廊（?gallery=1，以及非管理员）：隐藏纯相簿展示（displayMode=album）
-  // 和已禁用的扫描库。共存模式（both）仍留在画廊。后台管理（管理员且非 gallery=1）
-  // 保留全量，方便管理。过滤必须进 SQL：分页时事后 filter 会造成某页缺行。
+  // 和已禁用的扫描库。登录可见的相簿在登录后进入瀑布流，密码相簿始终不进入。
+  // 后台管理（管理员且非 gallery=1）保留全量。过滤必须进 SQL，避免分页缺行。
   if (!(isAdmin && !galleryOnly)) {
+    where.push(homepageGalleryVisibilitySql(loggedIn))
     const hiddenScanMounts = getGalleryHiddenScanMountSet()
     if (hiddenScanMounts.size > 0) {
       // library_mount 可能为 NULL（上传照片）：NOT IN 会把 NULL 行排除掉，

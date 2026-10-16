@@ -4,7 +4,6 @@ import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const { albumId } = await getValidatedRouterParams(
     event,

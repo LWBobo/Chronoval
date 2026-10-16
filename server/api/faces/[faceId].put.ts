@@ -5,7 +5,6 @@ import {
 } from '~~/server/services/ml/person.service'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const faceId = getRouterParam(event, 'faceId')
   if (!faceId) {

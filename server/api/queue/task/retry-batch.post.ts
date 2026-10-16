@@ -5,7 +5,6 @@ import { eq, inArray } from 'drizzle-orm'
  * 批量重试失败的任务
  */
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
 
   try {
     const { taskIds, retryAll = false } = await readValidatedBody(

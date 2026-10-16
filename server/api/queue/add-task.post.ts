@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
 
   try {
     const payloadSchema = z.discriminatedUnion('type', [

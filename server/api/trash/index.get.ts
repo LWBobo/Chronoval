@@ -5,7 +5,6 @@ import { desc, isNotNull } from 'drizzle-orm'
  * 仅管理员可访问。
  */
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const rows = useDB()
     .select()

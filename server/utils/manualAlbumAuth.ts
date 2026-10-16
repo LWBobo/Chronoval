@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac } from 'node:crypto'
+import { safeTokenEqual } from './albumAccess'
 
 /**
  * 普通相簿（albums 表）的访问密码鉴权。
@@ -26,13 +27,6 @@ export const albumToken = (
     .digest('base64url')
 }
 
-const safeEqual = (a: string, b: string): boolean => {
-  const ba = Buffer.from(String(a))
-  const bb = Buffer.from(String(b))
-  if (ba.length !== bb.length) return false
-  return timingSafeEqual(ba, bb)
-}
-
 /**
  * 是否已获得相簿访问权限。
  * @param allowAdmin 是否放行管理员（由系统开关决定）
@@ -58,7 +52,7 @@ export const hasAlbumAccess = (
   const id = Number(stored.slice(0, idx))
   const token = stored.slice(idx + 1)
   const expected = albumToken(opts.albumId, opts.passwordHash)
-  return id === opts.albumId && safeEqual(token, expected)
+  return id === opts.albumId && safeTokenEqual(token, expected)
 }
 
 /** 签发解锁 Cookie（密码校验通过后调用） */

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
+  const actor = await requireAccess(event, 'user')
   const { code } = await readValidatedBody(
     event,
     z.object({ code: z.string().min(1).max(8) }).parse,
@@ -11,7 +11,7 @@ export default eventHandler(async (event) => {
   const user = db
     .select()
     .from(tables.users)
-    .where(eq(tables.users.id, session.user.id))
+    .where(eq(tables.users.id, actor.user!.id))
     .get()
   if (!user?.totpSecret) {
     throw createError({ statusCode: 409, message: 'No pending 2FA setup' })

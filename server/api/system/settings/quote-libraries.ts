@@ -23,13 +23,7 @@ export default eventHandler(async (event) => {
   }
 
   if (event.method === 'PUT') {
-    const session = await requireUserSession(event)
-    if (!session || !session.user.isAdmin) {
-      throw createError({
-        statusCode: 403,
-        statusMessage: 'Admin privileges required',
-      })
-    }
+    const actor = await requireAccess(event, 'admin')
 
     const body = await readValidatedBody(
       event,
@@ -42,11 +36,11 @@ export default eventHandler(async (event) => {
     )
 
     const db = useDB()
-    const currentUser = session.user.id
+    const currentUser = actor.user!.id
       ? db
           .select()
           .from(tables.users)
-          .where(eq(tables.users.id, session.user.id))
+          .where(eq(tables.users.id, actor.user!.id))
           .get()
       : null
     const updatedBy = currentUser ? currentUser.id : undefined

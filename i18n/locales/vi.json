@@ -1057,6 +1057,7 @@
         "publicLinkFallback": "Chưa đặt liên kết tùy chỉnh; đường dẫn mặc định sẽ được sử dụng.",
         "publicLinkEmptyTip": "Điền liên kết tùy chỉnh ở trên để xem URL công khai tại đây.",
         "copied": "Đã sao chép",
+        "copyFailed": "Sao chép thất bại. Vui lòng sao chép thủ công",
         "copyLink": "Sao chép liên kết",
         "password": "Mật khẩu truy cập",
         "passwordHint": "Khách truy cập phải nhập mật khẩu này để mở album này và mọi album con không ghi đè nó.",

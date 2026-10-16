@@ -1,5 +1,6 @@
 import { eq, tables, useDB } from '~~/server/utils/db'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
+import { redactAlbumSecrets } from '~~/server/utils/albumAccess'
 
 export default eventHandler(async (event) => {
   const db = useDB()
@@ -17,8 +18,7 @@ export default eventHandler(async (event) => {
 
   // 管理端（登录管理员）返回完整树状二级相簿并包含隐藏的外部库相簿；
   // 公开访问时过滤掉设置为“隐藏”的外部库相簿。
-  const session = await getUserSession(event).catch(() => null)
-  const isAdmin = Boolean((session as any)?.user?.isAdmin)
+  const { isAdmin } = await getActor(event)
 
   // 非管理员：剔除「已禁用扫描库」的照片，避免相册封面/列表出现加载失败的坏图
   const disabledScanMounts = getDisabledScanMountSet()
@@ -58,13 +58,7 @@ export default eventHandler(async (event) => {
         : photoRows
     const photoIds = rows.map((r) => r.photoId)
 
-    const {
-      passwordHash: _passwordHash,
-      password: _password,
-      passwordExemptMode: _pem,
-      passwordExemptUsers: _peu,
-      ...restAlbum
-    } = album
+    const restAlbum = redactAlbumSecrets(album, false)
 
     // 免密配置仅对管理员回显（编辑面板需要）；公开访问不返回（含用户邮箱隐私）
     const exemptAdminOnly = isAdmin

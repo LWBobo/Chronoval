@@ -6,10 +6,6 @@ import { serializeMusic } from '~~/server/services/music'
  * 更新一首 BGM 的标题与歌词（LRC）。仅管理员可访问。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const { id } = await getValidatedRouterParams(
     event,

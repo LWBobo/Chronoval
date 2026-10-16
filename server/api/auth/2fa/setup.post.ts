@@ -1,13 +1,13 @@
 import QRCode from 'qrcode'
 
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
+  const actor = await requireAccess(event, 'user')
   const db = useDB()
 
   const user = db
     .select()
     .from(tables.users)
-    .where(eq(tables.users.id, session.user.id))
+    .where(eq(tables.users.id, actor.user!.id))
     .get()
   if (!user) {
     throw createError({ statusCode: 404, message: 'User not found' })

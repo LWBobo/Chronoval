@@ -18,6 +18,7 @@ const bodySchema = z.object({
 export default eventHandler(async (event) => {
   const body = await readValidatedBody(event, bodySchema.parse)
   const results = await querySmart({
+    event,
     q: body.q,
     limit: body.limit,
     mode: body.mode,

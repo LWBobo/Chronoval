@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const { albumId } = await getValidatedRouterParams(
     event,

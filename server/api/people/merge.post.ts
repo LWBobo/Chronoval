@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { mergePeople, personWithMeta } from '~~/server/services/ml/person.service'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const body = await readValidatedBody(
     event,

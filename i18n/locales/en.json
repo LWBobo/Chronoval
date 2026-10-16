@@ -1147,6 +1147,7 @@
         "publicLinkFallback": "No custom link set; the default path will be used.",
         "publicLinkEmptyTip": "Fill in the custom link above to see the public URL here.",
         "copied": "Copied",
+        "copyFailed": "Copy failed. Please copy it manually",
         "copyLink": "Copy link",
         "password": "Access password",
         "passwordHint": "Visitors must enter this password to open this album and any sub-album that doesn't override it.",

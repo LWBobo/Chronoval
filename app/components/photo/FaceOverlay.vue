@@ -19,7 +19,8 @@ interface PersonOption {
   name: string | null
 }
 
-const { loggedIn } = useUserSession()
+const { loggedIn, user } = useUserSession()
+const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
 const { t } = useI18n()
 const toast = useToast()
 
@@ -47,7 +48,7 @@ async function loadFaces(id: string) {
 }
 
 async function loadPeople() {
-  if (!loggedIn.value) return
+  if (!isAdmin.value) return
   try {
     const res = await $fetch<{ people: PersonOption[] }>('/api/people', {
       query: { minFaces: 0 },
@@ -144,7 +145,7 @@ async function saveAssign(payload: {
         {{ face.personName || $t('ui.people.unnamed') }}
       </span>
       <button
-        v-if="loggedIn"
+        v-if="isAdmin"
         type="button"
         class="pointer-events-none absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-black/70 text-white opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
         :class="facePinned(face) && 'pointer-events-auto opacity-100'"
@@ -159,7 +160,7 @@ async function saveAssign(payload: {
     </div>
 
     <form
-      v-if="loggedIn && menuFace"
+      v-if="isAdmin && menuFace"
       class="pointer-events-auto absolute bottom-2 left-2 z-30 w-56 space-y-2 rounded-md bg-black/80 p-2 text-xs text-white"
       @submit.prevent="
         saveAssign({

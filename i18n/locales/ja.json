@@ -887,6 +887,7 @@
         "publicLinkFallback": "カスタムリンク未設定。デフォルトのパスが使用されます。",
         "publicLinkEmptyTip": "上のカスタムリンクを入力するとここに公開URLが表示されます。",
         "copied": "コピーしました",
+        "copyFailed": "コピーに失敗しました。手動でコピーしてください",
         "copyLink": "リンクをコピー",
         "groupBgm": "BGM",
         "bgmMusic": "背景音楽 (BGM)",

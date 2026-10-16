@@ -25,7 +25,8 @@ interface PersonPhoto {
   type: string
 }
 
-const { loggedIn } = useUserSession()
+const { loggedIn, user } = useUserSession()
+const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
 const { t } = useI18n()
 const toast = useToast()
 const nameDraft = ref('')
@@ -35,12 +36,12 @@ const mergeSourceId = ref('')
 const { data: peoplePayload, refresh: refreshPeople } = useAsyncData(
   'people-merge-options',
   () =>
-    loggedIn.value
+    isAdmin.value
       ? $fetch<{ people: PersonOption[] }>('/api/people', {
           query: { minFaces: 0 },
         })
       : Promise.resolve({ people: [] as PersonOption[] }),
-  { watch: [loggedIn] },
+  { watch: [isAdmin] },
 )
 
 const mergeOptions = computed(() =>
@@ -183,7 +184,7 @@ useHead({
               {{ $t('ui.people.photos', { count: photos.length }) }}
             </p>
             <form
-              v-if="loggedIn"
+              v-if="isAdmin"
               class="mt-3 flex flex-col gap-2"
               @submit.prevent="savePerson({ name: nameDraft.trim() || null })"
             >

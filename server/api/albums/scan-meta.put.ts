@@ -12,10 +12,6 @@ import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
  * 仅管理员可访问。用于外部库相簿的标题、介绍、封面、隐藏、自定义URL 编辑。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const body = await readValidatedBody(
     event,

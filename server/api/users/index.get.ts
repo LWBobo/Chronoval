@@ -5,10 +5,6 @@ import { asc } from 'drizzle-orm'
  * 只返回最小字段，不暴露密码/2FA 等敏感信息。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const rows = useDB()
     .select({

@@ -10,6 +10,6 @@ export default eventHandler(async (event) => {
       ? modeRaw
       : 'all'
 
-  const results = await querySmart({ q, limit, mode })
+  const results = await querySmart({ event, q, limit, mode })
   return { query: q, results }
 })

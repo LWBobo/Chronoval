@@ -1145,6 +1145,7 @@
         "publicLinkFallback": "暂未设置自定义链接，将使用默认路径。",
         "publicLinkEmptyTip": "填写上方自定义链接后，这里会显示公开地址。",
         "copied": "已复制",
+        "copyFailed": "复制失败，请手动复制",
         "copyLink": "复制链接",
         "password": "访问密码",
         "passwordHint": "设置后，访问该相簿及其未单独设密码的二级相簿需输入此密码；二级相簿可自行覆盖。",

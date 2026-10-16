@@ -24,6 +24,7 @@ export interface ScanPhoto {
   longitude?: number | null
   city?: string | null
   country?: string | null
+  locationName?: string | null
   /** 媒体类型：image=图片 / video=视频（查看器内以内置播放器播放） */
   type?: 'image' | 'video'
 }

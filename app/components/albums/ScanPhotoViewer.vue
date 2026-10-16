@@ -80,7 +80,7 @@ const infoPhoto = computed(() => {
     longitude: p.longitude ?? null,
     country: p.country ?? null,
     city: p.city ?? null,
-    locationName: null,
+    locationName: p.locationName ?? null,
     isLivePhoto: p.isLivePhoto ?? 0,
     livePhotoVideoUrl: p.livePhotoVideoUrl ?? null,
     livePhotoVideoKey: null,

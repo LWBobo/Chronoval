@@ -11,7 +11,7 @@ import {
 } from '~~/server/utils/scanAlbumAuth'
 import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
 import { verifyAlbumPassword } from '~~/server/utils/scanAlbumPassword'
-import { settingsManager } from '~~/server/services/settings/settingsManager'
+import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
 
 /** 签发库级解锁 cookie：任一次正确解锁后，会话内整个扫描库免密（无需逐相簿重复输入） */
 const authorizeScanLibraryUnlock = async (
@@ -65,11 +65,8 @@ export default eventHandler(async (event) => {
 
   // 管理员的「免密访问」只有在显式开启对应系统设置时才放行；
   // 默认关闭：即使登录管理员，也必须输入正确相簿密码。
-  const session = await getUserSession(event)
-  const isAdmin = Boolean((session as any)?.user?.isAdmin)
-  const adminBypass =
-    isAdmin &&
-    (await settingsManager.get<boolean>('system', 'scanAlbum.adminBypass', false))
+  const actor = await getActor(event)
+  const adminBypass = await isAlbumAdminBypass(event, actor)
 
   if (adminBypass) {
     authorizeScanAlbum(event, {
@@ -89,7 +86,7 @@ export default eventHandler(async (event) => {
         passwordExemptMode: effAuth.exemptMode,
         passwordExemptUsers: effAuth.exemptUsers,
       },
-      (session as any)?.user,
+      actor.user,
     )
   ) {
     authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })

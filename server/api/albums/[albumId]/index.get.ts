@@ -2,7 +2,7 @@ import { and, asc, eq, getTableColumns, isNull } from 'drizzle-orm'
 import z from 'zod'
 import { hasAlbumAccess } from '~~/server/utils/manualAlbumAuth'
 import { isPasswordExemptForUser, parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
-import { settingsManager } from '~~/server/services/settings/settingsManager'
+import { isAlbumAdminBypass, redactAlbumSecrets } from '~~/server/utils/albumAccess'
 import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { getDisabledScanMountSet } from '~~/server/services/scan-library/manager'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
@@ -60,28 +60,23 @@ export default eventHandler(async (event) => {
   const albumPk = album.id
 
   // 检查相册是否隐藏，如果隐藏则需要用户登录才能访问
-  if (album.isHidden && !album.passwordHash) {
-    const session = await getUserSession(event)
-    if (!session.user) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: 'Album not found',
-      })
-    }
+  const actor = await getActor(event)
+
+  if (album.isHidden && !album.passwordHash && !actor.user) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: 'Album not found',
+    })
   }
 
   // 密码访问权判定（与扫描相簿一致）：只有显式打开「管理员免密」开关才放行管理员，
   // 否则管理员也必须输入密码；公开访问必须持有解锁 Cookie。
   // 管理端编辑场景（manage=1 + 管理员）例外：管理相簿照片需要返回完整数据。
-  const session = await getUserSession(event)
-  const sessionUser = (session as any)?.user
-  const isAdmin = Boolean(sessionUser?.isAdmin)
+  const isAdmin = actor.isAdmin
   const manageMode = query.manage === '1' && isAdmin
-  const adminBypass =
-    isAdmin &&
-    (await settingsManager.get<boolean>('system', 'scanAlbum.adminBypass', false))
+  const adminBypass = await isAlbumAdminBypass(event, actor)
   // 密码免密范围：登录用户在相簿配置的免密范围内（所有登录用户/指定用户）则免密
-  const passwordExempt = isPasswordExemptForUser(album, sessionUser)
+  const passwordExempt = isPasswordExemptForUser(album, actor.user)
   const authorized = manageMode || passwordExempt || hasAlbumAccess(
     event,
     { albumId: albumPk, passwordHash: album.passwordHash, sessionExempt: passwordExempt },
@@ -94,23 +89,16 @@ export default eventHandler(async (event) => {
   const uid = await ensureAlbumUid(db, album)
 
   // 公共字段（不暴露哈希、明文，也不暴露免密用户邮箱列表）
-  const {
-    passwordHash: _passwordHash,
-    password: _password,
-    passwordExemptMode: _pem,
-    passwordExemptUsers: _peu,
-    ...publicAlbum
-  } = album
-  const baseAlbum = { ...publicAlbum, uid }
-  // 明文密码与免密配置仅在管理端编辑面板（manage=1 + 管理员）回显；公开访问一律不返回
+  const revealed = redactAlbumSecrets(album, manageMode)
   const safeAlbum = manageMode
     ? {
-        ...baseAlbum,
+        ...revealed,
+        uid,
         password: album.password ?? undefined,
         passwordExemptMode: album.passwordExemptMode ?? undefined,
         passwordExemptUsers: parseExemptUsers(album.passwordExemptUsers),
       }
-    : baseAlbum
+    : { ...revealed, uid }
 
   // 「随机照片轮经典语录」最终生效语录池：标签优先（内置古诗/现代库），否则自定义，两者皆无则空（旋转时不显示）
   const randomQuotesPool = await resolveRandomQuotesPool(

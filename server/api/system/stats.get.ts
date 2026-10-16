@@ -238,7 +238,6 @@ async function getCpuLoad(): Promise<{ current: number } | null> {
 }
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   // 命中缓存直接返回，避免重复执行 7 条聚合 + systeminformation
   if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) {

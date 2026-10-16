@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { and } from 'drizzle-orm'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const { albumId } = await getValidatedRouterParams(
     event,

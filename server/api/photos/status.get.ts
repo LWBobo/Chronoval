@@ -1,7 +1,6 @@
 import { photos } from '~~/server/database/schema'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const method = getMethod(event)
 

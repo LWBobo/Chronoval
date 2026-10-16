@@ -7,7 +7,6 @@ import { generateSafePhotoId } from '~~/server/utils/file-utils'
  * 可以检查单个或多个文件
  */
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
 
   const t = await useTranslation(event)
 

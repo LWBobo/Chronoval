@@ -63,7 +63,6 @@ const isLikelyImageKey = (storageKey?: string | null): boolean => {
 }
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
   const { storageProvider } = useStorageProvider(event)
   const t = await useTranslation(event)
 

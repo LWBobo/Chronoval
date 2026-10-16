@@ -11,7 +11,7 @@ import {
   hasScanLibraryAccess,
 } from '~~/server/utils/scanAlbumAuth'
 import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
-import { settingsManager } from '~~/server/services/settings/settingsManager'
+import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
 
 export default eventHandler(async (event) => {
@@ -85,12 +85,8 @@ export default eventHandler(async (event) => {
   const passwordHash = effAuth.passwordHash
   // 访问权只认「解锁 cookie」「免密范围」或显式开启的「管理员免密」开关；
   // 默认不因管理员身份放行，避免「任意密码都可进入」。
-  const session = await getUserSession(event)
-  const sessionUser = (session as any)?.user
-  const isAdmin = Boolean(sessionUser?.isAdmin)
-  const adminBypass =
-    isAdmin &&
-    (await settingsManager.get<boolean>('system', 'scanAlbum.adminBypass', false))
+  const actor = await getActor(event)
+  const adminBypass = await isAlbumAdminBypass(event, actor)
   // 库级会话解锁：任一次正确解锁后整库免密（顶层生效密码哈希，顶层开放时为 null）
   const libPasswordHash = await getScanAlbumEffectivePasswordHash(libIdNum, '')
   // 登录用户在相簿配置的免密范围内（所有登录用户/指定用户）则免密
@@ -100,7 +96,7 @@ export default eventHandler(async (event) => {
       passwordExemptMode: effAuth.exemptMode,
       passwordExemptUsers: effAuth.exemptUsers,
     },
-    sessionUser,
+    actor.user,
   )
   const authorized =
     hasScanLibraryAccess(event, libIdNum, libPasswordHash) ||

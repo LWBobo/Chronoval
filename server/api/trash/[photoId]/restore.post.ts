@@ -3,7 +3,6 @@
  * 仅管理员可访问。
  */
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
   const photoId = getRouterParam(event, 'photoId')
 
   if (!photoId) {

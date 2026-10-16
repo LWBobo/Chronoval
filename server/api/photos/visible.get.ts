@@ -2,13 +2,13 @@ import {
   and,
   asc,
   desc,
-  eq,
   isNull,
   notInArray,
   or,
   type SQL,
 } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
+import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
 
 export default eventHandler(async (event) => {
   const db = useDB()
@@ -21,32 +21,12 @@ export default eventHandler(async (event) => {
     Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 5000) : 0
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0
 
+  const actor = await getActor(event)
   const where: SQL[] = []
 
-  // 获取需要从首页照片画廊排除的照片ID：
-  // 1) 被标记「相簿隐藏」的相簿照片（整体隐藏，需登录才可见）；
-  // 2) 被单独开启「首页画廊隐藏」的相簿照片（仅不入首页照片流）
-  const hiddenAlbumPhotos = db
-    .select({
-      photoId: tables.albumPhotos.photoId,
-    })
-    .from(tables.albumPhotos)
-    .innerJoin(tables.albums, eq(tables.albumPhotos.albumId, tables.albums.id))
-    .where(
-      or(
-        eq(tables.albums.isHidden, true),
-        eq(tables.albums.hideFromGallery, true),
-      ),
-    )
-    .all()
-
-  const hiddenPhotoIds = hiddenAlbumPhotos.map((row) => row.photoId)
-
-  // 查询所有照片（排除软删除回收站中的照片），并排除隐藏相册中的照片
+  // 排除软删除。登录可见的相簿仅对已登录用户出现；密码相簿不进瀑布流。
   where.push(isNull(tables.photos.deletedAt))
-  if (hiddenPhotoIds.length > 0) {
-    where.push(notInArray(tables.photos.id, hiddenPhotoIds))
-  }
+  where.push(homepageGalleryVisibilitySql(Boolean(actor.user)))
 
   // 排除纯相簿展示（displayMode=album）或已禁用的扫描库照片。
   // 共存模式（both）仍留在首页画廊。过滤必须进 SQL，避免分页事后过滤缺行。

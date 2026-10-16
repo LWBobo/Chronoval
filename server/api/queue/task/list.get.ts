@@ -16,7 +16,6 @@ const TASK_TYPES = [
  * 获取队列任务列表（分页，默认最近 100 条，避免全表拖死后台页）
  */
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
 
   try {
     const query = getQuery(event)

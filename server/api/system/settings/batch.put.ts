@@ -25,13 +25,7 @@ import { useDB, tables, eq } from '~~/server/utils/db'
  * }
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session || !session.user.isAdmin) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: 'Admin privileges required',
-    })
-  }
+  const actor = await requireAccess(event, 'admin')
 
   const body = await readValidatedBody(
     event,
@@ -52,11 +46,11 @@ export default eventHandler(async (event) => {
 
     // 获取当前用户ID，如果用户不存在于数据库则返回null
     const db = useDB()
-    const currentUser = session.user.id
+    const currentUser = actor.user!.id
       ? db
           .select()
           .from(tables.users)
-          .where(eq(tables.users.id, session.user.id))
+          .where(eq(tables.users.id, actor.user!.id))
           .get()
       : null
     const updatedBy = currentUser ? currentUser.id : undefined

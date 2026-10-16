@@ -16,7 +16,6 @@ import {
 } from '~~/server/services/ml/config'
 
 export default eventHandler(async (event) => {
-  await requireUserSession(event)
 
   const body = await readValidatedBody(
     event,

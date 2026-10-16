@@ -1057,6 +1057,7 @@
         "publicLinkFallback": "사용자 지정 링크가 설정되지 않았습니다. 기본 경로가 사용됩니다.",
         "publicLinkEmptyTip": "위의 사용자 지정 링크를 입력하면 여기에 공개 URL이 표시됩니다.",
         "copied": "복사됨",
+        "copyFailed": "복사에 실패했습니다. 직접 복사해 주세요",
         "copyLink": "링크 복사",
         "password": "접근 비밀번호",
         "passwordHint": "방문자는 이 앨범과 비밀번호를 재정의하지 않는 하위 앨범을 열려면 이 비밀번호를 입력해야 합니다.",

@@ -7,7 +7,8 @@ import { desc, eq } from 'drizzle-orm'
 const MAX_LOGS = 200
 
 export default defineEventHandler(async (event) => {
-  const { user } = await requireUserSession(event)
+  const actor = await requireAccess(event, 'user')
+  const user = actor.user!
   const db = useDB()
 
   const query = getQuery(event)

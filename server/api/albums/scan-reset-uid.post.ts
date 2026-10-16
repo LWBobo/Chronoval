@@ -14,10 +14,6 @@ import { useDB, tables } from '~~/server/utils/db'
  * 仅管理员可访问。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const body = await readValidatedBody(
     event,

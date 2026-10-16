@@ -1,3 +1,4 @@
 export default eventHandler(async (event) => {
-  return (await getUserSession(event)).user
+  const actor = await requireAccess(event, 'user')
+  return actor.user
 })

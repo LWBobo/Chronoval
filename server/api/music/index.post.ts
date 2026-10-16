@@ -13,10 +13,6 @@ import { logger } from '~~/server/utils/logger'
  * 仅管理员可访问。multipart/form-data：字段 file（音频文件）+ title（可选标题，默认取文件名）。
  */
 export default eventHandler(async (event) => {
-  const session = await requireUserSession(event)
-  if (!session.user.isAdmin) {
-    throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
-  }
 
   const form = await readMultipartFormData(event)
   if (!form) {

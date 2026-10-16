@@ -912,6 +912,7 @@ export const getScanAlbumDetail = async (
     longitude: number | null
     city: string | null
     country: string | null
+    locationName: string | null
     type: 'image' | 'video'
   }>
   children: ScanAlbumNode[]
@@ -944,19 +945,64 @@ export const getScanAlbumDetail = async (
     buildScanAlbumNode(lib, normalized, index),
     index.byId,
   )
-  const dirPhotos = [...(index.byDir.get(normalized) ?? [])]
-    .sort((a, b) => {
-      // 优先按拍摄时间升序；无拍摄时间（扫描照片常缺 EXIF 日期）时回退按文件名升序，
-      // 避免落到数据库的任意顺序而显得"排序乱掉了"。
-      const ta = a.dateTaken ?? ''
-      const tb = b.dateTaken ?? ''
-      if (ta || tb) {
-        const byDate = ta.localeCompare(tb)
-        if (byDate !== 0) return byDate
-      }
-      return (a.title ?? a.libraryPath ?? '').localeCompare(b.title ?? b.libraryPath ?? '')
-    })
-    .map((p) => ({
+  const dirRows = [...(index.byDir.get(normalized) ?? [])].sort((a, b) => {
+    // 优先按拍摄时间升序；无拍摄时间（扫描照片常缺 EXIF 日期）时回退按文件名升序，
+    // 避免落到数据库的任意顺序而显得"排序乱掉了"。
+    const ta = a.dateTaken ?? ''
+    const tb = b.dateTaken ?? ''
+    if (ta || tb) {
+      const byDate = ta.localeCompare(tb)
+      if (byDate !== 0) return byDate
+    }
+    return (a.title ?? a.libraryPath ?? '').localeCompare(b.title ?? b.libraryPath ?? '')
+  })
+
+  // 目录索引用的是轻量列（给相簿树，避免整库反序列化 EXIF）。
+  // 当前这一层要进查看器，再按本目录照片补齐镜头等拍摄信息。
+  const detailById = new Map<
+    string,
+    {
+      exif: NeededExif | null
+      width: number | null
+      height: number | null
+      fileSize: number | null
+      storageKey: string | null
+      tags: string[] | null
+      latitude: number | null
+      longitude: number | null
+      city: string | null
+      country: string | null
+      locationName: string | null
+    }
+  >()
+  const dirIds = dirRows.map((p) => p.id)
+  const CHUNK = 400
+  for (let i = 0; i < dirIds.length; i += CHUNK) {
+    const slice = dirIds.slice(i, i + CHUNK)
+    const extra = db
+      .select({
+        id: tables.photos.id,
+        exif: tables.photos.exif,
+        width: tables.photos.width,
+        height: tables.photos.height,
+        fileSize: tables.photos.fileSize,
+        storageKey: tables.photos.storageKey,
+        tags: tables.photos.tags,
+        latitude: tables.photos.latitude,
+        longitude: tables.photos.longitude,
+        city: tables.photos.city,
+        country: tables.photos.country,
+        locationName: tables.photos.locationName,
+      })
+      .from(tables.photos)
+      .where(inArray(tables.photos.id, slice))
+      .all()
+    for (const row of extra) detailById.set(row.id, row)
+  }
+
+  const dirPhotos = dirRows.map((p) => {
+    const detail = detailById.get(p.id)
+    return {
       id: p.id,
       title: p.title,
       thumbnailUrl: p.thumbnailUrl,
@@ -966,18 +1012,20 @@ export const getScanAlbumDetail = async (
       dateTaken: p.dateTaken,
       isLivePhoto: p.isLivePhoto,
       livePhotoVideoUrl: p.livePhotoVideoUrl,
-      exif: p.exif ?? null,
-      width: p.width,
-      height: p.height,
-      fileSize: p.fileSize,
-      storageKey: p.storageKey,
-      tags: p.tags ?? null,
-      latitude: p.latitude,
-      longitude: p.longitude,
-      city: p.city,
-      country: p.country,
+      exif: detail?.exif ?? null,
+      width: detail?.width ?? null,
+      height: detail?.height ?? null,
+      fileSize: detail?.fileSize ?? null,
+      storageKey: detail?.storageKey ?? null,
+      tags: detail?.tags ?? null,
+      latitude: detail?.latitude ?? null,
+      longitude: detail?.longitude ?? null,
+      city: detail?.city ?? null,
+      country: detail?.country ?? null,
+      locationName: detail?.locationName ?? null,
       type: p.type,
-    }))
+    }
+  })
 
   const children: ScanAlbumNode[] = await Promise.all(
     childSegmentsOf(index, normalized)

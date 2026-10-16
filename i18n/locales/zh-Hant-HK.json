@@ -887,6 +887,7 @@
         "publicLinkFallback": "尚未設定自訂連結，將使用預設路徑。",
         "publicLinkEmptyTip": "填寫上方自訂連結後，這裡會顯示公開網址。",
         "copied": "已複製",
+        "copyFailed": "複製失敗，請手動複製",
         "copyLink": "複製連結",
         "groupBgm": "背景音樂",
         "bgmMusic": "背景音樂（BGM）",
