@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
@@ -6,6 +6,7 @@ import { exiftool } from 'exiftool-vendored'
 import { eq } from 'drizzle-orm'
 
 import { extractExifData } from '~~/server/services/image/exif'
+import { getAllScalableMounts } from '~~/server/services/scan-library/manager'
 import { tables, useDB } from '~~/server/utils/db'
 import { useStorageProvider } from '~~/server/utils/useStorageProvider'
 
@@ -33,6 +34,25 @@ const bodySchema = z.object({
   panoYaw: z.union([z.number().min(-360).max(360), z.null()]).optional(),
   panoPitch: z.union([z.number().min(-89).max(89), z.null()]).optional(),
 })
+
+/** 扫描库原图在挂载目录，不在上传存储里。路径必须落在挂载根目录下。 */
+const resolveLibraryOriginal = (photo: {
+  source: string | null
+  libraryMount: string | null
+  libraryPath: string | null
+}) => {
+  if (photo.source !== 'library' || !photo.libraryMount || !photo.libraryPath) {
+    return null
+  }
+  const mount = getAllScalableMounts().find(
+    (item) => item.name === photo.libraryMount,
+  )
+  if (!mount) return null
+  const root = path.resolve(mount.root)
+  const abs = path.resolve(root, photo.libraryPath)
+  if (abs !== root && !abs.startsWith(`${root}${path.sep}`)) return null
+  return abs
+}
 
 const normalizeTags = (tags: string[] | undefined) => {
   if (!tags) return undefined
@@ -119,17 +139,39 @@ export default eventHandler(async (event) => {
     }
   }
 
-  if (!photo.storageKey) {
+  const libraryOriginal = resolveLibraryOriginal(photo)
+
+  if (!libraryOriginal && !photo.storageKey) {
     throw createError({
       statusCode: 400,
       statusMessage: t('dashboard.photos.messages.noStorageKey'),
     })
   }
 
-  const { storageProvider } = useStorageProvider(event)
-  const originalBuffer = await storageProvider.get(photo.storageKey)
+  if (photo.source === 'library' && !libraryOriginal) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: t('dashboard.photos.messages.photoFileMissing'),
+    })
+  }
 
-  if (!originalBuffer) {
+  if (libraryOriginal) {
+    try {
+      await stat(libraryOriginal)
+    } catch {
+      throw createError({
+        statusCode: 404,
+        statusMessage: t('dashboard.photos.messages.photoFileMissing'),
+      })
+    }
+  }
+
+  const { storageProvider } = useStorageProvider(event)
+  const originalBuffer = libraryOriginal
+    ? null
+    : await storageProvider.get(photo.storageKey!)
+
+  if (!libraryOriginal && !originalBuffer) {
     throw createError({
       statusCode: 404,
       statusMessage: t('dashboard.photos.messages.photoFileMissing'),
@@ -195,28 +237,39 @@ export default eventHandler(async (event) => {
     exifUpdates.Rating = payload.rating !== null ? payload.rating : null
   }
 
-  const tempRoot = tmpdir()
-  await mkdir(tempRoot, { recursive: true })
-  const tempDir = await mkdtemp(path.join(tempRoot, 'cframe-edit-'))
-  const ext = path.extname(photo.storageKey) || '.jpg'
-  const tempFile = path.join(tempDir, `edited${ext}`)
+  let tempDir: string | null = null
 
   try {
-    await writeFile(tempFile, originalBuffer)
+    let updatedBuffer: Buffer
+    if (libraryOriginal) {
+      if (Object.keys(exifUpdates).length > 0) {
+        await exiftool.write(libraryOriginal, exifUpdates, [
+          '-overwrite_original',
+        ])
+      }
+      updatedBuffer = await readFile(libraryOriginal)
+    } else {
+      const tempRoot = tmpdir()
+      await mkdir(tempRoot, { recursive: true })
+      tempDir = await mkdtemp(path.join(tempRoot, 'cframe-edit-'))
+      const ext = path.extname(photo.storageKey || '') || '.jpg'
+      const tempFile = path.join(tempDir, `edited${ext}`)
+      await writeFile(tempFile, originalBuffer!)
 
-    if (Object.keys(exifUpdates).length > 0) {
-      await exiftool.write(tempFile, exifUpdates, ['-overwrite_original'])
+      if (Object.keys(exifUpdates).length > 0) {
+        await exiftool.write(tempFile, exifUpdates, ['-overwrite_original'])
+      }
+
+      updatedBuffer = await readFile(tempFile)
+      const prefix =
+        storageProvider.config && 'prefix' in storageProvider.config
+          ? storageProvider.config.prefix
+          : ''
+      await storageProvider.create(
+        photo.storageKey!.replace(prefix || '', ''),
+        updatedBuffer,
+      )
     }
-
-    const updatedBuffer = await readFile(tempFile)
-    const prefix =
-      storageProvider.config && 'prefix' in storageProvider.config
-        ? storageProvider.config.prefix
-        : ''
-    await storageProvider.create(
-      photo.storageKey.replace(prefix || '', ''),
-      updatedBuffer,
-    )
 
     const exifData = await extractExifData(updatedBuffer)
 
@@ -320,6 +373,6 @@ export default eventHandler(async (event) => {
       statusMessage: t('dashboard.photos.messages.metadataUpdateFailed'),
     })
   } finally {
-    await rm(tempDir, { recursive: true, force: true })
+    if (tempDir) await rm(tempDir, { recursive: true, force: true })
   }
 })

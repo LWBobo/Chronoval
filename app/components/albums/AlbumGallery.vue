@@ -31,12 +31,8 @@ const layout = defineModel<AlbumLayout>('layout', { default: 'waterfall' })
 
 const { t } = useI18n()
 
-// 瀑布流（沿用原 MasonryWall 配置）
+// 瀑布流按列排布。不用会先清空再重排的瀑布流组件，避免滚动位置被夹回顶部。
 const isMobile = useMediaQuery('(max-width: 768px)')
-const MASONRY_GAP = 4
-const columnWidth = computed(() => (isMobile.value ? 280 : 280))
-const maxColumns = computed(() => (isMobile.value ? 2 : 8))
-const minColumns = computed(() => (isMobile.value ? 2 : 2))
 
 const leadList = computed(() => props.leads ?? [])
 const leadAtEnd = computed(() => props.leadPosition === 'end')
@@ -363,21 +359,16 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 瀑布流 -->
-    <MasonryWall
+    <!-- 瀑布流：按列排，追加照片时不拆掉已有格子，窗口停在原地 -->
+    <div
       v-if="layout === 'waterfall'"
-      :items="masonryItems"
-      :column-width="columnWidth"
-      :gap="MASONRY_GAP"
-      :min-columns="minColumns"
-      :max-columns="maxColumns"
-      :ssr-columns="2"
-      :key-mapper="
-        (_item, _column, _row, index) =>
-          masonryItems[index]?.id ?? index
-      "
+      class="columns-2 gap-1 sm:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6"
     >
-      <template #default="{ item }">
+      <div
+        v-for="item in masonryItems"
+        :key="item.id"
+        class="mb-1 w-full break-inside-avoid"
+      >
         <slot
           v-if="item.isLead"
           name="lead"
@@ -390,8 +381,8 @@ onUnmounted(() => {
           :photo="item.photo"
           :index="item.originalIndex"
         />
-      </template>
-    </MasonryWall>
+      </div>
+    </div>
 
     <!-- 统一网格 -->
     <div

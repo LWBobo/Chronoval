@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { isPanorama } from '~/utils/panorama'
-import { buildTimelineLayout, type TimelineDayGroup } from '~/utils/timeline'
+import {
+  buildTimelineLayout,
+  getTimelineHeaderHeight,
+  type TimelineDayGroup,
+} from '~/utils/timeline'
 
 interface Props {
   photos: Photo[]
@@ -15,7 +19,7 @@ const dayjs = useDayjs()
 const router = useRouter()
 const { t } = useI18n()
 
-const { filteredPhotos, hasActiveFilters } = usePhotoFilters()
+const { filteredPhotos, hasActiveFilters, activeFilters } = usePhotoFilters()
 const { sortedPhotos } = usePhotoSort()
 
 const displayPhotos = computed(() => {
@@ -24,9 +28,6 @@ const displayPhotos = computed(() => {
 
 const { currentPhotoIndex, isViewerOpen } = storeToRefs(useViewerState())
 const { openPanoramaViewer } = useViewerState()
-
-const { batchProcessLivePhotos } = useLivePhotoProcessor()
-const processedBatch = ref(new Set<string>())
 
 const isMobile = useMediaQuery('(max-width: 768px)')
 const containerRef = ref<HTMLElement>()
@@ -40,16 +41,11 @@ const visiblePhotos = ref(new Set<number>())
 const scrollPercent = ref(0)
 const isScrubbing = ref(false)
 
-// Virtualization: only mount day groups near the viewport
+// 只挂载视口附近的日期。外层高度始终是整条时间轴，继续下滑不会把页面缩短。
 const VIEWPORT_PAD = 800
+const MOUNT_PAD = 1800
 const viewportTop = ref(0)
 const viewportBottom = ref(1200)
-
-// Incremental day mounting for first paint
-const renderedDayCount = ref(0)
-const INCREMENT_DAYS = 12
-const sentinelRef = ref<HTMLElement>()
-const loadMoreObserver = ref<IntersectionObserver | null>(null)
 
 const measureWidth = () => {
   if (!containerRef.value) return
@@ -73,33 +69,59 @@ const timeline = computed(() => {
 
 const visibleDays = computed(() => {
   const days = timeline.value.days
-  const end = Math.min(renderedDayCount.value || 0, days.length)
-  return days.slice(0, end)
+  const top = viewportTop.value - MOUNT_PAD
+  const bottom = viewportBottom.value + MOUNT_PAD
+  return days.filter((day) => day.top + day.height >= top && day.top <= bottom)
 })
 
+const photoDocumentTop = (photoId: string) => {
+  const header = getTimelineHeaderHeight(isMobile.value)
+  for (const day of timeline.value.days) {
+    const item = day.photos.find((entry) => entry.photo.id === photoId)
+    if (!item) continue
+    return timelineOrigin() + day.top + header + item.box.top
+  }
+  return null
+}
+
+const captureAnchor = () => {
+  const nodes = containerRef.value?.querySelectorAll('[data-photo-id]')
+  if (!nodes?.length) return null
+  const vh = window.innerHeight
+  let best: { id: string; clientTop: number } | null = null
+  nodes.forEach((node) => {
+    const rect = (node as HTMLElement).getBoundingClientRect()
+    if (rect.bottom < 0 || rect.top > vh) return
+    const id = node.getAttribute('data-photo-id')
+    if (!id) return
+    if (!best || Math.abs(rect.top) < Math.abs(best.clientTop)) {
+      best = { id, clientTop: rect.top }
+    }
+  })
+  return best
+}
+
+// 后台补齐照片会重排时间轴。记下当前视口里的那张，排完后把它留在原来的位置。
 watch(
   () => [displayPhotos.value, containerWidth.value, isMobile.value] as const,
-  (curr, prev) => {
-    const n = timeline.value.days.length
-    const photosChanged = !prev || curr[0] !== prev[0]
-    if (photosChanged || renderedDayCount.value === 0) {
-      renderedDayCount.value = n ? Math.min(INCREMENT_DAYS, n) : 0
-    } else if (renderedDayCount.value > n) {
-      renderedDayCount.value = n
+  async (curr, prev) => {
+    if (!prev || import.meta.server || isScrubbing.value) {
+      nextTick(() => updateViewport())
+      return
     }
-    nextTick(() => updateViewport())
+    const anchor = captureAnchor()
+    await nextTick()
+    updateViewport()
+    if (!anchor) return
+    const top = photoDocumentTop(anchor.id)
+    if (top == null) return
+    const nextScroll = Math.max(0, top - anchor.clientTop)
+    const current = window.pageYOffset || document.documentElement.scrollTop
+    if (Math.abs(current - nextScroll) < 2) return
+    window.scrollTo({ top: nextScroll, behavior: 'auto' })
+    updateViewport()
   },
-  { immediate: true },
 )
-
-const appendDays = () => {
-  const total = timeline.value.days.length
-  if (renderedDayCount.value >= total) return
-  renderedDayCount.value = Math.min(
-    renderedDayCount.value + INCREMENT_DAYS,
-    total,
-  )
-}
 
 const isDayActive = (day: TimelineDayGroup) => {
   const top = day.top
@@ -124,33 +146,6 @@ const handleVisibilityChange = ({
     visiblePhotos.value.delete(index)
   }
   updateDateRange()
-  nextTick(() => processVisibleLivePhotos())
-}
-
-const processVisibleLivePhotos = async () => {
-  const visiblePhotosArray = Array.from(visiblePhotos.value)
-  const livePhotosToProcess = visiblePhotosArray
-    .map((index) => displayPhotos.value[index])
-    .filter(
-      (photo): photo is Photo =>
-        photo != null &&
-        photo.isLivePhoto === 1 &&
-        Boolean(photo.livePhotoVideoUrl) &&
-        !processedBatch.value.has(photo.id),
-    )
-
-  if (livePhotosToProcess.length === 0) return
-
-  livePhotosToProcess.forEach((photo) => {
-    processedBatch.value.add(photo.id)
-  })
-
-  batchProcessLivePhotos(
-    livePhotosToProcess.map((photo) => ({
-      id: photo.id,
-      livePhotoVideoUrl: photo.livePhotoVideoUrl!,
-    })),
-  )
 }
 
 const updateDateRange = () => {
@@ -234,15 +229,15 @@ const updateViewport = () => {
   }
 }
 
-// 筛选结果变了之后，把时间轴顶部滚进视口。否则窗口还停在旧位置，
-// 而缓冲区只挂载最前面的几天，画面里就没有照片。
+// 筛选条件本身变化时，结果集和旧滚动位置对不上，回到时间轴顶部。
+// 只是后台又补进一批照片时不滚，避免把正在看的位置拉回去。
 watch(
   () =>
     hasActiveFilters.value
-      ? displayPhotos.value.map((photo) => photo.id).join('\0')
+      ? JSON.stringify(activeFilters.value)
       : '',
   (key, prev) => {
-    if (!key || prev === undefined) return
+    if (!key || prev === undefined || key === prev) return
     nextTick(() => {
       requestAnimationFrame(() => {
         const el = containerRef.value
@@ -260,17 +255,7 @@ watch(
 
 const onScrub = (percent: number) => {
   scrollPercent.value = percent
-  // Ensure day groups near the seek target are mounted
   const targetY = percent * Math.max(timeline.value.totalHeight, 1)
-  const dayIdx = timeline.value.days.findIndex(
-    (d) => d.top + d.height >= targetY,
-  )
-  if (dayIdx >= 0) {
-    renderedDayCount.value = Math.max(
-      renderedDayCount.value,
-      Math.min(timeline.value.days.length, dayIdx + INCREMENT_DAYS),
-    )
-  }
   const maxScroll = Math.max(
     1,
     document.documentElement.scrollHeight - window.innerHeight,
@@ -280,6 +265,7 @@ const onScrub = (percent: number) => {
     top: Math.min(maxScroll, galleryTop + targetY),
     behavior: 'auto',
   })
+  updateViewport()
 }
 
 const handleOpenViewer = (index: number) => {
@@ -292,36 +278,15 @@ const handleOpenViewer = (index: number) => {
 }
 
 const scrollToPhoto = (photoIndex: number) => {
-  if (!displayPhotos.value[photoIndex]) return
-  const photoId = displayPhotos.value[photoIndex].id
-
-  // Ensure the day containing this photo is rendered
-  const dayIdx = timeline.value.days.findIndex((d) =>
-    d.photos.some((p) => p.photo.id === photoId),
-  )
-  if (dayIdx >= 0 && dayIdx >= renderedDayCount.value) {
-    renderedDayCount.value = Math.min(
-      dayIdx + INCREMENT_DAYS,
-      timeline.value.days.length,
-    )
-  }
-
-  nextTick(() => {
-    const photoElement = document.querySelector(`[data-photo-id="${photoId}"]`)
-    if (!photoElement) return
-    const elementRect = photoElement.getBoundingClientRect()
-    const windowHeight = window.innerHeight
-    const currentScrollY = window.pageYOffset
-    const targetScrollY =
-      currentScrollY +
-      elementRect.top -
-      windowHeight / 2 +
-      elementRect.height / 2
-    window.scrollTo({
-      top: Math.max(0, targetScrollY),
-      behavior: 'smooth',
-    })
+  const photoId = displayPhotos.value[photoIndex]?.id
+  if (!photoId) return
+  const top = photoDocumentTop(photoId)
+  if (top == null) return
+  window.scrollTo({
+    top: Math.max(0, top - window.innerHeight / 2),
+    behavior: 'smooth',
   })
+  updateViewport()
 }
 
 watch(currentPhotoIndex, (newIndex) => {
@@ -343,16 +308,6 @@ onMounted(() => {
     resizeObserver.observe(containerRef.value)
   }
 
-  if (sentinelRef.value) {
-    loadMoreObserver.value = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) appendDays()
-      },
-      { rootMargin: '1600px 0px 0px 0px', threshold: 0 },
-    )
-    loadMoreObserver.value.observe(sentinelRef.value)
-  }
-
   nextTick(() => {
     if (currentPhotoIndex.value) {
       scrollToPhoto(currentPhotoIndex.value)
@@ -364,8 +319,6 @@ onUnmounted(() => {
   window.removeEventListener('scroll', updateViewport)
   window.removeEventListener('resize', measureWidth)
   resizeObserver?.disconnect()
-  loadMoreObserver.value?.disconnect()
-  loadMoreObserver.value = null
 })
 </script>
 
@@ -412,13 +365,6 @@ onUnmounted(() => {
             @visibility-change="handleVisibilityChange"
           />
         </div>
-
-        <div
-          v-if="renderedDayCount < timeline.days.length"
-          ref="sentinelRef"
-          class="h-px w-full"
-          aria-hidden="true"
-        />
       </div>
     </div>
   </div>

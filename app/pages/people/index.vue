@@ -8,20 +8,35 @@ interface PersonCard {
   name: string | null
   faceCount: number
   isHidden: boolean
+  visibility?: 'public' | 'login' | 'admin'
   thumbnailUrl: string | null
   thumbnailFaceId: string | null
 }
 
+const { loggedIn, user } = useUserSession()
+const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
+const viewerKey = computed(() =>
+  loggedIn.value ? (isAdmin.value ? 'admin' : 'user') : 'guest',
+)
+
 const { data, pending, error, refresh } = useAsyncData(
-  'people-list',
+  () => `people-list-${viewerKey.value}`,
   () =>
     $fetch<{ people: PersonCard[] }>('/api/people', {
       query: { minFaces: 1 },
     }),
-  { watch: [] },
+  { watch: [viewerKey] },
 )
 
-const people = computed(() => data.value?.people || [])
+const people = computed(() =>
+  (data.value?.people || []).filter((person) => {
+    const visibility = person.visibility || (person.isHidden ? 'admin' : 'public')
+    if (visibility === 'public') return true
+    if (!loggedIn.value) return false
+    if (visibility === 'admin') return isAdmin.value
+    return true
+  }),
+)
 
 const { t } = useI18n()
 
@@ -117,6 +132,12 @@ const displayName = (p: PersonCard) =>
             </p>
             <p class="text-xs text-neutral-500">
               {{ $t('ui.people.faces', { count: person.faceCount }) }}
+            </p>
+            <p
+              v-if="isAdmin && person.visibility && person.visibility !== 'public'"
+              class="text-[11px] text-amber-600 dark:text-amber-400"
+            >
+              {{ $t(`ui.people.visibility.${person.visibility}`) }}
             </p>
           </div>
         </NuxtLink>

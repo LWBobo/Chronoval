@@ -2,6 +2,7 @@
   "map": {
     "cluster": {
       "details": "点击图片查看详情",
+      "previewHint": "点击图片放大，点击名称查看详情",
       "nearbyPhotos": "附近有 {0} 张照片",
       "altFallback": "聚类 {id}"
     },
@@ -164,6 +165,11 @@
       "saveFailed": "保存失败",
       "hide": "隐藏",
       "show": "取消隐藏",
+      "visibility": {
+        "public": "公开",
+        "login": "仅登录可见",
+        "admin": "仅管理员可见"
+      },
       "merge": "合并到此人",
       "mergePick": "选择要合并的人物",
       "merged": "已合并",
@@ -175,7 +181,8 @@
       "newPerson": "新人物名称",
       "create": "新建",
       "cancel": "取消",
-      "noPhotos": "还没有照片"
+      "noPhotos": "还没有照片",
+      "notVisible": "这个人物相册不存在，或当前账号无权查看"
     },
     "search": {
       "smartPlaceholder": "用描述或图中文字搜索照片…",
@@ -504,6 +511,7 @@
     "globe": "照片地球仪",
     "queue": "队列管理",
     "logs": "系统日志",
+    "watermark": "去除水印",
     "albums": "相簿",
     "albumChildren": "子相簿管理",
     "siteAdministration": "站点设置",
@@ -516,11 +524,13 @@
     "systemSettings": "系统设置",
     "analyticsSettings": "分析与追踪",
     "mlSettings": "机器学习",
+    "tagSettings": "标签",
     "securitySettings": "安全设置",
     "mapAndLocation": "地图和位置",
     "location": "位置服务",
     "search": "智能搜索",
-    "people": "人物"
+    "people": "人物",
+    "peopleAlbums": "人物相册"
   },
   "albums": {
     "scan": {
@@ -754,7 +764,9 @@
       "toolbar": {
         "title": "照片管理",
         "filter": "筛选",
-        "refresh": "刷新"
+        "refresh": "刷新",
+        "searchPlaceholder": "搜索标题、标签、地点或文件名",
+        "searchEmpty": "没有符合搜索条件的照片"
       },
       "photoFilter": {
         "all": "全部照片",
@@ -817,8 +829,26 @@
         "batchEraseLocation": "抹除位置信息",
         "batchDownload": "批量下载",
         "batchDelete": "批量删除",
+        "addToAlbum": "加入相册",
         "enterSelectMode": "选择照片",
         "exitSelectMode": "退出选择"
+      },
+      "addTo": {
+        "title": "加入相册",
+        "needSelection": "请先勾选照片，再加入相册或人物相册",
+        "hint": "选中的照片会追加进去，不会从原来的文件夹或其它相册里拿走。同一张照片可以同时放在多个相册、多个人物相册里。",
+        "albums": "已有相册",
+        "people": "人物相册",
+        "newAlbum": "新建相册",
+        "newTitle": "相册名称",
+        "hideFromGallery": "不出现在首页照片流",
+        "confirm": "加入",
+        "cancel": "取消",
+        "emptyTarget": "请选择相册或人物，或填写新相册名称",
+        "success": "已加入 {albums} 个相册、{people} 个人物相册",
+        "failed": "加入失败",
+        "noAlbums": "还没有手动相册",
+        "noPeople": "还没有人物相册"
       },
       "slideover": {
         "title": "上传照片",
@@ -1126,6 +1156,11 @@
         "clearAll": "全部清除",
         "isHidden": "隐藏相簿",
         "isHiddenHint": "隐藏后需登录才能访问，且不会出现在相簿列表",
+        "visibility": "谁可以看见",
+        "visibilityHint": "公开：所有人。仅登录：登录后可见。仅管理员：普通登录账号也看不见。",
+        "visibility_public": "公开",
+        "visibility_login": "仅登录可见",
+        "visibility_admin": "仅管理员可见",
         "hideFromGallery": "首页照片画廊隐藏",
         "hideFromGalleryHint": "开启后该相簿的照片不会出现在首页照片画廊",
         "customUrl": "自定义访问链接",
@@ -1459,6 +1494,43 @@
       },
       "taskListTitle": "队列任务列表"
     },
+    "watermark": {
+      "title": "去除水印",
+      "description": "扫描已启用的扫描库，列出带时间水印的 JPEG。确认后直接改原文件：用文件里保存的原图补丁盖住时间字，拍摄信息和末尾的动态照片视频会保留。补丁对不齐、视频找不到或写出失败时，源文件保持原样。",
+      "scan": "扫描水印",
+      "scanning": "正在扫描…",
+      "scanDone": "扫描完成",
+      "scanDoneDescription": "找到 {count} 张带水印的照片",
+      "scanFailed": "扫描失败",
+      "clear": "清除水印",
+      "clearDone": "清除结束",
+      "clearDoneDescription": "已清除 {cleaned} 张，失败 {failed} 张",
+      "clearFailed": "清除失败",
+      "selectAll": "全选",
+      "selectedCount": "已选 {count} 张",
+      "empty": "还没有扫描结果。点击「扫描水印」检查已挂载的扫描库。",
+      "unavailable": "这些扫描库暂时读不到",
+      "confirmTitle": "清除所选照片的水印",
+      "confirmBody": "将直接修改 {count} 张原文件。这个操作不能撤销。",
+      "confirm": "清除水印",
+      "cancel": "取消",
+      "stats": {
+        "mounts": "扫描库",
+        "scanned": "已检查",
+        "found": "有水印",
+        "selected": "已选择"
+      },
+      "brands": {
+        "xiaomi": "小米",
+        "apple": "苹果",
+        "vivo": "vivo",
+        "oppo": "OPPO",
+        "huawei": "华为",
+        "honor": "荣耀",
+        "samsung": "三星",
+        "unknown": "未知"
+      }
+    },
     "logs": {
       "connectionStatus": {
         "idle": "未连接",
@@ -1493,7 +1565,57 @@
       "home": "返回首页",
       "documentation": "文档",
       "albums": "相簿集",
+      "people": "人物相册",
       "music": "音乐盒"
+    },
+    "people": {
+      "title": "人物相册",
+      "subtitle": "每个人脸聚合结果都是一个人物相册。点一下即可设置谁能看到这个人。",
+      "searchPlaceholder": "搜索人物",
+      "empty": "还没有识别到人物",
+      "searchEmpty": "没有匹配的人物",
+      "loadError": "人物相册加载失败",
+      "saved": "可见范围已更新",
+      "saveFailed": "更新失败",
+      "open": "打开相册",
+      "filterAll": "全部",
+      "count": "{count} 个人物相册",
+      "unnamed": "未命名",
+      "photos": "{count} 张照片",
+      "levels": {
+        "public": "公开",
+        "login": "仅登录可见",
+        "admin": "仅管理员可见"
+      },
+      "hints": {
+        "public": "访客和登录用户都能在人物页看到这个人，并进入其相册。",
+        "login": "未登录的访客看不到。任意已登录账号，包括普通用户，都可以正常查看。",
+        "admin": "只有管理员能看到。已登录的普通账号也不会出现这个人，照片上也不会标出其身份。"
+      },
+      "namePlaceholder": "人物名称，留空为未命名",
+      "saveName": "保存名称",
+      "renamed": "名称已更新",
+      "delete": "删除",
+      "deleteTitle": "删除人物相册",
+      "deleteMessage": "删除「{name}」后，照片仍会保留，只是不再按这个人聚合，照片上的人物标注也会去掉。",
+      "deleteSelected": "删除所选（{count}）",
+      "deleteSelectedTitle": "删除所选人物相册",
+      "deleteSelectedMessage": "将删除 {count} 个人物相册。照片仍会保留，这些人物的聚合和标注会被去掉。",
+      "deleteConfirm": "确认删除",
+      "cancel": "取消",
+      "deleted": "人物相册已删除",
+      "deleteFailed": "删除失败",
+      "selectAll": "全选当前列表",
+      "clearSelection": "取消全选",
+      "addPhotos": "添加照片",
+      "addTitle": "添加到「{name}」",
+      "addHint": "人脸聚合漏掉的照片可以在这里搜到并加入。已经属于这个人的照片不能重复添加。",
+      "addSearch": "按标题、路径或编号搜索",
+      "addEmpty": "没有找到照片",
+      "addAlready": "已在相册中",
+      "addConfirm": "加入所选（{count}）",
+      "added": "已加入 {count} 张照片",
+      "addFailed": "添加失败"
     },
     "music": {
       "title": "音乐盒",
@@ -1768,6 +1890,13 @@
         "style": {
           "label": "MapLibre 样式",
           "description": "MapLibre 地图样式 URL"
+        }
+      },
+      "protomaps": {
+        "file": {
+          "label": "PMTiles 文件名",
+          "description": "放在容器 /app/map 目录中的 Protomaps 档案",
+          "help": "默认读取 /app/map/20261018.pmtiles。只填写文件名，不要写路径。"
         }
       },
       "sectionDescription": "配置地图展示与地理编码服务。地图服务商会影响地图样式与访问凭证。"
@@ -2182,6 +2311,40 @@
         "online": "侧车在线",
         "offline": "侧车不可达，入库和浏览不受影响，任务会失败并可重试",
         "lastSweep": "上次人物聚合扫描"
+      },
+      "tags": {
+        "title": "候选标签",
+        "description": "模型只从这份列表给照片打标签。搜索会优先显示命中的标签，其余仍按智能搜图排序。人工改过的标签不会被重跑覆盖。",
+        "name": "标签名",
+        "prompt": "模型提示句",
+        "promptHint": "留空则使用「一张标签名的照片」。",
+        "aliases": "同义词",
+        "aliasesHint": "多个同义词可用逗号、分号、冒号或横线分隔，中英文符号都可以。同一个词不能属于两个标签。",
+        "enabled": "参与自动打标",
+        "add": "添加标签",
+        "save": "保存标签",
+        "cancel": "取消编辑",
+        "delete": "删除",
+        "edit": "编辑",
+        "assign": "为已有照片打标签",
+        "empty": "还没有候选标签。",
+        "saved": "标签已保存",
+        "assigned": "已处理 {count} 张有向量的照片",
+        "deleted": "标签已删除",
+        "photoTitle": "智能标签",
+        "photoHint": "自动标签可以去掉，去掉后不会再被打上。从列表添加的标签会锁定为人工标签。",
+        "auto": "自动",
+        "manual": "人工",
+        "rejected": "已排除",
+        "undo": "恢复",
+        "addPhotoTag": "添加标签",
+        "appliedCount": "已打上 {count} 张",
+        "disabled": "不参与自动打标",
+        "rulesTitle": "这些设置如何生效",
+        "ruleSearch": "搜索命中标签名或同义词时，带这个标签的照片排在智能搜图结果前面。",
+        "ruleFilter": "首页和搜索的标签筛选会同时使用 EXIF 关键词和这里打上的标签。",
+        "ruleManual": "在照片编辑里去掉的自动标签会被排除，重新打标不会再加回来。手工添加的标签会锁定。",
+        "ruleAuto": "只有勾选「参与自动打标」的标签才会在入库后自动匹配。相似度不够的照片不会被打上。"
       }
     },
     "security": {
@@ -2287,6 +2450,10 @@
         "maplibre": {
           "label": "MapLibre",
           "description": "Mapbox GL JS 的开源分支。"
+        },
+        "protomaps": {
+          "label": "Protomaps",
+          "description": "使用 /app/map 里的本地 PMTiles，不需要地图 API key。简体中文标注。"
         }
       }
     },
@@ -2409,6 +2576,7 @@
     "timeline": {
       "toggle": "启用/关闭时间回溯",
       "playPause": "播放/暂停时间回溯",
+      "follow": "跟随地点：换地方时先缩小，再平滑飞到下一处并放大",
       "title": "时间回溯"
     }
   },

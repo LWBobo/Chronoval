@@ -23,7 +23,8 @@ interface AlbumItem extends Album {
 }
 const config = useRuntimeConfig()
 const { photos } = usePhotos()
-const { loggedIn } = useUserSession()
+const { loggedIn, user } = useUserSession()
+const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
 const { data: albums } = useAsyncData<AlbumItem[]>(
   'albums',
   () => $fetch('/api/albums'),
@@ -32,13 +33,19 @@ const { data: albums } = useAsyncData<AlbumItem[]>(
   },
 )
 
-// 根据登录状态决定是否过滤隐藏的相册
-// 登录用户可以看到所有相册，未登录用户只能看到非隐藏相册
+// 访客看不到非公开相簿。普通登录账号看不到仅管理员相簿。
 const visibleAlbums = computed(() => {
-  if (loggedIn.value) {
-    return albums.value || []
+  const list = albums.value || []
+  if (isAdmin.value) return list
+  if (!loggedIn.value) {
+    return list.filter(
+      (album) =>
+        album.visibility !== 'admin' &&
+        album.visibility !== 'login' &&
+        !album.isHidden,
+    )
   }
-  return (albums.value || []).filter((album) => !album.isHidden)
+  return list.filter((album) => album.visibility !== 'admin')
 })
 
 const albumLink = (album: AlbumItem) =>

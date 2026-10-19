@@ -155,6 +155,11 @@
       "saveFailed": "Could not save",
       "hide": "Hide",
       "show": "Unhide",
+      "visibility": {
+        "public": "Public",
+        "login": "Signed-in only",
+        "admin": "Admins only"
+      },
       "merge": "Merge into this person",
       "mergePick": "Choose a person to merge",
       "merged": "Merged",
@@ -166,7 +171,8 @@
       "newPerson": "New person name",
       "create": "Create",
       "cancel": "Cancel",
-      "noPhotos": "No photos"
+      "noPhotos": "No photos",
+      "notVisible": "This person album does not exist, or you cannot view it"
     },
     "search": {
       "smartPlaceholder": "Search by description or text in photos…",
@@ -247,6 +253,7 @@
   "map": {
     "cluster": {
       "details": "Click to view details",
+      "previewHint": "Click a photo to enlarge, click its name for details",
       "nearbyPhotos": "{0} photos nearby",
       "altFallback": "Cluster {id}"
     },
@@ -505,6 +512,7 @@
     "globe": "Photo Globe",
     "queue": "Queue Management",
     "logs": "System Logs",
+    "watermark": "Remove watermark",
     "albums": "Albums",
     "albumChildren": "Sub-album Management",
     "siteAdministration": "Site settings",
@@ -519,9 +527,11 @@
     "systemSettings": "System Settings",
     "analyticsSettings": "Analytics & Tracking",
     "mlSettings": "Machine Learning",
+    "tagSettings": "Tags",
     "securitySettings": "Security",
     "search": "Smart Search",
-    "people": "People"
+    "people": "People",
+    "peopleAlbums": "People albums"
   },
   "albums": {
     "scan": {
@@ -754,7 +764,9 @@
       "toolbar": {
         "title": "Photo Management",
         "filter": "Filter",
-        "refresh": "Refresh"
+        "refresh": "Refresh",
+        "searchPlaceholder": "Search title, tags, place, or filename",
+        "searchEmpty": "No photos match this search"
       },
       "photoFilter": {
         "all": "All Photos",
@@ -817,8 +829,26 @@
         "batchEraseLocation": "Erase location info",
         "batchDownload": "Download",
         "batchDelete": "Batch Delete",
+        "addToAlbum": "Add to album",
         "enterSelectMode": "Select photos",
         "exitSelectMode": "Exit selection"
+      },
+      "addTo": {
+        "title": "Add to albums",
+        "needSelection": "Select photos first, then add them to albums or people",
+        "hint": "Selected photos are appended. They stay in their folder and in any other album. One photo can belong to several albums and several people.",
+        "albums": "Existing albums",
+        "people": "People",
+        "newAlbum": "New album",
+        "newTitle": "Album name",
+        "hideFromGallery": "Keep out of the home gallery",
+        "confirm": "Add",
+        "cancel": "Cancel",
+        "emptyTarget": "Choose an album or person, or name a new album",
+        "success": "Added to {albums} albums and {people} people",
+        "failed": "Could not add photos",
+        "noAlbums": "No manual albums yet",
+        "noPeople": "No people yet"
       },
       "slideover": {
         "title": "Upload Photos",
@@ -1128,6 +1158,11 @@
         "clearAll": "Clear all",
         "isHidden": "Hide album",
         "isHiddenHint": "Hidden albums require sign-in to view and stay out of gallery lists",
+        "visibility": "Who can see this",
+        "visibilityHint": "Public: everyone. Signed-in: any logged-in account. Admins: regular accounts cannot see it.",
+        "visibility_public": "Public",
+        "visibility_login": "Signed-in only",
+        "visibility_admin": "Admins only",
         "hideFromGallery": "Hide from home gallery",
         "hideFromGalleryHint": "This album's photos won't appear in the home photo gallery",
         "customUrl": "Custom URL slug",
@@ -1465,6 +1500,43 @@
       },
       "taskListTitle": "Task Queue"
     },
+    "watermark": {
+      "title": "Remove watermark",
+      "description": "Scan enabled libraries and list JPEGs with a time watermark. Clearing writes the original file: the saved clean patch covers the time stamp, while capture metadata and the trailing motion-photo video stay. If the patch does not line up, the video cannot be found, or writing fails, the source file is left unchanged.",
+      "scan": "Scan",
+      "scanning": "Scanning…",
+      "scanDone": "Scan finished",
+      "scanDoneDescription": "Found {count} watermarked photos",
+      "scanFailed": "Scan failed",
+      "clear": "Clear watermark",
+      "clearDone": "Clear finished",
+      "clearDoneDescription": "Cleared {cleaned}, failed {failed}",
+      "clearFailed": "Clear failed",
+      "selectAll": "Select all",
+      "selectedCount": "{count} selected",
+      "empty": "No results yet. Scan the mounted libraries to look for watermarks.",
+      "unavailable": "These libraries could not be read",
+      "confirmTitle": "Clear watermarks from the selected photos",
+      "confirmBody": "This rewrites {count} original files and cannot be undone.",
+      "confirm": "Clear watermark",
+      "cancel": "Cancel",
+      "stats": {
+        "mounts": "Libraries",
+        "scanned": "Checked",
+        "found": "Watermarked",
+        "selected": "Selected"
+      },
+      "brands": {
+        "xiaomi": "Xiaomi",
+        "apple": "Apple",
+        "vivo": "vivo",
+        "oppo": "OPPO",
+        "huawei": "Huawei",
+        "honor": "Honor",
+        "samsung": "Samsung",
+        "unknown": "Unknown"
+      }
+    },
     "logs": {
       "connectionStatus": {
         "idle": "Disconnected",
@@ -1499,7 +1571,57 @@
       "home": "Back to Home",
       "documentation": "Documentation",
       "albums": "Albums",
+      "people": "People albums",
       "music": "Music Box"
+    },
+    "people": {
+      "title": "People albums",
+      "subtitle": "Each face cluster is a person album. Set who can see that person with one click.",
+      "searchPlaceholder": "Search people",
+      "empty": "No people yet",
+      "searchEmpty": "No matching people",
+      "loadError": "Could not load people albums",
+      "saved": "Visibility updated",
+      "saveFailed": "Could not update",
+      "open": "Open album",
+      "filterAll": "All",
+      "count": "{count} people albums",
+      "unnamed": "Unnamed",
+      "photos": "{count} photos",
+      "levels": {
+        "public": "Public",
+        "login": "Signed-in only",
+        "admin": "Admins only"
+      },
+      "hints": {
+        "public": "Visitors and signed-in users can see this person and open their album.",
+        "login": "Guests cannot see them. Any signed-in account, including regular users, can.",
+        "admin": "Only admins can see them. A regular signed-in account will not see this person or their name on photos."
+      },
+      "namePlaceholder": "Name, empty for unnamed",
+      "saveName": "Save name",
+      "renamed": "Name updated",
+      "delete": "Delete",
+      "deleteTitle": "Delete person album",
+      "deleteMessage": "Photos stay in the library. “{name}” will no longer be grouped, and the name will be removed from photos.",
+      "deleteSelected": "Delete selected ({count})",
+      "deleteSelectedTitle": "Delete selected person albums",
+      "deleteSelectedMessage": "Delete {count} person albums. Photos stay; these groupings and labels will be removed.",
+      "deleteConfirm": "Delete",
+      "cancel": "Cancel",
+      "deleted": "Person album deleted",
+      "deleteFailed": "Could not delete",
+      "selectAll": "Select listed",
+      "clearSelection": "Clear selection",
+      "addPhotos": "Add photos",
+      "addTitle": "Add to “{name}”",
+      "addHint": "Search for photos the face cluster missed. Photos already in this album stay as they are.",
+      "addSearch": "Search by title, path, or id",
+      "addEmpty": "No photos found",
+      "addAlready": "Already in album",
+      "addConfirm": "Add selected ({count})",
+      "added": "Added {count} photos",
+      "addFailed": "Could not add photos"
     },
     "music": {
       "title": "Music Box",
@@ -1774,6 +1896,13 @@
         "style": {
           "label": "MapLibre Style",
           "description": "MapLibre map style URL"
+        }
+      },
+      "protomaps": {
+        "file": {
+          "label": "PMTiles file",
+          "description": "Protomaps archive stored in the container directory /app/map",
+          "help": "Defaults to /app/map/20261018.pmtiles. Enter the file name only, not a path."
         }
       },
       "sectionDescription": "Configure map display and geocoding services. The map provider affects map styles and access credentials."
@@ -2188,6 +2317,40 @@
         "online": "Sidecar is reachable",
         "offline": "Sidecar is unreachable. Uploads and browsing still work; jobs fail and can be retried.",
         "lastSweep": "Last recognition sweep"
+      },
+      "tags": {
+        "title": "Candidate tags",
+        "description": "The model only assigns tags from this list. Search shows tag matches first, then smart-search results. Manual corrections are kept when recognition runs again.",
+        "name": "Name",
+        "prompt": "Model prompt",
+        "promptHint": "Leave empty to use a photo-of prompt based on the name.",
+        "aliases": "Aliases",
+        "aliasesHint": "Separate aliases with commas, semicolons, colons, or hyphens. Chinese and English punctuation both work. One word cannot belong to two tags.",
+        "enabled": "Use for automatic tagging",
+        "add": "Add tag",
+        "save": "Save tag",
+        "cancel": "Cancel",
+        "delete": "Delete",
+        "edit": "Edit",
+        "assign": "Tag photos that already have embeddings",
+        "empty": "No candidate tags yet.",
+        "saved": "Tag saved",
+        "assigned": "Processed {count} photos with embeddings",
+        "deleted": "Tag deleted",
+        "photoTitle": "Smart tags",
+        "photoHint": "Removing an automatic tag keeps it off. Tags you add are locked as manual.",
+        "auto": "Auto",
+        "manual": "Manual",
+        "rejected": "Excluded",
+        "undo": "Restore",
+        "addPhotoTag": "Add tag",
+        "appliedCount": "{count} photos tagged",
+        "disabled": "Not used for automatic tagging",
+        "rulesTitle": "How these settings apply",
+        "ruleSearch": "When a search matches a tag name or alias, photos with that tag are listed before smart-search results.",
+        "ruleFilter": "Gallery and search tag filters use both EXIF keywords and tags applied here.",
+        "ruleManual": "An automatic tag removed in the photo editor stays excluded. Tags you add by hand are locked.",
+        "ruleAuto": "Only tags marked for automatic tagging are assigned after a photo is indexed, and only when the similarity is high enough."
       }
     },
     "security": {
@@ -2293,6 +2456,10 @@
         "maplibre": {
           "label": "MapLibre",
           "description": "Open-source fork of Mapbox GL JS."
+        },
+        "protomaps": {
+          "label": "Protomaps",
+          "description": "Local PMTiles file in /app/map. No map API key. Labels follow the interface language."
         }
       }
     },
@@ -2415,6 +2582,7 @@
     "timeline": {
       "toggle": "Enable/Disable Timeline",
       "playPause": "Play/Pause Timeline",
+      "follow": "Follow places: zoom out, then glide to the next spot and zoom in",
       "title": "Timeline"
     }
   },

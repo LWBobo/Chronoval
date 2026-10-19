@@ -25,6 +25,7 @@ interface AlbumItem {
   coverPhotoId?: string | null
   bgmMusicId?: number | null
   isHidden?: boolean
+  visibility?: 'public' | 'login' | 'admin' | null
   hideFromGallery?: boolean
   password?: string | null
   uid?: string | null
@@ -59,6 +60,7 @@ interface AlbumFormState {
   title: string
   description: string
   isHidden: boolean
+  visibility: 'public' | 'login' | 'admin'
   hideFromGallery: boolean
   slug: string
   password: string
@@ -98,6 +100,7 @@ const formData = reactive<AlbumFormState>({
   title: '',
   description: '',
   isHidden: false,
+  visibility: 'public',
   hideFromGallery: false,
   slug: '',
   password: '',
@@ -412,6 +415,7 @@ const populateForm = (album: AlbumItem | null) => {
     formData.title = ''
     formData.description = ''
     formData.isHidden = false
+    formData.visibility = 'public'
     formData.hideFromGallery = false
     formData.slug = ''
     formData.password = ''
@@ -432,7 +436,15 @@ const populateForm = (album: AlbumItem | null) => {
 
   formData.title = album.title
   formData.description = album.description || ''
-  formData.isHidden = album.isHidden || false
+  formData.visibility =
+    album.visibility === 'admin' ||
+    album.visibility === 'login' ||
+    album.visibility === 'public'
+      ? album.visibility
+      : album.isHidden
+        ? 'login'
+        : 'public'
+  formData.isHidden = formData.visibility !== 'public'
   formData.hideFromGallery = (album as any).hideFromGallery || false
   formData.slug = album.slug || ''
   formData.password = (album as any).password || ''
@@ -544,7 +556,8 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
           description: event.data.description ?? undefined,
           coverPhotoId: coverPhotoId.value || undefined,
           photoIds: selectedPhotoIds.value,
-          isHidden: event.data.isHidden,
+          isHidden: formData.visibility !== 'public',
+          visibility: formData.visibility,
           hideFromGallery: event.data.hideFromGallery,
           layout: event.data.layout,
           randomAnimation: event.data.randomAnimation,
@@ -572,7 +585,8 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
           description: event.data.description ?? undefined,
           coverPhotoId: coverPhotoId.value || undefined,
           photoIds: selectedPhotoIds.value,
-          isHidden: event.data.isHidden,
+          isHidden: formData.visibility !== 'public',
+          visibility: formData.visibility,
           hideFromGallery: event.data.hideFromGallery,
           layout: event.data.layout,
           randomAnimation: event.data.randomAnimation,
@@ -1159,8 +1173,39 @@ const submitButtonLabel = computed(() => {
               </div>
             </UFormField>
 
-            <!-- 隐藏相簿：按钮式开关 -->
-            <div class="flex items-start justify-between gap-4 rounded-lg border border-neutral-200 bg-neutral-50/50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40">
+            <!-- 普通相簿：公开 / 仅登录 / 仅管理员 -->
+            <div
+              v-if="!currentAlbum || !isScanAlbum(currentAlbum)"
+              class="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40"
+            >
+              <div class="space-y-0.5">
+                <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                  {{ $t('dashboard.albums.form.visibility') }}
+                </p>
+                <p class="text-xs text-neutral-500 dark:text-neutral-400">
+                  {{ $t('dashboard.albums.form.visibilityHint') }}
+                </p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <UButton
+                  v-for="level in (['public', 'login', 'admin'] as const)"
+                  :key="level"
+                  type="button"
+                  size="xs"
+                  :color="formData.visibility === level ? 'primary' : 'neutral'"
+                  :variant="formData.visibility === level ? 'solid' : 'soft'"
+                  @click="formData.visibility = level; formData.isHidden = level !== 'public'"
+                >
+                  {{ $t(`dashboard.albums.form.visibility_${level}`) }}
+                </UButton>
+              </div>
+            </div>
+
+            <!-- 扫描相簿仍用原来的登录门槛 -->
+            <div
+              v-else
+              class="flex items-start justify-between gap-4 rounded-lg border border-neutral-200 bg-neutral-50/50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40"
+            >
               <div class="min-w-0 space-y-0.5">
                 <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
                   {{ $t('dashboard.albums.form.isHidden') }}

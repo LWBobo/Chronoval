@@ -161,6 +161,6 @@ export const isLivePhotoVideo = (
     return false
   }
 
-  const maxLivePhotoSize = 12 * 1024 * 1024 // 12MB
+  const maxLivePhotoSize = 80 * 1024 * 1024 // 较新手机的实况短片可以超过 12MB
   return fileSize <= maxLivePhotoSize
 }

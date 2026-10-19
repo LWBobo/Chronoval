@@ -40,6 +40,7 @@ const RULES: AccessRule[] = [
   { methods: ['GET'], pattern: /^\/api\/photos\/(visible|feed-status|reactions)$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/photos\/[^/]+\/(faces|albums)$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/photos\/[^/]+\/livephoto$/, access: 'user' },
+  { methods: ['GET'], pattern: /^\/api\/photos\/[^/]+\/motion-video$/, access: 'public' },
   { pattern: /^\/api\/photos\/[^/]+\/reactions$/, access: 'public' },
 
   { methods: ['GET', 'POST'], pattern: /^\/api\/search\/smart$/, access: 'public' },

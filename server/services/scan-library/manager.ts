@@ -717,40 +717,36 @@ const buildScanAlbumNode = (
   dirPhotos.sort((a, b) =>
     (a.dateTaken || '').localeCompare(b.dateTaken || ''),
   )
-  const covers: ScanAlbumCover[] = dirPhotos
-    // 封面仅取图片类型：视频文件通常无图片缩略图，避免封面空白
-    .filter((p) => p.type !== 'video')
-    .slice(0, 3)
-    .map((p) => ({
-      id: p.id,
-      thumbnailUrl: p.thumbnailUrl,
-      thumbnailHash: p.thumbnailHash,
-      aspectRatio: p.aspectRatio,
-    }))
-  // 本层无直接图片（如只有子相簿）时：默认从后代子相簿照片中随机挑选一张作封面。
-  // 仅作默认兜底，自定义封面会由 applyScanAlbumMeta 覆盖；同相簿稳定挑同一张避免刷新闪烁。
-  // 目录分组后只需扫描目录键，每个后代目录取其首张非视频照片作为候选。
-  const fallbackCovers: ScanAlbumCover[] = []
-  if (covers.length === 0) {
+  const toCover = (p: ScanPhotoRow): ScanAlbumCover => ({
+    id: p.id,
+    thumbnailUrl: p.thumbnailUrl,
+    thumbnailHash: p.thumbnailHash,
+    aspectRatio: p.aspectRatio,
+  })
+  const hasThumb = (p: ScanPhotoRow) => p.type !== 'video' && !!p.thumbnailUrl
+  // 封面拼图最多三格。先用本层有缩略图的照片，不够再从子相簿各取一张补满，避免空格。
+  const covers: ScanAlbumCover[] = []
+  const seen = new Set<string>()
+  const pushCover = (p: ScanPhotoRow) => {
+    if (!hasThumb(p) || seen.has(p.id) || covers.length >= 3) return
+    seen.add(p.id)
+    covers.push(toCover(p))
+  }
+  for (const photo of dirPhotos) pushCover(photo)
+  if (covers.length < 3) {
     const prefix = relPath ? `${relPath}/` : ''
     const candidates: ScanPhotoRow[] = []
     for (const [dir, arr] of index.byDir) {
       if (dir === relPath || !dir.startsWith(prefix)) continue
-      const rep = arr.find((p) => p.type !== 'video')
+      const rep = arr.find(hasThumb)
       if (rep) candidates.push(rep)
     }
-    if (candidates.length > 0) {
-      const pick =
-        candidates[stableSeedOf(`${mount}:${relPath}`) % candidates.length]!
-      fallbackCovers.push({
-        id: pick.id,
-        thumbnailUrl: pick.thumbnailUrl,
-        thumbnailHash: pick.thumbnailHash,
-        aspectRatio: pick.aspectRatio,
-      })
+    const seed = stableSeedOf(`${mount}:${relPath}`)
+    for (let i = 0; i < candidates.length && covers.length < 3; i++) {
+      pushCover(candidates[(seed + i) % candidates.length]!)
     }
   }
-  const effectiveCovers = covers.length > 0 ? covers : fallbackCovers
+  const effectiveCovers = covers
   const seg = relPath.split('/').filter(Boolean).pop()
   const title = relPath === '' ? lib.name : decodeURIComponent(seg || relPath)
   // 公开链接优先使用 urlKey（base36 时间戳），回退到数字 id 兼容存量
@@ -835,6 +831,7 @@ export const listScanAlbumRoots = async (
     }
     out.push(node)
   }
+  for (const node of out) applyChildCoverCollage(node)
   out.sort((a, b) => a.title.localeCompare(b.title))
   return out
 }
@@ -1048,6 +1045,24 @@ export const getScanAlbumDetail = async (
   )
 
   return { node, dirPhotos, children }
+}
+
+/** 有子相簿时，母相册三格封面依次用各子相簿正在展示的缩略图，不再用本层凑不满的照片。 */
+const applyChildCoverCollage = (node: ScanAlbumNode) => {
+  for (const child of node.children || []) applyChildCoverCollage(child)
+  const picked: ScanAlbumCover[] = []
+  const seen = new Set<string>()
+  for (const child of node.children || []) {
+    const cover = child.covers.find((item) => item.thumbnailUrl)
+    const url = cover?.thumbnailUrl
+    if (!cover || !url || seen.has(url)) continue
+    seen.add(url)
+    picked.push(cover)
+    if (picked.length >= 3) break
+  }
+  if (picked.length === 0) return
+  node.covers = picked
+  node.coverPhotoId = picked[0]!.id
 }
 
 // ---------------------------------------------------------------------------

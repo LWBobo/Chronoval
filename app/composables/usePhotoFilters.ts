@@ -9,6 +9,7 @@ interface FilterOptions {
 
 interface FacetPhoto {
   tags?: string[] | null
+  mlTags?: string[] | null
   city?: string | null
   exif?: {
     Make?: string
@@ -17,6 +18,18 @@ interface FacetPhoto {
     LensModel?: string
     Rating?: number
   } | null
+}
+
+/** EXIF 关键词和已打上的机器学习标签，同名只保留一次。 */
+function facetTagNames(photo: FacetPhoto) {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const tag of [...(photo.tags || []), ...(photo.mlTags || [])]) {
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    names.push(tag)
+  }
+  return names
 }
 
 /** EXIF / 标签分面是否命中。语义搜索结果与画廊分面做 AND 时共用。 */
@@ -28,7 +41,7 @@ export function photoMatchesFacets(
   >,
 ) {
   if (filters.tags.length > 0) {
-    const photoTags = photo.tags || []
+    const photoTags = facetTagNames(photo)
     if (!filters.tags.some((tag) => photoTags.includes(tag))) return false
   }
 
@@ -108,11 +121,8 @@ export function usePhotoFilters() {
     }
 
     photos.value.forEach((photo) => {
-      // 标签统计
-      if (photo.tags && Array.isArray(photo.tags)) {
-        photo.tags.forEach((tag) => {
-          stats.tags.set(tag, (stats.tags.get(tag) || 0) + 1)
-        })
+      for (const tag of facetTagNames(photo)) {
+        stats.tags.set(tag, (stats.tags.get(tag) || 0) + 1)
       }
 
       // 相机统计 (从 EXIF 获取)
@@ -190,7 +200,7 @@ export function usePhotoFilters() {
       if (debouncedSearch.value) {
         const searchTerm = debouncedSearch.value.toLowerCase()
         const searchableFields = [
-          photo.tags?.join(' ') || '',
+          facetTagNames(photo).join(' '),
           photo.exif?.Make || '',
           photo.exif?.Model || '',
           photo.exif?.LensMake || '',

@@ -41,8 +41,27 @@ const coverPrimary = computed(
     '',
 )
 // 封面拼贴：仅当存在至少 2 张不重复封面时才启用
-const uniqueCovers = computed(() => [...new Set(usableCovers.value)])
-const useCollage = computed(() => uniqueCovers.value.length >= 2)
+const coverUrlOf = (album: { covers?: CardCover[]; coverPhoto?: { thumbnailUrl?: string | null } }) => {
+  const fromCovers = (album.covers || []).find((cover) => cover.thumbnailUrl)?.thumbnailUrl
+  return fromCovers || album.coverPhoto?.thumbnailUrl || ''
+}
+
+// 母相册拼图用子相册当前封面。跳过没有缩略图或地址重复的子相册，继续取下一个，凑满三格。
+const uniqueCovers = computed(() => {
+  const urls: string[] = []
+  const seen = new Set<string>()
+  const take = (url: string) => {
+    if (!url || seen.has(url) || urls.length >= 3) return
+    seen.add(url)
+    urls.push(url)
+  }
+  for (const child of props.album?.children || []) {
+    take(coverUrlOf(child))
+  }
+  if (urls.length >= 3) return urls
+  for (const url of usableCovers.value) take(url)
+  return urls
+})
 
 const onImgError = (e: Event) => {
   const el = e.target as HTMLImageElement
@@ -425,9 +444,9 @@ const menuItems = computed(() => {
       <!-- 封面容器：padding-bottom 撑起固定 16:10 比例的高度，
            封面有无图片、任何浏览器下都等高，避免 flex 布局覆盖 aspect-ratio -->
       <span class="relative block h-0 w-full pb-[62.5%]">
-        <!-- 封面拼贴：外部库多封面时展示不对称拼图 -->
+        <!-- 封面拼贴：三格，依次使用子相簿封面 -->
         <div
-          v-if="useCollage"
+          v-if="uniqueCovers.length >= 3"
           class="absolute inset-0 grid h-full w-full grid-cols-[1.35fr_1fr]"
         >
           <div
@@ -455,7 +474,6 @@ const menuItems = computed(() => {
             </div>
             <div class="relative overflow-hidden">
               <img
-                v-if="uniqueCovers[2]"
                 :src="uniqueCovers[2]"
                 class="h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.06]"
                 loading="lazy"

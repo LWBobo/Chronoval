@@ -6,6 +6,7 @@ import type {
   SettingValue,
 } from '~~/shared/types/settings'
 import type { SettingKey, SettingNamespace } from './contants'
+import { mapPmtilesFilename } from '~~/shared/map-pmtiles'
 
 export class SettingsManager {
   private static instance: SettingsManager
@@ -185,6 +186,26 @@ export class SettingsManager {
             ),
           )
           .run()
+      } else if (config.namespace === 'map' && config.key === 'provider') {
+        // The allowed providers live in the settings row. A new provider such
+        // as protomaps is rejected until that stored list is refreshed.
+        const nextEnum = config.enum ? [...config.enum] : null
+        const current = Array.isArray(existing.enum) ? existing.enum : []
+        const same =
+          !!nextEnum &&
+          current.length === nextEnum.length &&
+          nextEnum.every((value, index) => current[index] === value)
+        if (!same) {
+          db.update(tables.settings)
+            .set({ enum: nextEnum })
+            .where(
+              and(
+                eq(tables.settings.namespace, config.namespace),
+                eq(tables.settings.key, config.key),
+              ),
+            )
+            .run()
+        }
       }
     }
   }
@@ -261,6 +282,10 @@ export class SettingsManager {
         `Attempt to modify readonly setting ${namespace}:${key}`,
       )
       throw new Error(`Setting ${namespace}:${key} is readonly`)
+    }
+
+    if (namespace === 'map' && key === 'protomaps.file') {
+      value = mapPmtilesFilename(value == null ? undefined : String(value))
     }
 
     if (!this.validateEnum(value, existing.enum)) {

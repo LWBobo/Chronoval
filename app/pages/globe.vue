@@ -26,10 +26,21 @@ const timelineProgress = ref(100)
 const isTimelineEnabled = ref(false)
 const isTimelinePlaying = ref(false)
 const isTimelineDragging = ref(false)
+const isTimelineFollow = ref(true)
 const timelineTrackRef = ref<HTMLElement | null>(null)
 const timelinePlayDurationMs = 12000
 let timelineAnimationFrame: number | null = null
 let timelineLastTick = 0
+let cameraScripted = false
+let playbackToken = 0
+let idleCleanup: (() => void) | null = null
+let scriptedPhase: 'travel' | 'dwell' = 'travel'
+let phaseStart = 0
+let phaseDuration = 1
+let phaseFrom = 0
+let phaseTo = 0
+let placeCursor = 0
+let mapSettled = false
 
 const datedPhotosWithLocation = computed(() => {
   return photosWithLocation.value
@@ -164,8 +175,16 @@ const onTimelinePointerDown = (event: PointerEvent) => {
   window.addEventListener('pointerup', onTimelinePointerUp)
 }
 
+const clearMapSettleWait = () => {
+  idleCleanup?.()
+  idleCleanup = null
+}
+
 const stopTimelinePlayback = () => {
   isTimelinePlaying.value = false
+  cameraScripted = false
+  playbackToken += 1
+  clearMapSettleWait()
   if (timelineAnimationFrame !== null) {
     cancelAnimationFrame(timelineAnimationFrame)
     timelineAnimationFrame = null
@@ -174,6 +193,11 @@ const stopTimelinePlayback = () => {
 
 const tickTimelinePlayback = (now: number) => {
   if (!isTimelinePlaying.value) {
+    return
+  }
+
+  if (cameraScripted) {
+    tickScriptedPlayback(now)
     return
   }
 
@@ -197,12 +221,18 @@ const startTimelinePlayback = () => {
     return
   }
 
-  if (timelineProgress.value >= 100) {
+  const restarted = timelineProgress.value >= 100
+  if (restarted) {
     timelineProgress.value = 0
   }
 
   isTimelinePlaying.value = true
   timelineLastTick = performance.now()
+  if (isTimelineFollow.value) {
+    startScriptedPlayback(restarted)
+  } else {
+    cameraScripted = false
+  }
   timelineAnimationFrame = requestAnimationFrame(tickTimelinePlayback)
 }
 
@@ -222,12 +252,330 @@ const toggleTimelineEnabled = () => {
   if (isTimelineEnabled.value) {
     stopTimelineDragging()
     stopTimelinePlayback()
+    stopTimelineFollowCamera()
     isTimelineEnabled.value = false
     return
   }
 
   isTimelineEnabled.value = true
 }
+
+const PLACE_RADIUS_KM = 40
+
+const distanceKm = (
+  latitudeA: number,
+  longitudeA: number,
+  latitudeB: number,
+  longitudeB: number,
+) => {
+  const toRad = Math.PI / 180
+  const dLat = (latitudeB - latitudeA) * toRad
+  const dLng = (longitudeB - longitudeA) * toRad
+  const lat1 = latitudeA * toRad
+  const lat2 = latitudeB * toRad
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h)))
+}
+
+type TimelinePlace = {
+  id: string
+  index: number
+  photos: { photo: (typeof datedPhotosWithLocation.value)[number]['photo']; timestamp: number }[]
+}
+
+const timelinePlaces = computed(() => {
+  const places: TimelinePlace[] = []
+  for (const entry of datedPhotosWithLocation.value) {
+    const latitude = entry.photo.latitude
+    const longitude = entry.photo.longitude
+    if (latitude == null || longitude == null) continue
+    const current = places[places.length - 1]
+    const anchor = current?.photos[0]?.photo
+    const samePlace =
+      current &&
+      anchor?.latitude != null &&
+      anchor.longitude != null &&
+      distanceKm(anchor.latitude, anchor.longitude, latitude, longitude) <=
+        PLACE_RADIUS_KM
+    if (current && samePlace) {
+      current.photos.push(entry)
+      continue
+    }
+    places.push({
+      id: entry.photo.id,
+      index: places.length,
+      photos: [entry],
+    })
+  }
+  return places
+})
+
+const activeTimelinePlace = computed(() => {
+  if (!isTimelineEnabled.value || timelineCutoffTimestamp.value == null) {
+    return null
+  }
+  const cutoff = timelineCutoffTimestamp.value
+  let active: TimelinePlace | null = null
+  for (const place of timelinePlaces.value) {
+    if (place.photos[0]!.timestamp <= cutoff) active = place
+  }
+  return active
+})
+
+let followedPlaceId: string | null = null
+
+const frameForPlace = (place: TimelinePlace) => {
+  const latitudes = place.photos.map((entry) => entry.photo.latitude!)
+  const longitudes = place.photos.map((entry) => entry.photo.longitude!)
+  const minLat = Math.min(...latitudes)
+  const maxLat = Math.max(...latitudes)
+  const minLng = Math.min(...longitudes)
+  const maxLng = Math.max(...longitudes)
+  const maxDiff = Math.max(maxLat - minLat, maxLng - minLng)
+  let zoom = 13.5
+  if (maxDiff < 0.02) zoom = 14
+  else if (maxDiff < 0.08) zoom = 12.5
+  else if (maxDiff < 0.25) zoom = 11
+  else if (maxDiff < 0.8) zoom = 9.5
+  else zoom = 8
+  return {
+    latitude: (minLat + maxLat) / 2,
+    longitude: (minLng + maxLng) / 2,
+    zoom,
+  }
+}
+
+const progressForTimestamp = (timestamp: number) => {
+  const range = timelineRange.value
+  if (!range || range.max <= range.min) return 100
+  return clampProgress(((timestamp - range.min) / (range.max - range.min)) * 100)
+}
+
+const glideDuration = (distance: number, dragging: boolean) => {
+  const base = dragging ? 3600 : 6500
+  const extra = Math.min(dragging ? 1600 : 4500, distance * 1.1)
+  return Math.round(Math.min(dragging ? 5600 : 12000, base + extra))
+}
+
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3
+
+const placeIndexForCutoff = (cutoff: number) => {
+  let index = 0
+  for (const place of timelinePlaces.value) {
+    if (place.photos[0]!.timestamp <= cutoff) index = place.index
+  }
+  return index
+}
+
+const distanceToPlace = (place: TimelinePlace) => {
+  const map = mapInstance.value
+  if (!map?.getCenter) return 0
+  const frame = frameForPlace(place)
+  const center = map.getCenter()
+  return distanceKm(center.lat, center.lng, frame.latitude, frame.longitude)
+}
+
+const armMapSettle = (token: number, flightMs: number) => {
+  clearMapSettleWait()
+  mapSettled = false
+  const map = mapInstance.value
+  if (!map?.on) {
+    mapSettled = true
+    return
+  }
+  let moveEnded = false
+  const started = performance.now()
+  let settleTimer: ReturnType<typeof setTimeout> | null = null
+  const onMoveEnd = () => {
+    if (token !== playbackToken || moveEnded) return
+    if (performance.now() - started < flightMs * 0.8) return
+    moveEnded = true
+    settleTimer = setTimeout(() => {
+      if (token === playbackToken) mapSettled = true
+    }, 450)
+  }
+  const onIdle = () => {
+    if (token !== playbackToken || !moveEnded) return
+    mapSettled = true
+  }
+  map.on('moveend', onMoveEnd)
+  map.on('idle', onIdle)
+  const timer = setTimeout(() => {
+    if (token === playbackToken) mapSettled = true
+  }, flightMs + 700)
+  idleCleanup = () => {
+    clearTimeout(timer)
+    if (settleTimer) clearTimeout(settleTimer)
+    map.off?.('moveend', onMoveEnd)
+    map.off?.('idle', onIdle)
+  }
+}
+
+const flyToTimelinePlace = (place: TimelinePlace, duration: number) => {
+  const map = mapInstance.value
+  if (!map?.flyTo || !map.getCenter || !map.getZoom) return 0
+  const frame = frameForPlace(place)
+  const center = map.getCenter()
+  const distance = distanceKm(
+    center.lat,
+    center.lng,
+    frame.latitude,
+    frame.longitude,
+  )
+  const options: Record<string, unknown> = {
+    center: [frame.longitude, frame.latitude],
+    zoom: frame.zoom,
+    essential: true,
+    duration,
+    curve: 1.05,
+    padding: { top: 48, bottom: 140, left: 48, right: 48 },
+  }
+  if (distance < 800) {
+    options.minZoom = Math.max(2, Math.min(map.getZoom(), frame.zoom) - 1.1)
+  }
+  followedPlaceId = place.id
+  map.flyTo(options)
+  return distance
+}
+
+const beginScriptedPlace = (index: number, now: number) => {
+  const place = timelinePlaces.value[index]
+  if (!place) {
+    timelineProgress.value = 100
+    stopTimelinePlayback()
+    return
+  }
+  placeCursor = index
+  scriptedPhase = 'travel'
+  phaseStart = now
+  phaseFrom = timelineProgress.value
+  const firstTimestamp = place.photos[0]!.timestamp
+  const rangeMin = timelineRange.value?.min ?? firstTimestamp
+  // Hold just before the first photo, so pins appear only after the camera has settled.
+  phaseTo = progressForTimestamp(Math.max(rangeMin, firstTimestamp - 1))
+  const distance = distanceToPlace(place)
+  if (distance < 0.4) {
+    phaseDuration = 500
+    mapSettled = true
+    followedPlaceId = place.id
+    return
+  }
+  phaseDuration = Math.max(glideDuration(distance, false), 6500)
+  playbackToken += 1
+  armMapSettle(playbackToken, phaseDuration)
+  flyToTimelinePlace(place, phaseDuration)
+}
+
+const startScriptedDwell = (now: number, fromTimestamp?: number) => {
+  const place = timelinePlaces.value[placeCursor]
+  if (!place) {
+    stopTimelinePlayback()
+    return
+  }
+  const next = timelinePlaces.value[placeCursor + 1]
+  const endTimestamp = next
+    ? next.photos[0]!.timestamp - 1
+    : (timelineRange.value?.max ?? place.photos[place.photos.length - 1]!.timestamp)
+  scriptedPhase = 'dwell'
+  phaseStart = now
+  phaseFrom = fromTimestamp == null
+    ? timelineProgress.value
+    : progressForTimestamp(fromTimestamp)
+  phaseTo = Math.max(phaseFrom, progressForTimestamp(endTimestamp))
+  const extraPhotos = Math.max(0, place.photos.length - 1)
+  phaseDuration = Math.min(8800, 1600 + extraPhotos * 110)
+  timelineProgress.value = phaseFrom
+}
+
+const startScriptedPlayback = (restarted: boolean) => {
+  cameraScripted = true
+  clearMapSettleWait()
+  const places = timelinePlaces.value
+  if (!places.length) {
+    stopTimelinePlayback()
+    return
+  }
+  const now = performance.now()
+  if (restarted) {
+    beginScriptedPlace(0, now)
+    return
+  }
+  const cutoff = timelineCutoffTimestamp.value ?? places[0]!.photos[0]!.timestamp
+  const index = placeIndexForCutoff(cutoff)
+  const place = places[index]!
+  const next = places[index + 1]
+  const finished = next
+    ? cutoff >= next.photos[0]!.timestamp
+    : timelineProgress.value >= 99.5
+  if (cutoff >= place.photos[0]!.timestamp && !finished) {
+    placeCursor = index
+    followedPlaceId = place.id
+    startScriptedDwell(now, cutoff)
+    return
+  }
+  beginScriptedPlace(index, now)
+}
+
+const tickScriptedPlayback = (now: number) => {
+  const t = Math.min(1, (now - phaseStart) / Math.max(phaseDuration, 1))
+  const eased = scriptedPhase === 'travel' ? easeOutCubic(t) : t
+  timelineProgress.value = phaseFrom + (phaseTo - phaseFrom) * eased
+
+  if (scriptedPhase === 'travel' && t >= 1 && mapSettled) {
+    timelineProgress.value = phaseTo
+    startScriptedDwell(now)
+  } else if (scriptedPhase === 'dwell' && t >= 1) {
+    beginScriptedPlace(placeCursor + 1, now)
+  }
+
+  if (!isTimelinePlaying.value) return
+  timelineAnimationFrame = requestAnimationFrame(tickTimelinePlayback)
+}
+
+const stopTimelineFollowCamera = () => {
+  followedPlaceId = null
+  mapInstance.value?.stop?.()
+}
+
+const syncTimelineCamera = (force = false) => {
+  if (cameraScripted) return
+  if (!isTimelineFollow.value || !isTimelineEnabled.value) return
+  if (!force && !isTimelinePlaying.value && !isTimelineDragging.value) return
+  const place = activeTimelinePlace.value
+  if (!place) return
+  if (!force && place.id === followedPlaceId) return
+  flyToTimelinePlace(
+    place,
+    glideDuration(distanceToPlace(place), isTimelineDragging.value),
+  )
+}
+
+const toggleTimelineFollow = () => {
+  isTimelineFollow.value = !isTimelineFollow.value
+  if (!isTimelineFollow.value) {
+    cameraScripted = false
+    playbackToken += 1
+    clearMapSettleWait()
+    stopTimelineFollowCamera()
+    timelineLastTick = performance.now()
+    return
+  }
+  if (isTimelinePlaying.value) {
+    startScriptedPlayback(false)
+    return
+  }
+  syncTimelineCamera(true)
+}
+
+watch(
+  () => activeTimelinePlace.value?.id,
+  () => {
+    if (cameraScripted) return
+    syncTimelineCamera(false)
+  },
+)
 
 const currentClusterPointId = ref<string | null>(null)
 const mapInstance = ref<any>(null)
@@ -485,6 +833,13 @@ const onMapLoaded = (map: any) => {
   }
 
   currentZoom.value = map.getZoom()
+  if (
+    isTimelineFollow.value &&
+    isTimelineEnabled.value &&
+    (isTimelinePlaying.value || isTimelineDragging.value)
+  ) {
+    syncTimelineCamera(true)
+  }
 }
 
 const onMapZoom = useThrottleFn(() => {
@@ -708,6 +1063,18 @@ onBeforeUnmount(() => {
                   : ''
               "
               @click="toggleTimelinePlayback"
+            />
+          </UTooltip>
+          <UTooltip
+            :text="$t('globe.timeline.follow')"
+            :delay-duration="0"
+          >
+            <GlassButton
+              size="sm"
+              icon="tabler:current-location"
+              :active="isTimelineFollow"
+              :class="!hasTimelineData ? 'opacity-40 pointer-events-none' : ''"
+              @click="toggleTimelineFollow"
             />
           </UTooltip>
           <div class="min-w-0 flex-1">

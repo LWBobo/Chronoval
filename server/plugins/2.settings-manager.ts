@@ -60,12 +60,17 @@ async function migrateRuntimeConfigToSettings() {
     // Migrate map settings
     if (config.public.map) {
       _logger.info('Migrating map settings')
-      const mapSettings = {
-        provider: config.public.map.provider,
+      // Only an explicit env override should replace the saved provider.
+      // The compiled default is maplibre, and writing it on every boot would
+      // wipe a later choice such as protomaps.
+      const mapSettings: Record<string, string> = {
         'mapbox.token': config.mapbox?.accessToken || '',
         'mapbox.style': config.public.map.mapbox?.style || '',
         'maplibre.token': config.public.map.maplibre?.token || '',
         'maplibre.style': config.public.map.maplibre?.style || '',
+      }
+      if (process.env.NUXT_PUBLIC_MAP_PROVIDER) {
+        mapSettings.provider = process.env.NUXT_PUBLIC_MAP_PROVIDER
       }
 
       for (const [key, value] of Object.entries(mapSettings)) {

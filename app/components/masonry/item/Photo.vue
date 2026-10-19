@@ -42,7 +42,9 @@ const isVideoPlaying = ref(false)
 const isVideoLoaded = ref(false)
 const videoBlob = ref<Blob | null>(null)
 const videoBlobUrl = ref<string | null>(null)
-const { convertMovToMp4, getProcessingState } = useLivePhotoProcessor()
+const { convertMovToMp4, scheduleBackgroundLivePhoto, getProcessingState } =
+  useLivePhotoProcessor()
+const livePhotoQueued = ref(false)
 
 const isTouching = ref(false)
 const touchCount = ref(0)
@@ -160,6 +162,7 @@ const shouldShowInfoOverlay = computed(() => {
 // Methods
 const handleImageLoad = () => {
   isLoading.value = false
+  queueLivePhotoAfterStill()
 }
 
 const handleImageError = () => {
@@ -388,7 +391,55 @@ const handleClick = (event: Event) => {
   emit('openViewer', props.index)
 }
 
-// 智能LivePhoto处理：基于可见性和用户行为
+// 静图出来之后，等浏览器空闲再排队下载动态短视频。慢网或省流时不预取，避免和缩略图抢带宽。
+const queueLivePhotoAfterStill = () => {
+  if (
+    livePhotoQueued.value ||
+    isLoading.value ||
+    !isVisible.value ||
+    !props.photo.isLivePhoto ||
+    !props.photo.livePhotoVideoUrl
+  ) {
+    return
+  }
+  const connection = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string }
+    }
+  ).connection
+  if (
+    connection?.saveData ||
+    connection?.effectiveType === 'slow-2g' ||
+    connection?.effectiveType === '2g' ||
+    connection?.effectiveType === '3g'
+  ) {
+    return
+  }
+  livePhotoQueued.value = true
+  const photoId = props.photo.id
+  const videoUrl = props.photo.livePhotoVideoUrl
+  const run = () => {
+    if (!isVisible.value) {
+      livePhotoQueued.value = false
+      return
+    }
+    scheduleBackgroundLivePhoto(videoUrl, photoId).then((blob) => {
+      if (!blob || props.photo.id !== photoId) return
+      videoBlob.value = blob
+      if (videoBlobUrl.value) URL.revokeObjectURL(videoBlobUrl.value)
+      videoBlobUrl.value = URL.createObjectURL(blob)
+      isVideoLoaded.value = true
+      videoRef.value?.load()
+    })
+  }
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 2000 })
+  } else {
+    setTimeout(run, 400)
+  }
+}
+
+// 智能LivePhoto处理：悬停时立即加载，不等后台队列
 const processLivePhotoWhenVisible = async () => {
   if (
     !props.photo.isLivePhoto ||
@@ -488,11 +539,8 @@ onMounted(() => {
                 date: props.photo.dateTaken || new Date().toISOString(),
               })
 
-              // Process LivePhoto when it becomes visible
-              if (newVisibility) {
-                nextTick(() => {
-                  processLivePhotoWhenVisible()
-                })
+              if (newVisibility && !isLoading.value) {
+                queueLivePhotoAfterStill()
               }
             }
           })

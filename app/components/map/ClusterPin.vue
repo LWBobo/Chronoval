@@ -2,7 +2,7 @@
 import { motion } from 'motion-v'
 import ThumbImage from '../ui/ThumbImage.vue'
 import { twMerge } from 'tailwind-merge'
-import type { ClusterPoint } from '~~/shared/types/map'
+import type { ClusterPoint, PhotoMarker } from '~~/shared/types/map'
 
 const props = withDefaults(
   defineProps<{
@@ -22,6 +22,18 @@ const emit = defineEmits<{
 }>()
 
 const dayjs = useDayjs()
+const previewOpen = ref(false)
+const previewPhoto = ref<PhotoMarker | null>(null)
+
+const openPreview = (photo: PhotoMarker) => {
+  previewPhoto.value = photo
+  previewOpen.value = true
+}
+
+const onPreviewOpen = (open: boolean) => {
+  previewOpen.value = open
+  if (!open) previewPhoto.value = null
+}
 
 const onClick = () => {
   emit('click', props.clusterPoint)
@@ -146,7 +158,7 @@ const sizeDelta = computed(() => {
                       }}
                     </h3>
                     <div class="text-neutral-500 dark:text-muted text-[10px]">
-                      {{ $t('map.cluster.details') }}
+                      {{ $t('map.cluster.previewHint') }}
                     </div>
                   </div>
                   <!-- Show grid of photos for cluster -->
@@ -165,52 +177,72 @@ const sizeDelta = computed(() => {
                         duration: 0.4,
                         bounce: 0,
                       }"
-                      class="relative overflow-hidden rounded group"
+                      class="group"
                     >
+                      <div class="relative overflow-hidden rounded">
+                        <button
+                          type="button"
+                          class="block w-full cursor-zoom-in"
+                          :aria-label="photo.title || $t('map.photo.altFallback', { id: photo.id })"
+                          @click.stop="openPreview(photo)"
+                        >
+                          <ThumbImage
+                            :src="photo.thumbnailUrl!"
+                            :alt="photo.title || $t('map.photo.altFallback', { id: photo.id })"
+                            :thumbhash="photo.thumbnailHash"
+                            :threshold="0.1"
+                            root-margin="200px"
+                            class="pointer-events-none aspect-square w-full object-cover"
+                          />
+                        </button>
+                        <div
+                          class="absolute inset-0 bg-white/30 dark:bg-black/20 duration-300 flex justify-center items-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                        >
+                          <div
+                            class="rounded-full bg-white/80 dark:bg-black/50 p-2 backdrop-blur-sm flex justify-center items-center"
+                          >
+                            <Icon
+                              name="tabler:zoom-in"
+                              class="text-neutral-700 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div
+                          v-if="
+                            index === clusterCount - 1 &&
+                            clusteredPhotos.length > clusterCount
+                          "
+                          class="absolute inset-0 bg-white/80 dark:bg-black/60 flex items-center justify-center pointer-events-none"
+                        >
+                          <span
+                            class="text-neutral-800 dark:text-white text-lg font-bold"
+                          >
+                            +{{ clusteredPhotos.length - clusterCount }}
+                          </span>
+                        </div>
+                      </div>
                       <NuxtLink
-                        class="block w-full h-full"
                         :to="`/${photo.id}`"
                         target="_blank"
                         rel="noopener"
+                        class="block truncate px-0.5 pt-0.5 text-[10px] leading-tight text-neutral-800 hover:underline dark:text-white"
+                        @click.stop
                       >
-                        <ThumbImage
-                          :src="photo.thumbnailUrl!"
-                          :alt="photo.title || $t('map.photo.altFallback', { id: photo.id })"
-                          :thumbhash="photo.thumbnailHash"
-                          :threshold="0.1"
-                          root-margin="200px"
-                          class="w-full aspect-square object-cover"
-                        />
+                        {{ photo.title || $t('map.photo.altFallback', { id: photo.id }) }}
                       </NuxtLink>
-                      <!-- Hover overlay -->
-                      <div
-                        class="absolute inset-0 bg-white/30 dark:bg-black/20 duration-300 flex justify-center items-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer pointer-events-none"
-                      >
-                        <div
-                          class="rounded-full bg-white/80 dark:bg-black/50 p-2 backdrop-blur-sm flex justify-center items-center"
-                        >
-                          <Icon
-                            name="tabler:external-link"
-                            class="text-neutral-700 dark:text-white"
-                          />
-                        </div>
-                      </div>
-                      <!-- Show +N overlay for the last image if there are more -->
-                      <div
-                        v-if="
-                          index === clusterCount - 1 &&
-                          clusteredPhotos.length > clusterCount
-                        "
-                        class="absolute inset-0 bg-white/80 dark:bg-black/60 flex items-center justify-center cursor-pointer pointer-events-none"
-                      >
-                        <span
-                          class="text-neutral-800 dark:text-white text-lg font-bold"
-                        >
-                          +{{ clusteredPhotos.length - clusterCount }}
-                        </span>
-                      </div>
                     </motion.div>
                   </div>
+                  <MapPhotoLightbox
+                    :open="previewOpen"
+                    :src="previewPhoto?.thumbnailUrl"
+                    :alt="
+                      previewPhoto?.title ||
+                      (previewPhoto
+                        ? $t('map.photo.altFallback', { id: previewPhoto.id })
+                        : '')
+                    "
+                    @update:open="onPreviewOpen"
+                  />
 
                   <div class="relative space-y-1">
                     <!-- cities -->

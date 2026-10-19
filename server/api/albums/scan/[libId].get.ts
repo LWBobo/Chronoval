@@ -13,6 +13,7 @@ import {
 import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
 import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
+import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
 
 export default eventHandler(async (event) => {
   const { libId } = await getValidatedRouterParams(
@@ -153,10 +154,32 @@ export default eventHandler(async (event) => {
     }
   }
 
+  const blockedByPerson = blockedPhotoIdsForActor(actor)
+  const hideBlockedCovers = (node: any): any => {
+    if (!node || blockedByPerson.size === 0) return node
+    const covers = Array.isArray(node.covers)
+      ? node.covers.filter(
+          (cover: { id?: string }) => cover?.id && !blockedByPerson.has(cover.id),
+        )
+      : node.covers
+    return {
+      ...node,
+      covers,
+      ...(node.children?.length
+        ? { children: node.children.map(hideBlockedCovers) }
+        : {}),
+    }
+  }
+  const node = hideBlockedCovers(await withRandomQuotePool(detail.node))
+  const children = await Promise.all(
+    detail.children.map(async (child) => hideBlockedCovers(await withRandomQuotePool(child))),
+  )
+
   return {
     ...detail,
-    node: await withRandomQuotePool(detail.node),
-    children: await Promise.all(detail.children.map(withRandomQuotePool)),
+    dirPhotos: detail.dirPhotos.filter((photo) => !blockedByPerson.has(photo.id)),
+    node,
+    children,
     childInParent,
     childPosition,
     passwordProtected,

@@ -1,6 +1,7 @@
 import z from 'zod'
 import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
 import { generateAlbumUid } from '~~/server/utils/albumUid'
+import { ensureAlbumVisibilityColumn } from '~~/server/utils/albumVisibility'
 import { eq, tables } from '~~/server/utils/db'
 
 export default eventHandler(async (event) => {
@@ -13,6 +14,7 @@ export default eventHandler(async (event) => {
       coverPhotoId: z.string().optional(),
       photoIds: z.array(z.string()).optional(),
       isHidden: z.boolean().optional(),
+      visibility: z.enum(['public', 'login', 'admin']).optional(),
       // 首页照片画廊隐藏：开启后照片不进首页照片流
       hideFromGallery: z.boolean().optional(),
       // 照片展示布局：瀑布流 / 统一网格 / 沉浸式看图
@@ -45,7 +47,10 @@ export default eventHandler(async (event) => {
     }).parse,
   )
 
+  ensureAlbumVisibilityColumn()
   const db = useDB()
+  const visibility = body.visibility ?? (body.isHidden ? 'login' : 'public')
+  const isHidden = visibility !== 'public'
 
   // 密码处理：与扫描相簿一致，非空明文 → 带盐哈希存储
   const passwordHash = body.password?.trim()
@@ -72,7 +77,8 @@ export default eventHandler(async (event) => {
         title: body.title,
         description: body.description || null,
         coverPhotoId: body.coverPhotoId || null,
-        isHidden: body.isHidden || false,
+        isHidden,
+        visibility,
         hideFromGallery: body.hideFromGallery || false,
         layout: body.layout || 'waterfall',
         randomWheelAnimation: body.randomWheelAnimation || false,

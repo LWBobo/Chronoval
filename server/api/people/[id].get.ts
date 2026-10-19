@@ -1,11 +1,14 @@
 import {
+  canSeePerson,
   faceThumbnailUrl,
   getPerson,
   getPersonPhotoIds,
+  normalizeVisibility,
 } from '~~/server/services/ml/person.service'
 import { canDiscoverPhoto, loadPhotoAccess } from '~~/server/utils/photo-access'
 
 export default eventHandler(async (event) => {
+  setHeader(event, 'Cache-Control', 'private, no-store')
   const id = getRouterParam(event, 'id')
   if (!id) {
     throw createError({ statusCode: 400, message: 'Missing person id' })
@@ -17,10 +20,10 @@ export default eventHandler(async (event) => {
   }
 
   const actor = await getActor(event)
-  // 隐藏人物仅管理员可见
-  if (person.isHidden && !actor.isAdmin) {
+  if (!canSeePerson(person, actor)) {
     throw createError({ statusCode: 404, message: 'Person not found' })
   }
+  const visibility = normalizeVisibility(person)
 
   const access = await loadPhotoAccess(event)
   const photos = getPersonPhotoIds(id)
@@ -51,6 +54,8 @@ export default eventHandler(async (event) => {
   return {
     person: {
       ...person,
+      visibility,
+      isHidden: visibility !== 'public',
       faceCount: photos.length,
       thumbnailUrl: faceThumbnailUrl(visibleFace?.id || person.thumbnailFaceId),
     },

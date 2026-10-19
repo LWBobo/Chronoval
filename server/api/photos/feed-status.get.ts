@@ -1,6 +1,7 @@
 import { and, isNull } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
+import { viewerFromActor } from '~~/server/services/ml/person.service'
 
 /**
  * 画廊"指纹"接口（轻量）：只返回当前画廊可见照片的 数量 + 最新拍摄时间，
@@ -26,7 +27,7 @@ export default eventHandler(async (event) => {
     .where(
       and(
         isNull(tables.photos.deletedAt),
-        homepageGalleryVisibilitySql(Boolean(actor.user)),
+        homepageGalleryVisibilitySql(Boolean(actor.user), viewerFromActor(actor)),
       ),
     )
     .all()

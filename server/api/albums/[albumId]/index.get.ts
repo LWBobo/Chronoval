@@ -5,6 +5,12 @@ import { isPasswordExemptForUser, parseExemptUsers } from '~~/server/utils/album
 import { isAlbumAdminBypass, redactAlbumSecrets } from '~~/server/utils/albumAccess'
 import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { getDisabledScanMountSet } from '~~/server/services/scan-library/manager'
+import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
+import {
+  albumOpenToActor,
+  ensureAlbumVisibilityColumn,
+  normalizeAlbumVisibility,
+} from '~~/server/utils/albumVisibility'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
 
 export default eventHandler(async (event) => {
@@ -33,6 +39,7 @@ export default eventHandler(async (event) => {
     }).parse,
   )
 
+  ensureAlbumVisibilityColumn()
   const db = useDB()
 
   // 纯数字 → 按 id；否则按 uid
@@ -59,14 +66,17 @@ export default eventHandler(async (event) => {
   // 整套相簿公开逻辑以整数 id 为内部主键，统一定位内部 id
   const albumPk = album.id
 
-  // 检查相册是否隐藏，如果隐藏则需要用户登录才能访问
+  // 公开所有人可见；仅登录需要账号；仅管理员对普通账号也是 404。
+  // 仅登录且设了密码时，访客仍可打开密码页。仅管理员即使有密码也不对普通账号开放。
   const actor = await getActor(event)
-
-  if (album.isHidden && !album.passwordHash && !actor.user) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: 'Album not found',
-    })
+  const visibility = normalizeAlbumVisibility(album)
+  if (!(query.manage === '1' && actor.isAdmin) && !albumOpenToActor(album, actor)) {
+    if (visibility === 'admin' || !album.passwordHash) {
+      throw createError({
+        statusCode: 404,
+        statusMessage: 'Album not found',
+      })
+    }
   }
 
   // 密码访问权判定（与扫描相簿一致）：只有显式打开「管理员免密」开关才放行管理员，
@@ -168,8 +178,9 @@ export default eventHandler(async (event) => {
 
   // 兜底去重：防御历史脏数据导致的重复行（正常由唯一索引保证唯一）
   const seen = new Set<string>()
+  const blockedByPerson = manageMode ? new Set<string>() : blockedPhotoIdsForActor(actor)
   const uniquePhotos = photos.filter((p) => {
-    if (seen.has(p.id)) return false
+    if (seen.has(p.id) || blockedByPerson.has(p.id)) return false
     seen.add(p.id)
     return true
   })

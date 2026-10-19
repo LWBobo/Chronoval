@@ -1,16 +1,30 @@
 import { sql, type SQL } from 'drizzle-orm'
+import {
+  photoAllowedByPeopleSql,
+  type PersonViewer,
+} from '~~/server/services/ml/person.service'
+import { ensureAlbumVisibilityColumn } from '~~/server/utils/albumVisibility'
 
 /**
  * 首页瀑布流可见性，随当前是否登录变化：
- * - 仅「登录可见」（相簿隐藏、且没有访问密码）：未登录不显示，登录后显示。
+ * - 仅「登录可见」（相簿 visibility=login、且没有访问密码）：未登录不显示，登录后显示。
+ * - 「仅管理员」（visibility=admin）：普通登录用户和访客的首页都不显示。
  * - 「输入密码可见」：瀑布流始终不显示，只能进入相簿后查看。
  * - 「首页照片画廊隐藏」：始终不显示。
+ * - 照片中任意一个人当前访问者不可见时，整张照片不显示。
+ *   其中一个人改回公开后，只要还有人是登录可见或仅管理员，照片继续隐藏。
  *
  * 扫描子相簿沿目录取最长的 scan_album_meta 作为隐藏状态；
  * 自身或任一上级设了密码，则该目录下的照片不进瀑布流。
  */
-export const homepageGalleryVisibilitySql = (loggedIn: boolean): SQL => {
+export const homepageGalleryVisibilitySql = (
+  loggedIn: boolean,
+  peopleViewer?: PersonViewer,
+): SQL => {
+  ensureAlbumVisibilityColumn()
   const loggedInSql = loggedIn ? sql`1` : sql`0`
+  const viewer = peopleViewer ?? (loggedIn ? 'user' : 'public')
+  const adminViewer = viewer === 'admin' ? sql`1` : sql`0`
 
   // 照片所在目录是否落在某条扫描相簿元数据下（前缀匹配，避开 LIKE 通配符）
   const inFolder = sql`(
@@ -37,7 +51,20 @@ export const homepageGalleryVisibilitySql = (loggedIn: boolean): SQL => {
            ${tables.albums.passwordHash} IS NOT NULL
            AND ${tables.albums.passwordHash} != ''
          )
-         OR (${tables.albums.isHidden} = 1 AND ${loggedInSql} = 0)
+         OR (
+           ${tables.albums.visibility} = 'admin'
+           AND ${adminViewer} = 0
+         )
+         OR (
+           (
+             ${tables.albums.visibility} = 'login'
+             OR (
+               (${tables.albums.visibility} IS NULL OR ${tables.albums.visibility} = '')
+               AND ${tables.albums.isHidden} = 1
+             )
+           )
+           AND ${loggedInSql} = 0
+         )
     )
     AND (
       ${tables.photos.libraryMount} IS NULL
@@ -63,5 +90,6 @@ export const homepageGalleryVisibilitySql = (loggedIn: boolean): SQL => {
         )
       )
     )
+    AND ${photoAllowedByPeopleSql(viewer)}
   )`
 }

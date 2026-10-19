@@ -158,6 +158,7 @@ export const MAP_SETTINGS_UI: Record<string, FieldUIConfig> = {
     options: [
       { label: 'MapBox', value: 'mapbox' },
       { label: 'MapLibre', value: 'maplibre' },
+      { label: 'Protomaps', value: 'protomaps' },
     ],
   },
   'mapbox.token': {
@@ -183,6 +184,12 @@ export const MAP_SETTINGS_UI: Record<string, FieldUIConfig> = {
     type: 'input',
     placeholder: 'https://example.com/style.json',
     visibleIf: { fieldKey: 'provider', value: 'maplibre' },
+  },
+  'protomaps.file': {
+    type: 'input',
+    placeholder: '20261018.pmtiles',
+    visibleIf: { fieldKey: 'provider', value: 'protomaps' },
+    help: 'settings.map.protomaps.file.help',
   },
 }
 

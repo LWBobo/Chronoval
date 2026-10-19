@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import sharp from 'sharp'
 import { loadPhotoImageBuffer } from '~~/server/services/ml/photo-image'
+import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
 
 export default eventHandler(async (event) => {
   const faceId = getRouterParam(event, 'faceId')
@@ -29,7 +30,12 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Photo not found' })
   }
 
-  setHeader(event, 'Cache-Control', 'public, max-age=86400')
+  const actor = await getActor(event)
+  if (blockedPhotoIdsForActor(actor).has(photo.id)) {
+    throw createError({ statusCode: 404, message: 'Photo not found' })
+  }
+
+  setHeader(event, 'Cache-Control', 'private, no-store')
 
   try {
     const loaded = await loadPhotoImageBuffer(face.photoId)

@@ -179,6 +179,7 @@ const onError = () => {
     <img
       v-if="isElemVisible"
       loading="lazy"
+      decoding="async"
       :src="displayedSrc"
       :alt="alt"
       :class="

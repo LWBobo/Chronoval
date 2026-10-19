@@ -405,6 +405,7 @@
     "globe": "写真グローブ",
     "queue": "キュー管理",
     "logs": "システムログ",
+    "watermark": "透かしを除去",
     "albums": "アルバム",
     "siteAdministration": "サイト設定",
     "generalSettings": "一般設定",
@@ -1119,6 +1120,33 @@
         "type": "タイプでフィルター"
       },
       "taskListTitle": "タスクキュー"
+    },
+    "watermark": {
+      "title": "透かしを除去",
+      "description": "有効なライブラリを走査し、Xiaomi の時刻透かし付き JPEG を一覧します。実行すると元ファイルを書き換え、ファイル内の元画像パッチで時刻を覆います。撮影情報と末尾のモーションフォト動画は残します。位置が合わない、動画が見つからない、書き込みに失敗した場合は元ファイルを変更しません。",
+      "scan": "走査",
+      "scanning": "走査中…",
+      "scanDone": "走査完了",
+      "scanDoneDescription": "透かし付き写真 {count} 枚",
+      "scanFailed": "走査に失敗しました",
+      "clear": "透かしを除去",
+      "clearDone": "除去完了",
+      "clearDoneDescription": "除去 {cleaned} 枚、失敗 {failed} 枚",
+      "clearFailed": "除去に失敗しました",
+      "selectAll": "すべて選択",
+      "selectedCount": "{count} 枚を選択",
+      "empty": "まだ結果がありません。マウント済みライブラリを走査してください。",
+      "unavailable": "読み取れないライブラリ",
+      "confirmTitle": "選択した写真の透かしを除去",
+      "confirmBody": "{count} 件の元ファイルを直接変更します。元に戻せません。",
+      "confirm": "透かしを除去",
+      "cancel": "キャンセル",
+      "stats": {
+        "mounts": "ライブラリ",
+        "scanned": "確認済み",
+        "found": "透かしあり",
+        "selected": "選択中"
+      }
     },
     "logs": {
       "connectionStatus": {

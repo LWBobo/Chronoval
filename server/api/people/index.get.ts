@@ -2,6 +2,11 @@ import { inArray } from 'drizzle-orm'
 import {
   faceThumbnailUrl,
   listPeople,
+  normalizeVisibility,
+  personWithMeta,
+  photoCountByPerson,
+  viewerFromActor,
+  visibilityAllows,
 } from '~~/server/services/ml/person.service'
 import {
   canDiscoverPhoto,
@@ -9,6 +14,7 @@ import {
 } from '~~/server/utils/photo-access'
 
 export default eventHandler(async (event) => {
+  setHeader(event, 'Cache-Control', 'private, no-store')
   const query = getQuery(event)
   const rawMin = query.minFaces
   const parsedMin =
@@ -17,12 +23,21 @@ export default eventHandler(async (event) => {
       : Number(rawMin)
   const minFaces = Number.isFinite(parsedMin) ? Math.max(0, parsedMin) : 1
 
-  const { isAdmin } = await getActor(event)
-  const includeHidden =
-    isAdmin &&
-    (query.includeHidden === '1' ||
-      query.includeHidden === 'true' ||
-      query.includeHidden === true)
+  const actor = await getActor(event)
+  const viewer = viewerFromActor(actor)
+  const manage =
+    query.manage === '1' || query.manage === 'true' || query.manage === true
+  if (manage) {
+    if (!actor.isAdmin) {
+      throw createError({ statusCode: 403, message: 'Admin privileges required' })
+    }
+    const counts = photoCountByPerson()
+    const people = listPeople({ viewer: 'admin', minFaces: 0 }).map((person) => ({
+      ...personWithMeta(person),
+      photoCount: counts.get(person.id) ?? 0,
+    }))
+    return { people }
+  }
 
   const access = await loadPhotoAccess(event)
   const faces = useDB()
@@ -61,7 +76,7 @@ export default eventHandler(async (event) => {
     else facesByPerson.set(face.personId, [item])
   }
 
-  const people = listPeople({ includeHidden, minFaces: 0 })
+  const people = listPeople({ viewer, minFaces: 0 })
     .map((person) => {
       const visibleFaces = facesByPerson.get(person.id) || []
       if (
@@ -76,8 +91,12 @@ export default eventHandler(async (event) => {
       )
         ? person.thumbnailFaceId
         : visibleFaces[0]?.id
+      const visibility = normalizeVisibility(person)
+      if (!visibilityAllows(visibility, viewer)) return null
       return {
         ...person,
+        visibility,
+        isHidden: visibility !== 'public',
         faceCount: visibleFaces.length,
         thumbnailFaceId,
         thumbnailUrl: faceThumbnailUrl(thumbnailFaceId),

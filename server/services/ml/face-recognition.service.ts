@@ -149,6 +149,7 @@ export async function processFaceRecognition(options?: {
         .values({
           id: personId,
           name: null,
+          visibility: 'public',
           isHidden: false,
           thumbnailFaceId: face.id,
           faceCount: 0,

@@ -29,6 +29,10 @@ const emit = defineEmits<{
 }>()
 
 const isMobile = useMediaQuery('(max-width: 768px)')
+const { convertMovToMp4 } = useLivePhotoProcessor()
+const liveVideoUrl = ref<string | null>(null)
+const livePlaying = ref(false)
+const liveVideoRef = ref<HTMLVideoElement | null>(null)
 const toast = useToast()
 const swiperRef = ref<SwiperType>()
 const loadingIndicatorRef = ref<LoadingIndicatorRef>()
@@ -101,6 +105,47 @@ const zoomLevel = ref(0)
 const zoomLevelTimer = ref<NodeJS.Timeout | null>(null)
 
 const currentPhoto = computed(() => props.photos[props.currentIndex])
+
+const clearLiveVideo = () => {
+  livePlaying.value = false
+  if (liveVideoUrl.value) URL.revokeObjectURL(liveVideoUrl.value)
+  liveVideoUrl.value = null
+}
+
+watch(
+  () => currentPhoto.value?.id,
+  () => {
+    clearLiveVideo()
+  },
+)
+
+const startLivePhoto = async () => {
+  const photo = currentPhoto.value
+  if (!photo?.isLivePhoto || !photo.livePhotoVideoUrl || isZoomed.value) return
+  if (!liveVideoUrl.value) {
+    const blob = await convertMovToMp4(photo.livePhotoVideoUrl, photo.id)
+    if (!blob || currentPhoto.value?.id !== photo.id) return
+    liveVideoUrl.value = URL.createObjectURL(blob)
+  }
+  livePlaying.value = true
+  await nextTick()
+  const video = liveVideoRef.value
+  if (!video) return
+  video.currentTime = 0
+  video.play().catch(() => {
+    livePlaying.value = false
+  })
+}
+
+onUnmounted(clearLiveVideo)
+
+const stopLivePhoto = () => {
+  livePlaying.value = false
+  const video = liveVideoRef.value
+  if (!video) return
+  video.pause()
+  video.currentTime = 0
+}
 
 // 背景模糊图：切换图片时新图需重新加载，若直接隐藏背景会露出 #0a0a0e 底色造成「黑屏闪烁」。
 // 因此用双层交叉淡化 —— persistentBlur 保留「上一张已加载」的模糊图作为持续底图，
@@ -430,6 +475,11 @@ const swiperModules = [Navigation, Keyboard, Virtual]
         class="fixed inset-0 z-[130] flex items-center justify-center"
         :style="{ touchAction: isMobile ? 'manipulation' : 'none' }"
         @click.self="emit('close')"
+        @mouseenter="startLivePhoto"
+        @mouseleave="stopLivePhoto"
+        @touchstart.passive="startLivePhoto"
+        @touchend="stopLivePhoto"
+        @touchcancel="stopLivePhoto"
       >
         <!-- 顶部工具栏：移动端左信息、桌面右上侧栏；不显示标题/日期（底部已有计数，参数在信息面板） -->
         <div
@@ -437,6 +487,11 @@ const swiperModules = [Navigation, Keyboard, Virtual]
           :class="isMobile ? 'top-2 right-2 left-2' : 'top-4 right-4 left-4'"
         >
           <div class="pointer-events-auto flex min-w-0 items-center gap-2">
+            <PhotoLivePhotoIndicator
+              v-if="infoPhoto?.isLivePhoto"
+              :photo="infoPhoto"
+              :is-video-playing="livePlaying"
+            />
             <button
               v-if="isMobile"
               type="button"
@@ -487,6 +542,17 @@ const swiperModules = [Navigation, Keyboard, Virtual]
         </div>
 
         <LoadingIndicator ref="loadingIndicatorRef" />
+
+        <video
+          v-if="liveVideoUrl"
+          ref="liveVideoRef"
+          :src="liveVideoUrl"
+          class="pointer-events-none absolute inset-0 z-10 h-full w-full object-contain transition-opacity duration-200"
+          :class="livePlaying ? 'opacity-100' : 'opacity-0'"
+          muted
+          playsinline
+          loop
+        />
 
         <!-- 缩放倍率提示（与首页查看器一致）：缩放或纹理构建后短暂显示 -->
         <AnimatePresence>

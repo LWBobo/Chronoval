@@ -7,6 +7,7 @@ import {
   blob,
   uniqueIndex,
   index,
+  primaryKey,
 } from 'drizzle-orm/sqlite-core'
 import type { NeededExif } from '~~/shared/types/photo'
 import type { StorageConfig } from '../services/storage'
@@ -259,6 +260,10 @@ export const albums = sqliteTable('albums', {
     onDelete: 'set null',
   }),
   isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
+  // 公开 / 仅登录 / 仅管理员。非 public 时 isHidden 同步为 true，兼容旧的登录门槛。
+  visibility: text('visibility', { enum: ['public', 'login', 'admin'] })
+    .notNull()
+    .default('public'),
   // 首页照片画廊展示开关（仅普通相簿）：开启后该相簿的照片不进入首页全局照片流
   hideFromGallery: integer('hide_from_gallery', { mode: 'boolean' }).default(false).notNull(),
   // 相簿访问密码哈希（单向存储）；null=未设置密码（开放）
@@ -550,6 +555,11 @@ export const people = sqliteTable(
     name: text('name'),
     /** Reserved. Null while Chronoval is single-tenant. */
     ownerId: text('owner_id'),
+    /** 人物相册可见范围：public 所有人 / login 登录用户 / admin 仅管理员 */
+    visibility: text('visibility', { enum: ['public', 'login', 'admin'] })
+      .default('public')
+      .notNull(),
+    /** 非 public 时为 true，供仍读取该列的旧逻辑识别“未完全公开” */
     isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
     thumbnailFaceId: text('thumbnail_face_id'),
     faceCount: integer('face_count').default(0).notNull(),
@@ -561,6 +571,26 @@ export const people = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (table) => [index('idx_people_name').on(table.name)],
+)
+
+/** 手动加入人物相册的照片（人脸检测漏掉时由管理员补上） */
+export const personPhotos = sqliteTable(
+  'person_photos',
+  {
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id, { onDelete: 'cascade' }),
+    photoId: text('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.personId, table.photoId] }),
+    index('idx_person_photos_photo').on(table.photoId),
+  ],
 )
 
 /** 检测到的人脸框 */
@@ -632,6 +662,88 @@ export const photoFaceScans = sqliteTable('photo_face_scans', {
     .notNull()
     .default(sql`(unixepoch())`),
 })
+
+/**
+ * 管理员维护的搜图候选标签。模型只能从这里面打标签。
+ * nameKey / aliasKey 用于大小写不敏感的唯一约束。
+ */
+export const mlTags = sqliteTable(
+  'ml_tags',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    nameKey: text('name_key').notNull(),
+    prompt: text('prompt').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [uniqueIndex('ml_tags_name_key_unique').on(table.nameKey)],
+)
+
+/** 一个标签多行同义词。aliasKey 全局唯一，同一个词不能挂到两个标签上。 */
+export const mlTagAliases = sqliteTable(
+  'ml_tag_aliases',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    tagId: integer('tag_id')
+      .notNull()
+      .references(() => mlTags.id, { onDelete: 'cascade' }),
+    alias: text('alias').notNull(),
+    aliasKey: text('alias_key').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('ml_tag_aliases_alias_key_unique').on(table.aliasKey),
+    index('idx_ml_tag_aliases_tag').on(table.tagId),
+  ],
+)
+
+/** 候选标签 prompt 的文本向量缓存。prompt 或模型变了就重新编码。 */
+export const mlTagVectors = sqliteTable('ml_tag_vectors', {
+  tagId: integer('tag_id')
+    .primaryKey()
+    .references(() => mlTags.id, { onDelete: 'cascade' }),
+  model: text('model').notNull(),
+  prompt: text('prompt').notNull(),
+  embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+  dim: integer('dim').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+})
+
+/**
+ * 照片和候选标签的多对多关系。人工记录锁住该行，重跑识别不会覆盖。
+ * decision=reject 表示管理员明确排除，自动打标会跳过。
+ */
+export const photoMlTags = sqliteTable(
+  'photo_ml_tags',
+  {
+    photoId: text('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    tagId: integer('tag_id')
+      .notNull()
+      .references(() => mlTags.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['auto', 'manual'] }).notNull(),
+    decision: text('decision', { enum: ['apply', 'reject'] }).notNull(),
+    score: real('score'),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.photoId, table.tagId] }),
+    index('idx_photo_ml_tags_tag').on(table.tagId),
+  ],
+)
 
 /** ML 任务水位（夜间聚类等） */
 export const mlState = sqliteTable('ml_state', {

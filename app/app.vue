@@ -129,7 +129,7 @@ const apiEndpoint = computed(() => {
 // 这里改为「首批 600 张快速出图 + 客户端后台分片补齐」：
 // 瀑布流本身是增量挂载（首屏只渲染可见卡片），剩余数据在后台陆续到位即可。
 const PHOTO_FIRST_CHUNK = 600
-const PHOTO_CHUNK_SIZE = 3000
+const PHOTO_CHUNK_SIZE = 800
 
 const pagedUrl = (base: string, limit: number, offset: number) =>
   `${base}${base.includes('?') ? '&' : '?'}limit=${limit}&offset=${offset}`
@@ -191,6 +191,8 @@ const hydrateRemaining = (key: string) => {
   if (!import.meta.client) return
   const seq = ++hydrationSeq
   void (async () => {
+    // 先把连接留给首屏缩略图，再补后面的照片元数据。
+    await new Promise((resolve) => setTimeout(resolve, 1500))
     for (;;) {
       if (seq !== hydrationSeq || firstChunkUrl.value !== key) return
       const offset = photos.value.length
@@ -215,6 +217,7 @@ const hydrateRemaining = (key: string) => {
         markCacheComplete(key, photos.value)
         return
       }
+      await new Promise((resolve) => setTimeout(resolve, 400))
     }
   })()
 }

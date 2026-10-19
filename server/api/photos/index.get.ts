@@ -1,6 +1,8 @@
 import { and, asc, desc, isNull, notInArray, or } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
+import { viewerFromActor } from '~~/server/services/ml/person.service'
+import { appliedTagNamesForPhotos } from '~~/server/services/ml/tags.service'
 
 export default eventHandler(async (event) => {
   // 确定性排序：先按拍摄时间倒序，再按 id 升序兜底。
@@ -29,7 +31,7 @@ export default eventHandler(async (event) => {
   // 和已禁用的扫描库。登录可见的相簿在登录后进入瀑布流，密码相簿始终不进入。
   // 后台管理（管理员且非 gallery=1）保留全量。过滤必须进 SQL，避免分页缺行。
   if (!(isAdmin && !galleryOnly)) {
-    where.push(homepageGalleryVisibilitySql(loggedIn))
+    where.push(homepageGalleryVisibilitySql(loggedIn, viewerFromActor(actor)))
     const hiddenScanMounts = getGalleryHiddenScanMountSet()
     if (hiddenScanMounts.size > 0) {
       // library_mount 可能为 NULL（上传照片）：NOT IN 会把 NULL 行排除掉，
@@ -55,5 +57,10 @@ export default eventHandler(async (event) => {
   if (limit > 0) stmt = stmt.limit(limit)
   if (offset > 0) stmt = stmt.offset(offset)
 
-  return stmt.all()
+  const rows = stmt.all()
+  const mlTags = appliedTagNamesForPhotos(rows.map((row) => row.id))
+  return rows.map((row) => ({
+    ...row,
+    mlTags: mlTags.get(row.id) || [],
+  }))
 })

@@ -7,6 +7,7 @@ import {
 } from '~~/server/utils/photo-access'
 import { searchOcr } from './ocr.service'
 import { searchSmart, type SmartSearchHit } from './smart-search.service'
+import { appliedTagNamesForPhotos, searchTagHits } from './tags.service'
 
 export interface SmartQueryFilters {
   dateFrom?: string
@@ -28,12 +29,14 @@ function dayOf(value: string | null | undefined) {
 
 function photoMatchesFilters(
   photo: {
+    id: string
     dateTaken: string | null
     city: string | null
     tags: string[] | null
     exif: NeededExif | null
   },
   filters: SmartQueryFilters,
+  mlTagNames: Map<string, string[]>,
 ) {
   if (filters.dateFrom || filters.dateTo) {
     const day = dayOf(photo.dateTaken)
@@ -59,8 +62,11 @@ function photoMatchesFilters(
     if (!photo.city || !filters.cities.includes(photo.city)) return false
   }
   if (filters.tags?.length) {
-    const tags = photo.tags || []
-    if (!filters.tags.some((tag) => tags.includes(tag))) return false
+    const tags = new Set([
+      ...(photo.tags || []),
+      ...(mlTagNames.get(photo.id) || []),
+    ])
+    if (!filters.tags.some((tag) => tags.has(tag))) return false
   }
   if (filters.minRating && filters.minRating > 0) {
     if ((exif.Rating || 0) < filters.minRating) return false
@@ -146,10 +152,34 @@ function applyMetadataFilters(
     .where(inArray(tables.photos.id, ids))
     .all()
 
+  const mlTagNames = appliedTagNamesForPhotos(rows.map((row) => row.id))
   const ok = new Set(
-    rows.filter((row) => photoMatchesFilters(row, spec)).map((row) => row.id),
+    rows
+      .filter((row) => photoMatchesFilters(row, spec, mlTagNames))
+      .map((row) => row.id),
   )
   return hits.filter((h) => ok.has(h.photoId))
+}
+
+/** 命中候选标签的照片排在前面，不参与向量结果的相对阈值裁剪。 */
+function mergeTagHits(
+  query: string,
+  results: SmartSearchHit[],
+): SmartSearchHit[] {
+  const tagHits = searchTagHits(query)
+  if (!tagHits.length) return results
+  const tagged = new Set(tagHits.map((hit) => hit.photoId))
+  const merged: SmartSearchHit[] = tagHits.map((hit) => ({
+    photoId: hit.photoId,
+    distance: hit.manual ? 0 : 1 - hit.score,
+    score: hit.score,
+    source: 'tag' as const,
+  }))
+  for (const hit of results) {
+    if (tagged.has(hit.photoId)) continue
+    merged.push(hit)
+  }
+  return merged
 }
 
 /** CLIP and/or OCR search, then gallery visibility and EXIF/date/album filters. */
@@ -195,6 +225,7 @@ export async function querySmart(options: {
     }
   }
 
+  results = mergeTagHits(q, results)
   results = await filterVisibleHits(options.event, results)
   results = applyMetadataFilters(results, options.filters)
   return results.slice(0, limit)

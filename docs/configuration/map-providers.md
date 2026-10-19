@@ -1,11 +1,12 @@
 # Map Providers
 
-Chronoval supports two types of map providers. You can choose the one that best fits your needs.
+Chronoval supports three map providers. You can choose the one that best fits your needs.
 
 | Provider              | Supported | Extra Configuration   | Features                                     |
 | --------------------- | :-------: | --------------------- | -------------------------------------------- |
-| [MapLibre](#maplibre) |    ✅     | MapTiler Access Token | Free and open-source, supports custom styles |
-| [Mapbox](#mapbox)     |    ✅     | Mapbox Access Token   | Free tier, better renderer performance       |
+| [MapLibre](#maplibre)   |    ✅     | MapTiler Access Token | Free and open-source, supports custom styles |
+| [Mapbox](#mapbox)       |    ✅     | Mapbox Access Token   | Free tier, better renderer performance       |
+| [Protomaps](#protomaps) |    ✅     | Local PMTiles file    | No map API key                               |
 
 ## MapLibre
 
@@ -41,3 +42,9 @@ NUXT_PUBLIC_MAPBOX_ACCESS_TOKEN=your_mapbox_access_token
 # Example: mapbox://styles/mapbox/streets-v11
 NUXT_PUBLIC_MAP_MAPBOX_STYLE=
 ```
+
+## Protomaps
+
+Mount `20261018.pmtiles` at `/app/map/20261018.pmtiles` inside the container, then select Protomaps in map settings. Labels follow the interface language (`zh-Hans` or `zh-Hant` for Chinese). No MapTiler or Mapbox key is required.
+
+The file name can be changed in settings, but the archive must stay inside `/app/map` and end with `.pmtiles`.

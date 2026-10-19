@@ -121,14 +121,13 @@ const validateMp4Buffer = (buffer: Buffer): boolean => {
   return searchWindow.indexOf(MP4_FTYP) !== -1
 }
 
-export const processMotionPhotoFromXmp = async ({
-  photoId,
-  storageKey,
-  rawImageBuffer,
-  exifData,
-  storageProvider,
-  logger,
-}: MotionPhotoProcessParams): Promise<MotionPhotoProcessResult | null> => {
+/** 在 JPEG/HEIC 里定位内嵌的动态照片短视频，返回视频起点。不写文件。 */
+export const locateEmbeddedMotionVideo = (
+  rawImageBuffer: Buffer,
+  exifData?: NeededExif | null,
+  logger?: ConsolaInstance,
+  storageKey?: string,
+): { start: number; presentationTimestampUs?: number } | null => {
   try {
     const rawLength = rawImageBuffer.length
 
@@ -180,6 +179,16 @@ export const processMotionPhotoFromXmp = async ({
         extractXmpAttributeNumber(xmpSegment, 'MicroVideoOffset'),
         extractXmpAttributeNumber(xmpSegment, 'GCamera:MicroVideoOffset'),
       ].forEach((candidate) => addOffsetCandidate(candidate))
+
+      // 新版 Motion Photo：视频长度写在 Container Directory 的 Item:Length 上，起点在文件末尾。
+      const itemLength =
+        /Item:Semantic="MotionPhoto"[\s\S]{0,240}?Item:Length="(\d+)"/i.exec(
+          xmpSegment,
+        ) ||
+        /Item:Length="(\d+)"[\s\S]{0,240}?Item:Semantic="MotionPhoto"/i.exec(
+          xmpSegment,
+        )
+      addOffsetCandidate(itemLength ? toNumber(itemLength[1]) : null)
 
       if (presentationTimestampUs === null) {
         presentationTimestampUs =
@@ -236,7 +245,8 @@ export const processMotionPhotoFromXmp = async ({
     }
 
     if (!videoBuffer) {
-      const searchWindowStart = Math.max(0, rawLength - 8 * 1024 * 1024)
+      const searchWindow = detectedMotion ? 32 * 1024 * 1024 : 8 * 1024 * 1024
+      const searchWindowStart = Math.max(0, rawLength - searchWindow)
       let cursor = rawImageBuffer.indexOf(MP4_FTYP, searchWindowStart)
       while (cursor !== -1) {
         const potentialStart = cursor - 4
@@ -265,36 +275,8 @@ export const processMotionPhotoFromXmp = async ({
       return null
     }
 
-    // todo: consider storing in a dedicated subfolder
-    // const targetKey = `motion-videos/${photoId}.mp4`
-    const targetKey = `${photoId}.mp4`
-    let storedObject
-    try {
-      storedObject = await storageProvider.create(
-        targetKey,
-        videoBuffer,
-        'video/mp4',
-      )
-    } catch (error) {
-      logger?.error(
-        `[motion-photo] Failed to persist extracted video for ${storageKey}`,
-        error,
-      )
-      return null
-    }
-
-    const livePhotoVideoKey = storedObject.key || targetKey
-    const livePhotoVideoUrl = storageProvider.getPublicUrl(livePhotoVideoKey)
-
-    logger?.success(
-      `[motion-photo] Extracted Motion Photo video for ${storageKey} at offset ${resolvedOffset}, saved as ${livePhotoVideoKey}`,
-    )
-
     return {
-      isMotionPhoto: true,
-      livePhotoVideoKey,
-      livePhotoVideoUrl,
-      offset: resolvedOffset,
+      start: resolvedOffset,
       presentationTimestampUs: presentationTimestampUs ?? undefined,
     }
   } catch (error) {
@@ -303,5 +285,54 @@ export const processMotionPhotoFromXmp = async ({
       error,
     )
     return null
+  }
+}
+
+export const processMotionPhotoFromXmp = async ({
+  photoId,
+  storageKey,
+  rawImageBuffer,
+  exifData,
+  storageProvider,
+  logger,
+}: MotionPhotoProcessParams): Promise<MotionPhotoProcessResult | null> => {
+  const located = locateEmbeddedMotionVideo(
+    rawImageBuffer,
+    exifData,
+    logger,
+    storageKey,
+  )
+  if (!located) return null
+
+  const videoBuffer = rawImageBuffer.subarray(located.start)
+  const targetKey = `${photoId}.mp4`
+  let storedObject
+  try {
+    storedObject = await storageProvider.create(
+      targetKey,
+      videoBuffer,
+      'video/mp4',
+    )
+  } catch (error) {
+    logger?.error(
+      `[motion-photo] Failed to persist extracted video for ${storageKey}`,
+      error,
+    )
+    return null
+  }
+
+  const livePhotoVideoKey = storedObject.key || targetKey
+  const livePhotoVideoUrl = storageProvider.getPublicUrl(livePhotoVideoKey)
+
+  logger?.success(
+    `[motion-photo] Extracted Motion Photo video for ${storageKey} at offset ${located.start}, saved as ${livePhotoVideoKey}`,
+  )
+
+  return {
+    isMotionPhoto: true,
+    livePhotoVideoKey,
+    livePhotoVideoUrl,
+    offset: located.start,
+    presentationTimestampUs: located.presentationTimestampUs,
   }
 }

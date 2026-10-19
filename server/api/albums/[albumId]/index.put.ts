@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
 import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
+import { ensureAlbumVisibilityColumn } from '~~/server/utils/albumVisibility'
 
 export default eventHandler(async (event) => {
 
@@ -23,6 +24,7 @@ export default eventHandler(async (event) => {
       coverPhotoId: z.string().optional(),
       photoIds: z.array(z.string()).optional(),
       isHidden: z.boolean().optional(),
+      visibility: z.enum(['public', 'login', 'admin']).optional(),
       // 首页照片画廊隐藏：开启后照片不进首页照片流
       hideFromGallery: z.boolean().optional(),
       // 相簿访问密码（明文）：配合 clearPassword 完成 设置/清除/保持
@@ -56,6 +58,7 @@ export default eventHandler(async (event) => {
     }).parse,
   )
 
+  ensureAlbumVisibilityColumn()
   const db = useDB()
 
   // 检查相簿是否存在
@@ -140,8 +143,12 @@ export default eventHandler(async (event) => {
     if (body.coverPhotoId !== undefined) {
       updateData.coverPhotoId = body.coverPhotoId || null
     }
-    if (body.isHidden !== undefined) {
+    if (body.visibility !== undefined) {
+      updateData.visibility = body.visibility
+      updateData.isHidden = body.visibility !== 'public'
+    } else if (body.isHidden !== undefined) {
       updateData.isHidden = body.isHidden
+      updateData.visibility = body.isHidden ? 'login' : 'public'
     }
     if (body.hideFromGallery !== undefined) {
       updateData.hideFromGallery = body.hideFromGallery

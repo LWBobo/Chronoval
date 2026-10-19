@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
+import { mapPmtilesFilename } from '~~/shared/map-pmtiles'
 import { storageConfigSchema } from '~~/shared/types/storage'
 import { useDB, tables, eq } from '~~/server/utils/db'
 
@@ -22,11 +23,22 @@ export default eventHandler(async (event) => {
         name: z.string().min(1),
         config: storageConfigSchema,
       }),
-      map: z.object({
-        provider: z.enum(['mapbox', 'maplibre']),
-        token: z.string().min(1),
-        style: z.string().optional(),
-      }),
+      map: z
+        .object({
+          provider: z.enum(['mapbox', 'maplibre', 'protomaps']),
+          token: z.string().optional(),
+          style: z.string().optional(),
+          file: z.string().optional(),
+        })
+        .superRefine((value, ctx) => {
+          if (value.provider !== 'protomaps' && !value.token?.trim()) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['token'],
+              message: 'Map token is required',
+            })
+          }
+        }),
     }).parse,
   )
 
@@ -89,13 +101,24 @@ export default eventHandler(async (event) => {
   // 4. Handle Map Settings
   await settingsManager.set('map', 'provider', body.map.provider)
   if (body.map.provider === 'mapbox') {
-    await settingsManager.set('map', 'mapbox.token', body.map.token)
+    await settingsManager.set('map', 'mapbox.token', body.map.token || '')
     if (body.map.style)
       await settingsManager.set('map', 'mapbox.style', body.map.style)
-  } else {
-    await settingsManager.set('map', 'maplibre.token', body.map.token)
+  } else if (body.map.provider === 'maplibre') {
+    await settingsManager.set('map', 'maplibre.token', body.map.token || '')
     if (body.map.style)
       await settingsManager.set('map', 'maplibre.style', body.map.style)
+  } else if (body.map.file) {
+    try {
+      mapPmtilesFilename(body.map.file)
+    } catch (error) {
+      throw createError({
+        statusCode: 400,
+        statusMessage:
+          error instanceof Error ? error.message : 'Invalid map file',
+      })
+    }
+    await settingsManager.set('map', 'protomaps.file', body.map.file)
   }
 
   // 5. Mark Complete

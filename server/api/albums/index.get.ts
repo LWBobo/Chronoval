@@ -1,6 +1,11 @@
 import { eq, tables, useDB } from '~~/server/utils/db'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 import { redactAlbumSecrets } from '~~/server/utils/albumAccess'
+import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
+import {
+  ensureAlbumVisibilityColumn,
+  normalizeAlbumVisibility,
+} from '~~/server/utils/albumVisibility'
 
 export default eventHandler(async (event) => {
   const db = useDB()
@@ -18,13 +23,18 @@ export default eventHandler(async (event) => {
 
   // 管理端（登录管理员）返回完整树状二级相簿并包含隐藏的外部库相簿；
   // 公开访问时过滤掉设置为“隐藏”的外部库相簿。
-  const { isAdmin } = await getActor(event)
+  const actor = await getActor(event)
+  const { isAdmin } = actor
+  const blockedByPerson = blockedPhotoIdsForActor(actor)
 
   // 非管理员：剔除「已禁用扫描库」的照片，避免相册封面/列表出现加载失败的坏图
   const disabledScanMounts = getDisabledScanMountSet()
 
-  // 获取所有相册，按创建时间倒序
-  const albums = await db.select().from(tables.albums)
+  // 获取所有相册，按创建时间倒序。仅管理员相簿不返回给普通账号，避免标题泄露。
+  ensureAlbumVisibilityColumn()
+  const albums = (await db.select().from(tables.albums)).filter(
+    (album) => isAdmin || normalizeAlbumVisibility(album) !== 'admin',
+  )
 
   // 为每个相册获取照片 ID 列表与封面堆叠数据。
   // 注意：better-sqlite3 为同步驱动，必须串行（不能 Promise.all 并发）执行，
@@ -50,12 +60,13 @@ export default eventHandler(async (event) => {
       .orderBy(tables.albumPhotos.position)
       .all()
     // 非管理员：剔除已禁用扫描库的照片，封面与 photoIds 均不再引用
-    const rows =
+    const rows = (
       !isAdmin && disabledScanMounts.size > 0
         ? photoRows.filter(
             (r) => !r.libraryMount || !disabledScanMounts.has(r.libraryMount),
           )
         : photoRows
+    ).filter((row) => !blockedByPerson.has(row.photoId))
     const photoIds = rows.map((r) => r.photoId)
 
     const restAlbum = redactAlbumSecrets(album, false)
@@ -88,9 +99,10 @@ export default eventHandler(async (event) => {
         if (!ordered.includes(pid)) ordered.push(pid)
       }
       const rowById = new Map(rows.map((r) => [r.photoId, r]))
-      for (const pid of ordered.slice(0, 3)) {
+      for (const pid of ordered) {
+        if (covers.length >= 3) break
         const row = rowById.get(pid)
-        if (row) {
+        if (row?.thumbnailUrl && row.type !== 'video') {
           covers.push({
             id: row.photoId,
             thumbnailUrl: row.thumbnailUrl,
@@ -161,6 +173,28 @@ export default eventHandler(async (event) => {
     }
   }
   visibleScanRoots = visibleScanRoots.map(addScanBgm)
+
+  const hideBlockedCovers = (node: any): any => {
+    if (!node || blockedByPerson.size === 0) return node
+    const covers = Array.isArray(node.covers)
+      ? node.covers.filter(
+          (cover: { id?: string }) => cover?.id && !blockedByPerson.has(cover.id),
+        )
+      : node.covers
+    const coverPhotoId =
+      node.coverPhotoId && blockedByPerson.has(node.coverPhotoId)
+        ? covers?.[0]?.id ?? null
+        : node.coverPhotoId
+    return {
+      ...node,
+      covers,
+      coverPhotoId,
+      ...(node.children?.length
+        ? { children: node.children.map(hideBlockedCovers) }
+        : {}),
+    }
+  }
+  visibleScanRoots = visibleScanRoots.map(hideBlockedCovers)
 
   const combined: unknown[] = [
     ...albumsWithPhotoIds.sort(

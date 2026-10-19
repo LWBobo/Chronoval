@@ -57,6 +57,36 @@ const cleanupExpiredCache = () => {
   }
 }
 
+const BACKGROUND_LIVE_PHOTO_LIMIT = 1
+let backgroundLivePhotoActive = 0
+const backgroundLivePhotoQueue: Array<() => void> = []
+
+const pumpBackgroundLivePhotos = () => {
+  while (
+    backgroundLivePhotoActive < BACKGROUND_LIVE_PHOTO_LIMIT &&
+    backgroundLivePhotoQueue.length > 0
+  ) {
+    const run = backgroundLivePhotoQueue.shift()
+    if (run) run()
+  }
+}
+
+/** 静图加载完后再排队拉动态短视频，同时只拉一条，避免和首屏照片抢带宽。 */
+const enqueueBackgroundLivePhoto = <T>(task: () => Promise<T>): Promise<T> => {
+  return new Promise<T>((resolve, reject) => {
+    backgroundLivePhotoQueue.push(() => {
+      backgroundLivePhotoActive++
+      task()
+        .then(resolve, reject)
+        .finally(() => {
+          backgroundLivePhotoActive--
+          pumpBackgroundLivePhotos()
+        })
+    })
+    pumpBackgroundLivePhotos()
+  })
+}
+
 let cleanupIntervalStarted = false
 function ensureCleanupInterval() {
   if (cleanupIntervalStarted || typeof window === 'undefined') return
@@ -261,6 +291,9 @@ export const useLivePhotoProcessor = () => {
     }
   }
 
+  const scheduleBackgroundLivePhoto = (movUrl: string, photoId: string) =>
+    enqueueBackgroundLivePhoto(() => convertMovToMp4(movUrl, photoId))
+
   /**
    * 获取照片的处理状态
    */
@@ -392,6 +425,7 @@ export const useLivePhotoProcessor = () => {
 
   return {
     convertMovToMp4,
+    scheduleBackgroundLivePhoto,
     getProcessingState,
     batchProcessLivePhotos,
     preloadLivePhotosInViewport,

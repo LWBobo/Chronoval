@@ -1,11 +1,12 @@
 # 地图提供器
 
-Chronoval 支持两种地图提供器，您可以根据需求选择合适的提供器。
+Chronoval 支持三种地图提供器，您可以根据需求选择合适的提供器。
 
 | 提供器                | 支持 | 额外配置          | 特性                     |
 | --------------------- | :--: | ----------------- | ------------------------ |
-| [MapLibre](#maplibre) |  ✅  | MapTiler 访问令牌 | 免费开源，支持自定义样式 |
-| [Mapbox](#mapbox)     |  ✅  | MapBox 访问令牌   | 免费用量，更好的渲染器   |
+| [MapLibre](#maplibre)   |  ✅  | MapTiler 访问令牌 | 免费开源，支持自定义样式 |
+| [Mapbox](#mapbox)       |  ✅  | MapBox 访问令牌   | 免费用量，更好的渲染器   |
+| [Protomaps](#protomaps) |  ✅  | 本地 PMTiles 文件 | 不需要地图 API key       |
 
 ## MapLibre
 
@@ -41,3 +42,9 @@ NUXT_PUBLIC_MAPBOX_ACCESS_TOKEN=your_mapbox_access_token
 # 示例: mapbox://styles/mapbox/streets-v11
 NUXT_PUBLIC_MAP_MAPBOX_STYLE=
 ```
+
+## Protomaps
+
+把 `20261018.pmtiles` 挂到容器内的 `/app/map/20261018.pmtiles`，然后在地图设置里选择 Protomaps。界面语言为简体中文时，地名使用 `zh-Hans`；繁体界面使用 `zh-Hant`。不需要 MapTiler 或 Mapbox 的 key。
+
+文件名可以在设置里改，但必须仍是 `/app/map` 目录下的 `.pmtiles` 文件。

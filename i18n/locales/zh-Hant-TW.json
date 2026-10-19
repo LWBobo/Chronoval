@@ -412,6 +412,7 @@
     "globe": "照片地球儀",
     "queue": "佇列管理",
     "logs": "系統日誌",
+    "watermark": "去除浮水印",
     "albums": "相簿",
     "siteAdministration": "站點設置",
     "generalSettings": "基本設置",
@@ -1148,6 +1149,33 @@
       },
       "taskListTitle": "佇列任務列表"
     },
+    "watermark": {
+      "title": "去除浮水印",
+      "description": "掃描已啟用的掃描庫，列出帶小米時間浮水印的 JPEG。確認後直接改原檔：用檔案裡保存的原圖補丁蓋住時間字，拍攝資訊和末尾的動態照片影片會保留。補丁對不齊、影片找不到或寫出失敗時，來源檔保持原樣。",
+      "scan": "掃描浮水印",
+      "scanning": "正在掃描…",
+      "scanDone": "掃描完成",
+      "scanDoneDescription": "找到 {count} 張帶浮水印的照片",
+      "scanFailed": "掃描失敗",
+      "clear": "清除浮水印",
+      "clearDone": "清除結束",
+      "clearDoneDescription": "已清除 {cleaned} 張，失敗 {failed} 張",
+      "clearFailed": "清除失敗",
+      "selectAll": "全選",
+      "selectedCount": "已選 {count} 張",
+      "empty": "還沒有掃描結果。點擊「掃描浮水印」檢查已掛載的掃描庫。",
+      "unavailable": "這些掃描庫暫時讀不到",
+      "confirmTitle": "清除所選照片的浮水印",
+      "confirmBody": "將直接修改 {count} 張原檔。這個操作不能復原。",
+      "confirm": "清除浮水印",
+      "cancel": "取消",
+      "stats": {
+        "mounts": "掃描庫",
+        "scanned": "已檢查",
+        "found": "有浮水印",
+        "selected": "已選擇"
+      }
+    },
     "logs": {
       "connectionStatus": {
         "idle": "未連線",
@@ -1182,6 +1210,7 @@
       "documentation": "文件",
       "home": "返回首頁",
       "albums": "相簿集",
+      "people": "人物相簿",
       "music": "音樂盒"
     },
     "music": {

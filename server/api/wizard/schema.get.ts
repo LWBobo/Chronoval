@@ -257,6 +257,12 @@ export default eventHandler(async (event) => {
                 icon: 'simple-icons:maplibre',
                 description: 'wizard.map.provider.maplibre.description',
               },
+              {
+                label: 'wizard.map.provider.protomaps.label',
+                value: 'protomaps',
+                icon: 'tabler:map',
+                description: 'wizard.map.provider.protomaps.description',
+              },
             ],
           },
         }

@@ -10,7 +10,7 @@ export const isMaplibreMap = (
   map: MapInstance,
   provider: string,
 ): map is MaplibreMap => {
-  return provider === 'maplibre'
+  return provider === 'maplibre' || provider === 'protomaps'
 }
 
 export const isMapboxMap = (

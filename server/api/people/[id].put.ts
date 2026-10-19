@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { updatePerson, personWithMeta } from '~~/server/services/ml/person.service'
 
+const visibilitySchema = z.enum(['public', 'login', 'admin'])
+
 export default eventHandler(async (event) => {
 
   const id = getRouterParam(event, 'id')
@@ -14,6 +16,7 @@ export default eventHandler(async (event) => {
       .object({
         name: z.string().nullable().optional(),
         isHidden: z.boolean().optional(),
+        visibility: visibilitySchema.optional(),
         thumbnailFaceId: z.string().nullable().optional(),
       })
       .parse,
@@ -22,6 +25,7 @@ export default eventHandler(async (event) => {
   const person = updatePerson(id, {
     name: body.name,
     isHidden: body.isHidden,
+    visibility: body.visibility,
     thumbnailFaceId: body.thumbnailFaceId,
   })
 

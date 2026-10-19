@@ -8,6 +8,11 @@ import {
   hasScanAlbumAccess,
   hasScanLibraryAccess,
 } from './scanAlbumAuth'
+import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
+import {
+  ensureAlbumVisibilityColumn,
+  normalizeAlbumVisibility,
+} from './albumVisibility'
 
 /**
  * 人员分类、搜索等「发现」入口的可见性。
@@ -18,6 +23,7 @@ import {
 type AlbumRow = {
   id: number
   isHidden: boolean
+  visibility: string | null
   passwordHash: string | null
   passwordExemptMode: string | null
   passwordExemptUsers: string | null
@@ -39,6 +45,7 @@ export type PhotoAccess = {
   disabledMounts: Set<string>
   albumsByPhoto: Map<string, AlbumRow[]>
   metasByMount: Map<string, ScanMeta[]>
+  blockedByPerson: Set<string>
 }
 
 const dirOf = (libraryPath: string | null | undefined) => {
@@ -56,10 +63,12 @@ export async function loadPhotoAccess(event: H3Event): Promise<PhotoAccess> {
   const db = useDB()
   const actor = await getActor(event)
   const adminBypass = await isAlbumAdminBypass(event, actor)
+  ensureAlbumVisibilityColumn()
   const albums = db
     .select({
       id: tables.albums.id,
       isHidden: tables.albums.isHidden,
+      visibility: tables.albums.visibility,
       passwordHash: tables.albums.passwordHash,
       passwordExemptMode: tables.albums.passwordExemptMode,
       passwordExemptUsers: tables.albums.passwordExemptUsers,
@@ -109,11 +118,14 @@ export async function loadPhotoAccess(event: H3Event): Promise<PhotoAccess> {
     disabledMounts: getDisabledScanMountSet(),
     albumsByPhoto,
     metasByMount,
+    blockedByPerson: blockedPhotoIdsForActor(actor),
   }
 }
 
 function manualAlbumOpen(access: PhotoAccess, album: AlbumRow) {
-  if (album.isHidden && !access.actor.user) return false
+  const visibility = normalizeAlbumVisibility(album)
+  if (visibility === 'admin' && !access.actor.isAdmin) return false
+  if (visibility === 'login' && !access.actor.user) return false
   if (!album.passwordHash) return true
   const exempt = isPasswordExemptForUser(album, access.actor.user)
   return hasAlbumAccess(
@@ -173,6 +185,7 @@ export function canDiscoverPhoto(
   },
 ) {
   if (photo.deletedAt) return false
+  if (access.blockedByPerson.has(photo.id)) return false
   const albums = access.albumsByPhoto.get(photo.id) || []
   const manualOk = albums.some((album) => manualAlbumOpen(access, album))
   if (photo.libraryMount) {

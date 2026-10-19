@@ -444,6 +444,7 @@
     "globe": "사진 지구본",
     "queue": "큐 관리",
     "logs": "시스템 로그",
+    "watermark": "워터마크 제거",
     "albums": "앨범",
     "siteAdministration": "사이트 설정",
     "location": "위치 서비스",
@@ -1311,6 +1312,33 @@
         "type": "유형별 필터"
       },
       "taskListTitle": "작업 큐"
+    },
+    "watermark": {
+      "title": "워터마크 제거",
+      "description": "사용 중인 라이브러리를 검사해 샤오미 시간 워터마크가 있는 JPEG를 나열합니다. 실행하면 원본 파일을 고치고, 파일에 저장된 원본 조각으로 시간을 덮습니다. 촬영 정보와 끝의 모션 포토 영상은 유지합니다. 위치가 맞지 않거나 영상을 찾지 못하거나 쓰기에 실패하면 원본은 그대로 둡니다.",
+      "scan": "검사",
+      "scanning": "검사 중…",
+      "scanDone": "검사 완료",
+      "scanDoneDescription": "워터마크 사진 {count}장",
+      "scanFailed": "검사 실패",
+      "clear": "워터마크 제거",
+      "clearDone": "제거 완료",
+      "clearDoneDescription": "제거 {cleaned}장, 실패 {failed}장",
+      "clearFailed": "제거 실패",
+      "selectAll": "전체 선택",
+      "selectedCount": "{count}장 선택",
+      "empty": "아직 결과가 없습니다. 마운트된 라이브러리를 검사하세요.",
+      "unavailable": "읽을 수 없는 라이브러리",
+      "confirmTitle": "선택한 사진의 워터마크 제거",
+      "confirmBody": "원본 파일 {count}개를 직접 수정합니다. 되돌릴 수 없습니다.",
+      "confirm": "워터마크 제거",
+      "cancel": "취소",
+      "stats": {
+        "mounts": "라이브러리",
+        "scanned": "확인",
+        "found": "워터마크",
+        "selected": "선택"
+      }
     },
     "logs": {
       "connectionStatus": {

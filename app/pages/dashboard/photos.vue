@@ -723,18 +723,44 @@ const selectAllVisiblePhotos = () => {
   selectedPhotoIds.value = ids
 }
 const livePhotoStats = computed(() => {
-  if (!filteredPhotos.value) return { total: 0, livePhotos: 0, staticPhotos: 0 }
-
-  const total = filteredPhotos.value.length
-  const livePhotos = filteredPhotos.value.filter(
-    (photo: Photo) => photo.isLivePhoto,
-  ).length
-  const staticPhotos = total - livePhotos
-
-  return { total, livePhotos, staticPhotos }
+  const list = filteredData.value
+  const total = list.length
+  const livePhotos = list.filter((photo: Photo) => photo.isLivePhoto).length
+  return { total, livePhotos, staticPhotos: total - livePhotos }
 })
 
 const photoFilter = ref<'all' | 'livephoto' | 'static'>('all')
+const manageQuery = ref('')
+const debouncedManageQuery = ref('')
+let manageQueryTimer: ReturnType<typeof setTimeout> | undefined
+watch(manageQuery, (value) => {
+  if (manageQueryTimer) clearTimeout(manageQueryTimer)
+  manageQueryTimer = setTimeout(() => {
+    debouncedManageQuery.value = value.trim().toLowerCase()
+  }, 200)
+})
+onUnmounted(() => {
+  if (manageQueryTimer) clearTimeout(manageQueryTimer)
+})
+
+const photoSearchText = (photo: Photo) => {
+  const mlTags = (photo as Photo & { mlTags?: string[] | null }).mlTags
+  return [
+    photo.title,
+    photo.description,
+    photo.tags?.join(' '),
+    mlTags?.join(' '),
+    photo.city,
+    photo.country,
+    photo.locationName,
+    photo.libraryPath,
+    photo.storageKey,
+    photo.id,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
 
 const filteredData = computed(() => {
   if (!filteredPhotos.value) return []
@@ -749,6 +775,11 @@ const filteredData = computed(() => {
       break
     default:
       list = filteredPhotos.value
+  }
+
+  const query = debouncedManageQuery.value
+  if (query) {
+    list = list.filter((photo) => photoSearchText(photo).includes(query))
   }
 
   // 管理视图排序：「最新上传在前」。优先按 createdAt（入库/上传时间）降序，
@@ -769,19 +800,23 @@ const selectedPhotosList = computed(() =>
 const totalRowsCount = computed(() => filteredData.value.length)
 
 // 管理瀑布流每张砖的固有比例：优先用已入库的 CSS 长宽比（width/height），
-// 其次按宽高推算，缺失时兜底 3:4，供 MasonryWall 正确分摊列高、避免排版跳动。
-const aspectStyle = (p: Photo) => {
+// 其次按宽高推算，缺失时兜底 3:4。横图更矮、竖图更高，按这个比例往最短列里排。
+const photoAspectRatio = (p: Photo) => {
   let ratio = p.aspectRatio
   if (!ratio && p.width && p.height) ratio = p.width / p.height
-  return { aspectRatio: ratio ? String(ratio) : '3 / 4' }
+  return ratio && ratio > 0 ? ratio : 3 / 4
 }
+const aspectStyle = (p: Photo) => ({
+  aspectRatio: String(photoAspectRatio(p)),
+})
 
-// 瀑布流增量渲染：首屏只挂载有限数量，滚动到底部哨兵再追加，避免大水库一次铺满全部 DOM
-const MASONRY_STEP = 60
+// 管理页用固定网格增量渲染。瀑布流组件每次追加都会先清空所有列再逐张重排，
+// 滚动容器高度会瞬间塌掉，快速下滑时滚动位置被夹回顶部。
+const MASONRY_STEP = 36
 const masonryRenderedCount = ref(0)
 const masonryScrollContainerRef = ref<HTMLElement>()
 const masonrySentinelRef = ref<HTMLElement>()
-const masonryObserver = ref<IntersectionObserver | null>(null)
+let masonryAppendLock = false
 const masonryItems = computed(() =>
   filteredData.value.slice(0, masonryRenderedCount.value).map((photo, i) => ({
     id: photo.id,
@@ -789,52 +824,128 @@ const masonryItems = computed(() =>
     originalIndex: i,
   })),
 )
+// 列数只跟容器宽度有关。追加照片时按同一套最短列规则接着排，已在列里的照片不会被拆走。
+const MASONRY_GAP = 10
+const MASONRY_COLUMN_WIDTH = 220
+const masonryColumnCount = ref(2)
+const updateMasonryColumnCount = () => {
+  const width = masonryScrollContainerRef.value?.clientWidth ?? 0
+  if (width <= 0) return
+  const count = Math.floor(
+    (width + MASONRY_GAP) / (MASONRY_COLUMN_WIDTH + MASONRY_GAP),
+  )
+  masonryColumnCount.value = Math.min(8, Math.max(2, count))
+}
+const masonryColumns = computed(() => {
+  const count = masonryColumnCount.value
+  const columns: (typeof masonryItems.value)[] = Array.from(
+    { length: count },
+    () => [],
+  )
+  const heights = Array.from({ length: count }, () => 0)
+  for (const item of masonryItems.value) {
+    let target = 0
+    for (let i = 1; i < count; i++) {
+      if (heights[i]! < heights[target]!) target = i
+    }
+    columns[target]!.push(item)
+    heights[target]! += 1 / photoAspectRatio(item.photo)
+  }
+  return columns
+})
+const resetMasonryWindow = () => {
+  const length = filteredData.value.length
+  masonryRenderedCount.value = length ? Math.min(MASONRY_STEP, length) : 0
+  nextTick(() => {
+    const el = masonryScrollContainerRef.value
+    if (el) el.scrollTop = 0
+    appendMasonryBatch()
+  })
+}
+watch([debouncedManageQuery, photoFilter], () => {
+  resetMasonryWindow()
+})
 watch(
-  () => filteredData.value,
-  () => {
-    masonryRenderedCount.value = filteredData.value.length
-      ? Math.min(60, filteredData.value.length)
-      : 0
+  () => filteredData.value.length,
+  (length) => {
+    if (masonryRenderedCount.value === 0 && length > 0) {
+      masonryRenderedCount.value = Math.min(MASONRY_STEP, length)
+      nextTick(() => appendMasonryBatch())
+      return
+    }
+    if (masonryRenderedCount.value > length) {
+      masonryRenderedCount.value = length
+    }
   },
   { immediate: true },
 )
 const appendMasonryBatch = () => {
-  const total = filteredData.value?.length ?? 0
+  if (import.meta.server || masonryAppendLock) return
+  const total = filteredData.value.length
   if (masonryRenderedCount.value >= total) return
+  const el = masonryScrollContainerRef.value
+  // 内容还没排出来时高度接近 0，不能据此继续追加，否则会一次挂上整库。
+  if (el && el.scrollHeight <= el.clientHeight + 80 && masonryRenderedCount.value > MASONRY_STEP) {
+    return
+  }
+  masonryAppendLock = true
   masonryRenderedCount.value = Math.min(
     masonryRenderedCount.value + MASONRY_STEP,
     total,
   )
+  const schedule =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb: () => void) => setTimeout(cb, 16)
+  schedule(() => {
+    masonryAppendLock = false
+    const box = masonryScrollContainerRef.value
+    if (!box) return
+    if (box.scrollHeight <= box.clientHeight + 80) appendMasonryBatch()
+  })
 }
+const onMasonryScroll = () => {
+  const el = masonryScrollContainerRef.value
+  if (!el) return
+  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distanceToBottom > 640) return
+  appendMasonryBatch()
+}
+let masonryResizeObserver: ResizeObserver | null = null
 onMounted(() => {
-  if (masonrySentinelRef.value) {
-    // 以内部滚动容器为根：瀑布流在受高度约束的面板内滚动，哨兵据此判断何时追加下一批
-    const root = masonryScrollContainerRef.value || null
-    masonryObserver.value = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) appendMasonryBatch()
-      },
-      { root, rootMargin: '1200px 0px 0px 0px', threshold: 0 },
-    )
-    masonryObserver.value.observe(masonrySentinelRef.value)
+  updateMasonryColumnCount()
+  masonryScrollContainerRef.value?.addEventListener(
+    'scroll',
+    onMasonryScroll,
+    { passive: true },
+  )
+  if (masonryScrollContainerRef.value && typeof ResizeObserver !== 'undefined') {
+    masonryResizeObserver = new ResizeObserver(() => updateMasonryColumnCount())
+    masonryResizeObserver.observe(masonryScrollContainerRef.value)
   }
+  requestAnimationFrame(() => appendMasonryBatch())
 })
 onUnmounted(() => {
-  masonryObserver.value?.disconnect()
-  masonryObserver.value = null
+  masonryResizeObserver?.disconnect()
+  masonryScrollContainerRef.value?.removeEventListener(
+    'scroll',
+    onMasonryScroll,
+  )
 })
 
-// 监听过滤后的照片变化，自动获取表态数据（300ms 防抖，合并连续筛选动作）
+// 只给已经挂到页面上的照片拉表态，避免每次筛选都请求整库
 let reactionsTimer: ReturnType<typeof setTimeout> | undefined
 watch(
-  () => filteredData.value,
-  (photos) => {
+  masonryItems,
+  (items) => {
+    const missing = items
+      .map((item) => item.photo.id)
+      .filter((id) => reactionsData.value[id] === undefined)
+    if (missing.length === 0) return
     if (reactionsTimer) clearTimeout(reactionsTimer)
     reactionsTimer = setTimeout(() => {
-      if (photos && photos.length > 0) {
-        fetchReactions((photos as Photo[]).map((p) => p.id))
-      }
-    }, 300)
+      fetchReactions(missing)
+    }, 200)
   },
   { immediate: true },
 )
@@ -1601,6 +1712,17 @@ const getRowActions = (photo: Photo) => {
           openImagePreview(photo)
         },
       },
+      {
+        label: $t('dashboard.photos.selection.addToAlbum'),
+        icon: 'tabler:library-plus',
+        onSelect() {
+          if (!selectedPhotoIds.value.has(photo.id)) {
+            selectedPhotoIds.value = new Set([photo.id])
+          }
+          isSelectionMode.value = true
+          openAddTo()
+        },
+      },
     ],
     [
       {
@@ -1743,6 +1865,118 @@ const confirmDelete = async () => {
   }
 
   isDeleting.value = false
+}
+
+const addToOpen = ref(false)
+const addToLoading = ref(false)
+const addToSaving = ref(false)
+const addAlbumIds = ref<number[]>([])
+const addPersonIds = ref<string[]>([])
+const newAlbumTitle = ref('')
+const newAlbumVisibility = ref<'public' | 'login' | 'admin'>('public')
+const newAlbumHideGallery = ref(false)
+const albumChoices = ref<{ id: number; title: string }[]>([])
+const personChoices = ref<{ id: string; name: string }[]>([])
+
+const toggleId = <T extends string | number>(list: T[], id: T) => {
+  const index = list.indexOf(id)
+  if (index >= 0) list.splice(index, 1)
+  else list.push(id)
+}
+
+const openAddTo = async () => {
+  if (selectedPhotoIds.value.size === 0) {
+    isSelectionMode.value = true
+    toast.add({
+      title: $t('dashboard.photos.addTo.needSelection'),
+      color: 'warning',
+    })
+    return
+  }
+  addAlbumIds.value = []
+  addPersonIds.value = []
+  newAlbumTitle.value = ''
+  newAlbumVisibility.value = 'public'
+  newAlbumHideGallery.value = false
+  addToOpen.value = true
+  addToLoading.value = true
+  try {
+    const [albums, peoplePayload] = await Promise.all([
+      $fetch<Array<{ id?: number; title?: string; kind?: string }>>('/api/albums'),
+      $fetch<{ people?: Array<{ id: string; name?: string | null }> }>(
+        '/api/people?manage=1',
+      ),
+    ])
+    albumChoices.value = (albums || [])
+      .filter((album) => album.kind !== 'scan' && typeof album.id === 'number')
+      .map((album) => ({ id: album.id as number, title: album.title || String(album.id) }))
+    personChoices.value = (peoplePayload.people || []).map((person) => ({
+      id: person.id,
+      name: person.name?.trim() || person.id,
+    }))
+  } catch {
+    albumChoices.value = []
+    personChoices.value = []
+  } finally {
+    addToLoading.value = false
+  }
+}
+
+const confirmAddTo = async () => {
+  const photoIds = [...selectedPhotoIds.value]
+  const title = newAlbumTitle.value.trim()
+  if (!photoIds.length) return
+  if (!addAlbumIds.value.length && !addPersonIds.value.length && !title) {
+    toast.add({
+      title: $t('dashboard.photos.addTo.emptyTarget'),
+      color: 'warning',
+    })
+    return
+  }
+  addToSaving.value = true
+  try {
+    let albums = 0
+    let people = 0
+    if (title) {
+      await $fetch('/api/albums', {
+        method: 'POST',
+        body: {
+          title,
+          photoIds,
+          visibility: newAlbumVisibility.value,
+          hideFromGallery: newAlbumHideGallery.value,
+        },
+      })
+      albums += 1
+      newAlbumTitle.value = ''
+    }
+    if (addAlbumIds.value.length) {
+      const result = await $fetch<{ albums: number }>('/api/albums/add-photos', {
+        method: 'POST',
+        body: { albumIds: addAlbumIds.value, photoIds },
+      })
+      albums += result.albums
+    }
+    if (addPersonIds.value.length) {
+      const result = await $fetch<{ people: number }>('/api/people/assign-photos', {
+        method: 'POST',
+        body: { personIds: addPersonIds.value, photoIds },
+      })
+      people += result.people
+    }
+    toast.add({
+      title: $t('dashboard.photos.addTo.success', { albums, people }),
+      color: 'success',
+    })
+    addToOpen.value = false
+  } catch {
+    toast.add({
+      title: $t('dashboard.photos.addTo.failed'),
+      color: 'error',
+    })
+  } finally {
+    addToSaving.value = false
+  }
 }
 
 // 批量重新处理照片功能
@@ -2404,7 +2638,14 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <UInput
+              v-model="manageQuery"
+              icon="tabler:search"
+              size="sm"
+              class="w-full max-w-xs"
+              :placeholder="$t('dashboard.photos.toolbar.searchPlaceholder')"
+            />
             <UPopover>
               <UTooltip :text="$t('ui.action.filter.tooltip')">
                 <UChip
@@ -2488,6 +2729,17 @@ onUnmounted(() => {
               <span class="hidden sm:inline">{{ selectModeLabel }}</span>
             </UButton>
 
+            <!-- 加入相册：工具栏常驻，不必先在悬浮条里找 -->
+            <UButton
+              color="primary"
+              variant="soft"
+              size="sm"
+              icon="tabler:library-plus"
+              @click="openAddTo"
+            >
+              {{ $t('dashboard.photos.selection.addToAlbum') }}
+            </UButton>
+
             <!-- 全选当前筛选列表 -->
             <UButton
               variant="soft"
@@ -2507,25 +2759,17 @@ onUnmounted(() => {
         <!-- 照片列表：高度受面板约束，内部滚动 -->
         <div
           ref="masonryScrollContainerRef"
-          class="relative flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-smooth"
+          class="relative flex-1 min-h-0 overflow-y-auto overscroll-contain"
         >
-          <MasonryWall
-            :items="masonryItems"
-            :column-width="236"
-            :gap="10"
-            :min-columns="2"
-            :max-columns="8"
-            :ssr-columns="2"
-            :key-mapper="
-              (_item, _column, _row, index) =>
-                masonryItems[index]?.originalIndex ?? index
-            "
-            class="p-2 sm:p-3"
-          >
-            <template #default="{ item }">
+          <div class="flex items-start gap-2.5 p-2 sm:p-3">
+            <div
+              v-for="(column, columnIndex) in masonryColumns"
+              :key="columnIndex"
+              class="flex min-w-0 flex-1 flex-col gap-2.5"
+            >
               <div
-                v-if="item.photo"
-                :key="item.photo.id"
+                v-for="item in column"
+                :key="item.id"
                 class="group relative overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-bg-elevated) shadow-sm cursor-pointer"
                 @click="
                   isSelectionMode
@@ -2534,7 +2778,7 @@ onUnmounted(() => {
                 "
               >
                 <ThumbImage
-                  :src="item.photo.thumbnailUrl || item.photo.originalUrl || ''"
+                  :src="item.photo.thumbnailUrl || ''"
                   :alt="item.photo.title || ''"
                   :thumbhash="item.photo.thumbnailHash || ''"
                   class="block w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
@@ -2606,14 +2850,21 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
-            </template>
-          </MasonryWall>
+            </div>
+          </div>
+
+          <p
+            v-if="debouncedManageQuery && filteredData.length === 0"
+            class="px-4 py-10 text-center text-sm text-neutral-500"
+          >
+            {{ $t('dashboard.photos.toolbar.searchEmpty') }}
+          </p>
 
           <!-- 增量渲染哨兵：滚动接近底部时追加下一批照片 -->
           <div
-            v-if="masonryRenderedCount < (filteredData?.length ?? 0)"
+            v-if="masonryRenderedCount < filteredData.length"
             ref="masonrySentinelRef"
-            class="h-px w-full"
+            class="h-8 w-full"
             aria-hidden="true"
           />
 
@@ -2628,7 +2879,7 @@ onUnmounted(() => {
           >
             <div
               v-if="isSelectionMode && selectedRowsCount > 0"
-              class="fixed bottom-8 left-1/2 -translate-x-1/2 px-2 py-1.5 bg-(--ui-bg-elevated) backdrop-blur-xl shadow-xl rounded-full border border-(--ui-border-accented) z-60 flex items-center gap-3 sm:gap-6 shadow-black/5 dark:shadow-black/20"
+              class="fixed bottom-8 left-1/2 z-60 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-3xl border border-(--ui-border-accented) bg-(--ui-bg-elevated) px-2 py-1.5 shadow-xl shadow-black/5 backdrop-blur-xl dark:shadow-black/20"
             >
               <div
                 class="pl-4 pr-1 border-r border-(--ui-border) min-w-max"
@@ -2646,6 +2897,17 @@ onUnmounted(() => {
               </div>
 
               <div class="flex items-center gap-1 sm:gap-1.5 pr-2">
+                <UButton
+                  color="primary"
+                  variant="solid"
+                  size="sm"
+                  class="rounded-full"
+                  icon="tabler:library-plus"
+                  @click="openAddTo"
+                >
+                  {{ $t('dashboard.photos.selection.addToAlbum') }}
+                </UButton>
+
                 <UButton
                   color="neutral"
                   variant="ghost"
@@ -2769,6 +3031,11 @@ onUnmounted(() => {
                   </p>
                 </div>
 
+                <DashboardMlPhotoTags
+                  v-if="editingPhoto"
+                  :photo-id="editingPhoto.id"
+                />
+
                 <div class="flex items-center justify-between space-y-2">
                   <label
                     class="text-sm font-medium text-neutral-700 dark:text-neutral-200"
@@ -2830,7 +3097,7 @@ onUnmounted(() => {
                         )
                       }}
                     </p>
-                    <UToggle
+                    <USwitch
                       :model-value="
                         editFormState.isPanorama === 1
                       "
@@ -2997,6 +3264,119 @@ onUnmounted(() => {
             </div>
           </template>
         </USlideover>
+
+        <UModal
+          v-model:open="addToOpen"
+          :title="$t('dashboard.photos.addTo.title')"
+          :description="$t('dashboard.photos.addTo.hint')"
+        >
+          <template #body>
+            <div class="space-y-4">
+              <div v-if="addToLoading" class="space-y-2">
+                <USkeleton class="h-8 w-full" />
+                <USkeleton class="h-8 w-full" />
+              </div>
+
+              <template v-else>
+                <section class="space-y-2">
+                  <p class="text-sm font-medium">
+                    {{ $t('dashboard.photos.addTo.albums') }}
+                  </p>
+                  <p
+                    v-if="!albumChoices.length"
+                    class="text-xs text-(--ui-text-muted)"
+                  >
+                    {{ $t('dashboard.photos.addTo.noAlbums') }}
+                  </p>
+                  <div v-else class="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
+                    <UButton
+                      v-for="album in albumChoices"
+                      :key="album.id"
+                      type="button"
+                      size="xs"
+                      :color="addAlbumIds.includes(album.id) ? 'primary' : 'neutral'"
+                      :variant="addAlbumIds.includes(album.id) ? 'solid' : 'soft'"
+                      @click="toggleId(addAlbumIds, album.id)"
+                    >
+                      {{ album.title }}
+                    </UButton>
+                  </div>
+                </section>
+
+                <section class="space-y-2 rounded-lg border border-(--ui-border) p-3">
+                  <p class="text-sm font-medium">
+                    {{ $t('dashboard.photos.addTo.newAlbum') }}
+                  </p>
+                  <UInput
+                    v-model="newAlbumTitle"
+                    :placeholder="$t('dashboard.photos.addTo.newTitle')"
+                  />
+                  <div class="flex flex-wrap gap-2">
+                    <UButton
+                      v-for="level in (['public', 'login', 'admin'] as const)"
+                      :key="level"
+                      type="button"
+                      size="xs"
+                      :color="newAlbumVisibility === level ? 'primary' : 'neutral'"
+                      :variant="newAlbumVisibility === level ? 'solid' : 'soft'"
+                      @click="newAlbumVisibility = level"
+                    >
+                      {{ $t(`dashboard.albums.form.visibility_${level}`) }}
+                    </UButton>
+                  </div>
+                  <label class="flex items-center gap-2 text-sm">
+                    <USwitch v-model="newAlbumHideGallery" />
+                    {{ $t('dashboard.photos.addTo.hideFromGallery') }}
+                  </label>
+                </section>
+
+                <section class="space-y-2">
+                  <p class="text-sm font-medium">
+                    {{ $t('dashboard.photos.addTo.people') }}
+                  </p>
+                  <p
+                    v-if="!personChoices.length"
+                    class="text-xs text-(--ui-text-muted)"
+                  >
+                    {{ $t('dashboard.photos.addTo.noPeople') }}
+                  </p>
+                  <div v-else class="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
+                    <UButton
+                      v-for="person in personChoices"
+                      :key="person.id"
+                      type="button"
+                      size="xs"
+                      :color="addPersonIds.includes(person.id) ? 'primary' : 'neutral'"
+                      :variant="addPersonIds.includes(person.id) ? 'solid' : 'soft'"
+                      @click="toggleId(addPersonIds, person.id)"
+                    >
+                      {{ person.name }}
+                    </UButton>
+                  </div>
+                </section>
+              </template>
+            </div>
+          </template>
+          <template #footer>
+            <div class="flex w-full items-center justify-end gap-2">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                @click="addToOpen = false"
+              >
+                {{ $t('dashboard.photos.addTo.cancel') }}
+              </UButton>
+              <UButton
+                color="primary"
+                :loading="addToSaving"
+                :disabled="addToLoading"
+                @click="confirmAddTo"
+              >
+                {{ $t('dashboard.photos.addTo.confirm') }}
+              </UButton>
+            </div>
+          </template>
+        </UModal>
 
         <UModal v-model:open="isDeleteConfirmOpen">
           <template #body>

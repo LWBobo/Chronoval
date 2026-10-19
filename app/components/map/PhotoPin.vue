@@ -26,6 +26,7 @@ const emit = defineEmits<{
 const dayjs = useDayjs()
 const marker = computed(() => props.clusterPoint.properties.marker!)
 const hoverOpen = ref(false)
+const previewOpen = ref(false)
 
 const parseExifNumber = (value: unknown): number | null => {
   if (typeof value === 'number') {
@@ -384,16 +385,26 @@ const onClick = () => {
                 />
 
                 <!-- Single photo preview -->
-                <div class="relative h-36 overflow-hidden">
+                <button
+                  type="button"
+                  class="relative block h-36 w-full cursor-zoom-in overflow-hidden"
+                  :aria-label="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+                  @click.stop="previewOpen = true"
+                >
                   <ThumbImage
                     :src="marker.thumbnailUrl!"
                     :alt="marker.title || $t('map.photo.altFallback', { id: marker.id })"
                     :thumbhash="marker.thumbnailHash"
                     :threshold="0.1"
                     root-margin="200px"
-                    class="w-full h-full object-cover"
+                    class="pointer-events-none h-full w-full object-cover"
                   />
-                </div>
+                </button>
+                <MapPhotoLightbox
+                  v-model:open="previewOpen"
+                  :src="marker.thumbnailUrl"
+                  :alt="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+                />
                 <div class="relative px-3 py-2 space-y-1">
                   <!-- Header -->
                   <NuxtLink

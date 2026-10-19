@@ -28,12 +28,11 @@ const aspectStyle = (p: Photo) => {
   return { aspectRatio: ratio ? String(ratio) : '3 / 4' }
 }
 
-// 增量渲染：首屏只挂载有限数量，滚动到底部哨兵再追加
-const MASONRY_STEP = 60
+// 增量渲染。列表变长时只追加，不把已滚动的位置收回去。
+const MASONRY_STEP = 36
 const masonryRenderedCount = ref(0)
 const masonryScrollContainerRef = ref<HTMLElement>()
-const masonrySentinelRef = ref<HTMLElement>()
-const masonryObserver = ref<IntersectionObserver | null>(null)
+let masonryAppendLock = false
 const masonryItems = computed(() =>
   trashPhotos.value.slice(0, masonryRenderedCount.value).map((photo, i) => ({
     id: photo.id,
@@ -43,39 +42,57 @@ const masonryItems = computed(() =>
 )
 
 watch(
-  () => trashPhotos.value,
-  () => {
-    masonryRenderedCount.value = trashPhotos.value.length
-      ? Math.min(MASONRY_STEP, trashPhotos.value.length)
-      : 0
+  () => trashPhotos.value.length,
+  (length) => {
+    if (masonryRenderedCount.value === 0 && length > 0) {
+      masonryRenderedCount.value = Math.min(MASONRY_STEP, length)
+      nextTick(() => appendMasonryBatch())
+      return
+    }
+    if (masonryRenderedCount.value > length) {
+      masonryRenderedCount.value = length
+    }
   },
   { immediate: true },
 )
 
 const appendMasonryBatch = () => {
-  const total = trashPhotos.value?.length ?? 0
+  if (masonryAppendLock) return
+  const total = trashPhotos.value.length
   if (masonryRenderedCount.value >= total) return
+  masonryAppendLock = true
   masonryRenderedCount.value = Math.min(
     masonryRenderedCount.value + MASONRY_STEP,
     total,
   )
+  requestAnimationFrame(() => {
+    masonryAppendLock = false
+    const el = masonryScrollContainerRef.value
+    if (!el) return
+    if (el.scrollHeight <= el.clientHeight + 80) appendMasonryBatch()
+  })
 }
 
-onMounted(() => {
-  if (masonrySentinelRef.value) {
-    const root = masonryScrollContainerRef.value || null
-    masonryObserver.value = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) appendMasonryBatch()
-      },
-      { root },
-    )
-    masonryObserver.value.observe(masonrySentinelRef.value)
-  }
+const onMasonryScroll = () => {
+  const el = masonryScrollContainerRef.value
+  if (!el) return
+  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distanceToBottom > 640) return
+  appendMasonryBatch()
+}
+
+watch(masonryScrollContainerRef, (el, prev) => {
+  prev?.removeEventListener('scroll', onMasonryScroll)
+  if (!el) return
+  el.addEventListener('scroll', onMasonryScroll, { passive: true })
+  requestAnimationFrame(() => appendMasonryBatch())
 })
 
 onBeforeUnmount(() => {
-  masonryObserver.value?.disconnect()
+  masonryScrollContainerRef.value?.removeEventListener(
+    'scroll',
+    onMasonryScroll,
+  )
 })
 
 // 恢复单张
@@ -272,25 +289,14 @@ const confirmEmptyTrash = async () => {
         <div
           v-else
           ref="masonryScrollContainerRef"
-          class="relative flex-1 min-h-0 overflow-y-auto overscroll-contain scroll-smooth"
+          class="relative flex-1 min-h-0 overflow-y-auto overscroll-contain"
         >
-          <MasonryWall
-            :items="masonryItems"
-            :column-width="236"
-            :gap="10"
-            :min-columns="2"
-            :max-columns="8"
-            :ssr-columns="2"
-            :key-mapper="
-              (_item, _column, _row, index) =>
-                masonryItems[index]?.originalIndex ?? index
-            "
-            class="p-2"
+          <div
+            class="grid grid-cols-2 gap-2.5 p-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
           >
-            <template #default="{ item }">
+            <template v-for="item in masonryItems" :key="item.id">
               <div
                 v-if="item.photo"
-                :key="item.photo.id"
                 class="group relative overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-bg-elevated) shadow-sm cursor-pointer"
                 @click="openPreview(item.photo)"
               >
@@ -361,13 +367,11 @@ const confirmEmptyTrash = async () => {
                 </div>
               </div>
             </template>
-          </MasonryWall>
+          </div>
 
-          <!-- 增量渲染哨兵 -->
           <div
-            v-if="masonryRenderedCount < (trashPhotos?.length ?? 0)"
-            ref="masonrySentinelRef"
-            class="h-px w-full"
+            v-if="masonryRenderedCount < trashPhotos.length"
+            class="h-8 w-full"
             aria-hidden="true"
           />
         </div>

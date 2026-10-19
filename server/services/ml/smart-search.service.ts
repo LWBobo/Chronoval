@@ -48,13 +48,20 @@ async function processSmartSearchUnlocked(photoId: string) {
     .run()
 
   log().success(`CLIP embedding stored for ${photoId} (${result.dim}-d)`)
+
+  try {
+    const { assignAutoTagsForPhoto } = await import('./tags.service')
+    await assignAutoTagsForPhoto(photoId)
+  } catch (err) {
+    log().warn(`Auto tag skipped for ${photoId}`, err)
+  }
 }
 
 export interface SmartSearchHit {
   photoId: string
   distance: number
   score: number
-  source: 'clip' | 'ocr'
+  source: 'clip' | 'ocr' | 'tag'
 }
 
 function cleanQuery(raw: string) {

@@ -22,6 +22,12 @@ import { parseGPSCoordinates } from '../location/geocoding'
 import { compressUint8Array } from '~~/shared/utils/u8array'
 import { getStorageManager } from '~~/server/plugins/3.storage'
 import type { Photo } from '~~/server/utils/db'
+import {
+  detectLibraryLivePhoto,
+  findSiblingLiveStill,
+  libraryFileUrl,
+  LIVE_PHOTO_CHECKED,
+} from './live-photo'
 
 const log = () => logger.dynamic('library')
 
@@ -58,8 +64,9 @@ interface ScanResult {
  * - 仅扫描用户显式添加的外部扫描库（scan-library 挂载，经 getLibraryMounts/getAllScalableMounts 获取）
  * - 纯存储目录（/app/storage）绝不参与扫描：上传加密照片实时落盘即展示，无需扫描。
  * - 自动识别外部库内图片 / 视频，自动生成缩略图
- * - 不改写原文件（原图始终引用映射目录）；缩略图统一写入内部存储
- *   （本地存储 thumbnails/<mountName>/…，外部库目录保持纯只读原图，不就地生成）
+ * - 扫描本身不改写原文件（原图始终引用映射目录）；缩略图统一写入内部存储
+ *   （本地存储 thumbnails/<mountName>/…，外部库目录不就地生成缩略图）
+ * - 去除水印是单独的管理操作，会在校验通过后替换原文件，再经 reindexFile 刷新缩略图
  */
 export class LibraryScanner {
   private cfg: LibraryConfig
@@ -138,6 +145,7 @@ export class LibraryScanner {
         seen.add(rel)
         const stat = await fs.stat(absFile)
         const photoId = buildLibraryPhotoId(mount.name, rel)
+        const fileExtEarly = path.extname(absFile).toLowerCase()
 
         const db = useDB()
         const existing = db
@@ -146,13 +154,63 @@ export class LibraryScanner {
           .where(eq(tables.photos.id, photoId))
           .get()
 
+        // 实况短片不单独入库，挂到同名静图上。
+        if (fileExtEarly === '.mov') {
+          const stillAbs = await findSiblingLiveStill(absFile)
+          if (stillAbs) {
+            const stillRel = path.relative(mount.root, stillAbs).replace(/\\/g, '/')
+            const stillId = buildLibraryPhotoId(mount.name, stillRel)
+            const still = db
+              .select({ id: tables.photos.id, isLivePhoto: tables.photos.isLivePhoto })
+              .from(tables.photos)
+              .where(eq(tables.photos.id, stillId))
+              .get()
+            if (still && !still.isLivePhoto) {
+              await db
+                .update(tables.photos)
+                .set({
+                  isLivePhoto: 1,
+                  livePhotoVideoKey: `${mount.name}/${rel}`,
+                  livePhotoVideoUrl: libraryFileUrl(mount.name, rel),
+                })
+                .where(eq(tables.photos.id, stillId))
+                .run()
+            }
+            if (existing) {
+              await db.delete(tables.photos).where(eq(tables.photos.id, photoId)).run()
+            }
+            continue
+          }
+        }
+
         // 已存在且未被更新，跳过；缺缩略图（如早期 ffmpeg 抽帧失败）的文件不跳过，
-        // 重新处理以补生成缩略图，确保历史视频重扫后也能显示卡片图
+        // 重新处理以补生成缩略图，确保历史视频重扫后也能显示卡片图。
+        // 还没判断过动态照片的静图只补这一项，不重做缩略图。
         if (
           existing &&
           existing.lastModified === stat.mtime.toISOString() &&
           existing.thumbnailUrl
         ) {
+          if (
+            existing.type !== 'video' &&
+            !existing.isLivePhoto &&
+            existing.livePhotoVideoKey !== LIVE_PHOTO_CHECKED
+          ) {
+            const rawBuffer = await fs.readFile(absFile)
+            const live = await detectLibraryLivePhoto({
+              photoId,
+              mountName: mount.name,
+              rel,
+              absFile,
+              rawBuffer,
+              exifData: existing.exif,
+            })
+            await db
+              .update(tables.photos)
+              .set(live)
+              .where(eq(tables.photos.id, photoId))
+              .run()
+          }
           continue
         }
 
@@ -246,6 +304,49 @@ export class LibraryScanner {
     this.mounts = getAllScalableMounts()
     const mount = this.mounts.find((m) => m.name === name)
     return mount ? await this.scanMount(mount) : null
+  }
+
+  /**
+   * 原文件已被外部操作改写后，按当前字节重建缩略图和入库字段。
+   * 记录还不存在时不新建，留给下一次全库扫描。
+   */
+  async reindexFile(mountName: string, relPath: string): Promise<void> {
+    this.mounts = getAllScalableMounts()
+    const mount = this.mounts.find((item) => item.name === mountName)
+    if (!mount) return
+
+    const rel = sanitizeRelPath(relPath)
+    const root = path.resolve(mount.root)
+    const absFile = path.resolve(root, rel)
+    if (absFile !== root && !absFile.startsWith(root + path.sep)) return
+
+    const storageProvider = getStorageManager()?.getProvider()
+    if (!storageProvider) return
+
+    const stat = await fs.stat(absFile)
+    const entry = await this.processFile(mount, rel, absFile, stat, storageProvider)
+    if (!entry) return
+
+    // 缩略图路径不变，存储接口又按一年不变缓存。换地址后画廊才会拉到新图。
+    if (entry.thumbnailUrl) {
+      const base = entry.thumbnailUrl.split('?')[0]
+      entry.thumbnailUrl = `${base}?v=${Math.trunc(stat.mtimeMs)}`
+    }
+
+    const db = useDB()
+    const photoId = buildLibraryPhotoId(mount.name, rel)
+    const existing = db
+      .select({ id: tables.photos.id })
+      .from(tables.photos)
+      .where(eq(tables.photos.id, photoId))
+      .get()
+    if (!existing) return
+
+    await db
+      .update(tables.photos)
+      .set(entry)
+      .where(eq(tables.photos.id, photoId))
+      .run()
   }
 
   /**
@@ -370,6 +471,14 @@ private async collectFiles(dir: string): Promise<string[]> {
         }
         const photoInfo = extractPhotoInfo(rel, exifData)
         const coords = exifData ? parseGPSCoordinates(exifData) : null
+        const live = await detectLibraryLivePhoto({
+          photoId,
+          mountName: mount.name,
+          rel,
+          absFile,
+          rawBuffer,
+          exifData,
+        })
 
         return {
           title: photoInfo.title,
@@ -396,6 +505,7 @@ private async collectFiles(dir: string): Promise<string[]> {
           source: 'library',
           libraryMount: mount.name,
           libraryPath: rel,
+          ...live,
         }
       } catch (err) {
         log().warn(`Failed to process library image ${absFile}:`, err)

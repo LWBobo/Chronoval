@@ -26,10 +26,22 @@ const navItems = computed<NavigationMenuItem[][]>(() => [
       class: '[&_.iconify]:!text-emerald-500',
     },
     {
+      label: $t('title.watermark'),
+      icon: 'tabler:eraser',
+      to: '/dashboard/watermark',
+      class: '[&_.iconify]:!text-rose-500',
+    },
+    {
       label: $t('dashboard.nav.albums'),
       icon: 'tabler:album',
       to: '/dashboard/albums',
       class: '[&_.iconify]:!text-violet-500',
+    },
+    {
+      label: $t('dashboard.nav.people'),
+      icon: 'tabler:users',
+      to: '/dashboard/people',
+      class: '[&_.iconify]:!text-orange-500',
     },
     {
       label: $t('dashboard.nav.music'),
@@ -102,6 +114,12 @@ const navItems = computed<NavigationMenuItem[][]>(() => [
           icon: 'tabler:chart-bar',
           to: '/dashboard/settings/analytics',
           class: '[&_.iconify]:!text-rose-500',
+        },
+        {
+          label: $t('title.tagSettings'),
+          icon: 'tabler:tags',
+          to: '/dashboard/settings/tags',
+          class: '[&_.iconify]:!text-teal-500',
         },
         {
           label: $t('title.mlSettings'),

@@ -444,6 +444,7 @@
     "globe": "Bản đồ địa cầu ảnh",
     "queue": "Quản lý hàng đợi",
     "logs": "Nhật ký hệ thống",
+    "watermark": "Xóa watermark",
     "albums": "Album",
     "siteAdministration": "Cài đặt trang web",
     "location": "Dịch vụ vị trí",
@@ -1311,6 +1312,33 @@
         "type": "Lọc theo loại"
       },
       "taskListTitle": "Hàng đợi tác vụ"
+    },
+    "watermark": {
+      "title": "Xóa watermark",
+      "description": "Quét các thư viện đang bật và liệt kê JPEG có watermark thời gian của Xiaomi. Khi xóa, tệp gốc được ghi lại: mảng ảnh gốc đã lưu sẽ che chữ thời gian, còn thông tin chụp và video motion photo ở cuối tệp được giữ. Nếu mảng không khớp, không thấy video, hoặc ghi thất bại, tệp gốc không đổi.",
+      "scan": "Quét",
+      "scanning": "Đang quét…",
+      "scanDone": "Quét xong",
+      "scanDoneDescription": "Tìm thấy {count} ảnh có watermark",
+      "scanFailed": "Quét thất bại",
+      "clear": "Xóa watermark",
+      "clearDone": "Đã xóa",
+      "clearDoneDescription": "Đã xóa {cleaned}, thất bại {failed}",
+      "clearFailed": "Xóa thất bại",
+      "selectAll": "Chọn tất cả",
+      "selectedCount": "Đã chọn {count}",
+      "empty": "Chưa có kết quả. Hãy quét các thư viện đã gắn.",
+      "unavailable": "Không đọc được các thư viện này",
+      "confirmTitle": "Xóa watermark của ảnh đã chọn",
+      "confirmBody": "Thao tác này sửa trực tiếp {count} tệp gốc và không hoàn tác được.",
+      "confirm": "Xóa watermark",
+      "cancel": "Hủy",
+      "stats": {
+        "mounts": "Thư viện",
+        "scanned": "Đã kiểm tra",
+        "found": "Có watermark",
+        "selected": "Đã chọn"
+      }
     },
     "logs": {
       "connectionStatus": {

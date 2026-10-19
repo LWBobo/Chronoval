@@ -2,11 +2,14 @@
 const route = useRoute()
 const personId = computed(() => String(route.params.id || ''))
 
+type PersonVisibility = 'public' | 'login' | 'admin'
+
 interface PersonDetail {
   id: string
   name: string | null
   faceCount: number
   isHidden?: boolean
+  visibility?: PersonVisibility
   thumbnailUrl: string | null
 }
 
@@ -27,6 +30,7 @@ interface PersonPhoto {
 
 const { loggedIn, user } = useUserSession()
 const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
+const visibilityLevels: PersonVisibility[] = ['public', 'login', 'admin']
 const { t } = useI18n()
 const toast = useToast()
 const nameDraft = ref('')
@@ -50,17 +54,34 @@ const mergeOptions = computed(() =>
   ),
 )
 
+const viewerKey = computed(() =>
+  loggedIn.value ? (isAdmin.value ? 'admin' : 'user') : 'guest',
+)
+
 const { data, pending, error, refresh } = useAsyncData(
-  () => `person-${personId.value}`,
+  () => `person-${personId.value}-${viewerKey.value}`,
   () =>
     $fetch<{ person: PersonDetail; photos: PersonPhoto[] }>(
       `/api/people/${personId.value}`,
     ),
-  { watch: [personId] },
+  { watch: [personId, viewerKey] },
 )
 
 const person = computed(() => data.value?.person)
 const photos = computed(() => data.value?.photos || [])
+const blocked = computed(() => {
+  const value = person.value
+  if (!value) return false
+  const visibility = value.visibility || (value.isHidden ? 'admin' : 'public')
+  if (visibility === 'public') return false
+  if (!loggedIn.value) return true
+  if (visibility === 'admin') return !isAdmin.value
+  return false
+})
+const currentVisibility = computed<PersonVisibility>(() => {
+  if (person.value?.visibility) return person.value.visibility
+  return person.value?.isHidden ? 'admin' : 'public'
+})
 
 const displayName = computed(
   () => person.value?.name?.trim() || (person.value ? t('ui.people.unnamed') : ''),
@@ -73,8 +94,10 @@ watch(person, (value) => {
 async function savePerson(patch: {
   name?: string | null
   isHidden?: boolean
+  visibility?: PersonVisibility
 }) {
   if (!person.value || saving.value) return
+  if (patch.visibility && patch.visibility === currentVisibility.value) return
   saving.value = true
   try {
     await $fetch(`/api/people/${person.value.id}`, {
@@ -145,10 +168,10 @@ useHead({
       </div>
 
       <p
-        v-else-if="error"
-        class="text-sm text-error-600"
+        v-else-if="error || blocked"
+        class="text-sm text-neutral-500"
       >
-        {{ error.message }}
+        {{ $t('ui.people.notVisible') }}
       </p>
 
       <template v-else-if="person">
@@ -202,18 +225,16 @@ useHead({
                   {{ $t('ui.people.save') }}
                 </UButton>
                 <UButton
+                  v-for="level in visibilityLevels"
+                  :key="level"
                   type="button"
                   size="sm"
-                  color="neutral"
-                  variant="outline"
-                  :loading="saving"
-                  @click="savePerson({ isHidden: !person.isHidden })"
+                  :color="currentVisibility === level ? (level === 'admin' ? 'error' : level === 'login' ? 'warning' : 'primary') : 'neutral'"
+                  :variant="currentVisibility === level ? 'solid' : 'outline'"
+                  :loading="saving && currentVisibility === level"
+                  @click="savePerson({ visibility: level })"
                 >
-                  {{
-                    person.isHidden
-                      ? $t('ui.people.show')
-                      : $t('ui.people.hide')
-                  }}
+                  {{ $t(`ui.people.visibility.${level}`) }}
                 </UButton>
               </div>
               <div class="flex flex-wrap items-center gap-2">

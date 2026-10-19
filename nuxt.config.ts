@@ -111,7 +111,7 @@ export default defineNuxtConfig({
         avatarUrl: '',
       },
       map: {
-        provider: 'maplibre' as 'mapbox' | 'maplibre',
+        provider: 'maplibre' as 'mapbox' | 'maplibre' | 'protomaps',
         mapbox: {
           style: '',
         },
@@ -243,6 +243,8 @@ export default defineNuxtConfig({
         'mapbox-gl',
         'maplibre-gl',
         '@indoorequal/vue-maplibre-gl',
+        'pmtiles',
+        '@protomaps/basemaps',
         'file-type',
         'reka-ui',
         'es-toolkit',
@@ -269,7 +271,9 @@ export default defineNuxtConfig({
               id.includes('/maplibre-gl/') ||
               id.includes('/@indoorequal/vue-maplibre-gl/') ||
               id.includes('/nuxt-mapbox/') ||
-              id.includes('/nuxt-maplibre/')
+              id.includes('/nuxt-maplibre/') ||
+              id.includes('/pmtiles/') ||
+              id.includes('/@protomaps/basemaps/')
             ) {
               return 'vendor-map'
             }

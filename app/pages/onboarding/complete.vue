@@ -44,8 +44,9 @@ async function onComplete() {
 
     const mapData = {
       provider: mapProvider,
-      token: mapState[mapTokenKey],
-      style: mapState[mapStyleKey],
+      token: mapState[mapTokenKey] || '',
+      style: mapState[mapStyleKey] || '',
+      file: mapState['protomaps.file'] || '',
     }
 
     // 5. Submit All
