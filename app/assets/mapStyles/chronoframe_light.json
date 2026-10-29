@@ -18,8 +18,8 @@
       "url": "https://api.maptiler.com/tiles/v3-openmaptiles/tiles.json?key="
     }
   },
-  "sprite": "https://openmaptiles.github.io/maptiler-basic-gl-style/sprite",
-  "glyphs": "https://api.maptiler.com/fonts/{fontstack}/{range}.pbf?key=",
+  "sprite": "/map/openmaptiles-sprite/sprite",
+  "glyphs": "/map/basemaps-assets/fonts/{fontstack}/{range}.pbf",
   "layers": [
     {
       "id": "background",

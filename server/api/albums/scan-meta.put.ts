@@ -62,16 +62,12 @@ export default eventHandler(async (event) => {
     return { success: true, cleared: true }
   }
 
-  // 密码处理：未修改字段时不清除原有密码；password（明文）与 passwordHash 同步维护（明文仅供管理端回显）
+  // 只保存带盐哈希；空输入保持原密码，clearPassword 显式清除。
   let passwordHash: string | null | undefined
-  let password: string | null | undefined
   if (body.clearPassword) {
     passwordHash = null
-    password = null
   } else if (body.password && body.password.trim()) {
-    const plain = body.password.trim()
-    passwordHash = hashAlbumPassword(plain)
-    password = plain
+    passwordHash = hashAlbumPassword(body.password.trim())
   }
 
   const meta = await upsertScanAlbumMeta({
@@ -82,7 +78,6 @@ export default eventHandler(async (event) => {
     coverPhotoId: body.coverPhotoId,
     isHidden: body.isHidden,
     passwordHash,
-    password,
     passwordExemptMode: body.passwordExemptMode,
     passwordExemptUsers: body.passwordExemptUsers,
     slug: body.slug,

@@ -76,7 +76,7 @@ export class LibraryScanner {
 
   constructor() {
     this.cfg = getLibraryConfig()
-    // 挂载集合延迟到首次扫描时再构建：getLibraryMounts() 会查询 scan_libraries 表，
+    // 挂载集合延迟到首次扫描时再构建：getLibraryMounts() 会查询 libraries 表，
     // 而该表在全新部署（空数据库）中需由 0.db-migrate 迁移插件创建。
     // 若在模块加载期（早于任何插件）即查询，会因表不存在而启动崩溃。
     // scanAll / scanMountByName 每次都会主动刷新 this.mounts，
@@ -404,9 +404,8 @@ private async collectFiles(dir: string): Promise<string[]> {
     storageProvider: any,
   ): Promise<Partial<Photo> | null> {
     const photoId = buildLibraryPhotoId(mount.name, rel)
-    const relUrl = encodeURIComponent(rel).replace(/%2F/g, '/')
     // 原文件只读引用：通过 /library/<mountName>/<relpath> 访问
-    const originalUrl = `/library/${mount.name}/${relUrl}`
+    const originalUrl = libraryFileUrl(mount.name, rel)
 
     // 缩略图统一写入内部存储（与上传缩略图同源）：
     // 不再就地写入外部库目录，外部库保持纯只读原图。本地存储下 URL 为
@@ -504,6 +503,9 @@ private async collectFiles(dir: string): Promise<string[]> {
           type: 'image',
           source: 'library',
           libraryMount: mount.name,
+          libraryId: mount.name.startsWith('scan_')
+            ? Number(mount.name.slice(5)) || null
+            : null,
           libraryPath: rel,
           ...live,
         }
@@ -563,6 +565,9 @@ private async collectFiles(dir: string): Promise<string[]> {
         type: 'video',
         source: 'library',
         libraryMount: mount.name,
+        libraryId: mount.name.startsWith('scan_')
+          ? Number(mount.name.slice(5)) || null
+          : null,
         libraryPath: rel,
       }
     } catch (err) {

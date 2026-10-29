@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+const requestFetch = useRequestFetch()
+const { user } = useUserSession()
 import type { ScanPhoto } from '~/components/albums/scanPhoto'
 import RandomPreviewOverlay from '~/components/albums/RandomPreviewOverlay.vue'
 import { supportsWheel3D } from '~/utils/capability'
@@ -53,29 +55,17 @@ const relPath = computed(() => props.relPath || '')
 const { t } = useI18n()
 const dayjs = useDayjs()
 
-// 相簿相对路径可能含非 ASCII（中文等）。Node/nitro 的 HTTP 层会直接 400 拒绝
-// 请求行里未百分号编码的非 ASCII query（如 path=旅行），导致三级相簿“打不开”。
-// 这里先把每段 encodeURIComponent 后作为 query 值。后端 getScanAlbumDetail /
-// cleanRelPath 本就会再 decodeURIComponent，因此无论前端是否二次编码都能正确还原，
-// 可稳定绕过该 400。
-const encodedRelPath = computed(() =>
-  relPath.value
-    .split('/')
-    .filter(Boolean)
-    .map((s) => encodeURIComponent(s))
-    .join('/'),
-)
-
+// query 序列化器负责 UTF-8 编码；不要预编码后再编码一遍。
 const { data, status, refresh } = await useAsyncData<ScanAlbumPayload>(
-  () => `scan-album-${props.libKey}-${relPath.value}`,
+  () => `scan-album-${props.libKey}-${relPath.value}-${user.value?.id ?? 'guest'}`,
   () =>
-    $fetch<ScanAlbumPayload>(
+    requestFetch<ScanAlbumPayload>(
       `/api/albums/scan/${props.libKey}`,
       {
-        query: { path: encodedRelPath.value || relPath.value },
+        query: { path: relPath.value },
       },
     ),
-  { watch: [() => props.libKey, relPath] },
+  { watch: [() => props.libKey, relPath, () => user.value?.id] },
 )
 
 const passwordInput = ref('')
@@ -108,9 +98,9 @@ const onSubmitPassword = async () => {
   }
   unlocking.value = true
   try {
-    await $fetch(`/api/albums/scan/${props.libKey}`, {
+    await requestFetch(`/api/albums/scan/${props.libKey}`, {
       method: 'POST',
-      query: { path: encodedRelPath.value || relPath.value },
+      query: { path: relPath.value },
       body: { password: pw },
     })
     stopFailTimer()

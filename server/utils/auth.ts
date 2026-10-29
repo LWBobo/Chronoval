@@ -13,7 +13,8 @@ export function toSessionUser(user: UserRow) {
     email: user.email,
     avatar: user.avatar,
     createdAt: user.createdAt,
-    isAdmin: user.isAdmin,
+    isAdmin: user.role === 'admin',
+    role: user.role,
   }
 }
 

@@ -24,6 +24,7 @@
 | NUXT_PROVIDER_LOCAL_PREFIX               | 本地存储子目录前缀                                   | `photos/`                             | 否                                                                    |
 | LIBRARY_ENABLED                          | 是否启用自动扫描（对外部扫描库生效）                 | `true`                                | 否                                                                    |
 | LIBRARY_SCAN_INTERVAL_MS                 | 外部扫描库自动重扫间隔（毫秒）                       | `300000`（5 分钟）                    | 否                                                                    |
+| PIPELINE_COMPLETED_RETENTION_DAYS        | 已完成队列任务保留天数；失败任务不自动删除，`0` 表示关闭自动清理 | `30`                         | 否                                                                    |
 | NUXT_PROVIDER_S3_ENDPOINT                | S3 兼容存储服务的 Endpoint                           | 无                                    | 当 `NUXT_STORAGE_PROVIDER` 为 `s3` 时必需                             |
 | NUXT_PROVIDER_S3_BUCKET                  | S3 存储桶名称                                        | `chronoframe`                         | 当 `NUXT_STORAGE_PROVIDER` 为 `s3` 时必需                             |
 | NUXT_PROVIDER_S3_REGION                  | S3 存储桶区域                                        | `auto`                                | 当 `NUXT_STORAGE_PROVIDER` 为 `s3` 时必需                             |
@@ -55,6 +56,9 @@
 | CHRONOVAL_ML_URL                         | 机器学习侧车根地址                                   | `http://127.0.0.1:3003`               | 否                                                                    |
 | ML_NIGHTLY_INTERVAL_MS                   | 人物聚合夜间扫描间隔                                 | `86400000`（24 小时）                 | 否                                                                    |
 | ML_NIGHTLY_INITIAL_DELAY_MS              | 首次人物聚合扫描延迟                                 | `300000`（5 分钟）                    | 否                                                                    |
+| CHRONOVAL_PMTILES_CACHE_MEM_MB           | `/map/pmtiles` Range 内存 LRU 上限（MB）             | `256`                                 | 否                                                                    |
+| CHRONOVAL_PMTILES_CACHE_DISK_MB          | Range 磁盘缓存上限（MB；`0` 关闭）                   | `2048`                                | 否                                                                    |
+| CHRONOVAL_PMTILES_CACHE_IDLE_MS          | 空闲多久后清空内存并清理磁盘缓存（毫秒）             | `600000`（10 分钟）                   | 否                                                                    |
 
 智能搜图、人物与 OCR 见 [机器学习](/zh/guide/ml)。
 
@@ -84,3 +88,38 @@ NUXT_UPLOAD_MIME_WHITELIST=image/jpeg,image/png,video/mp4
 ```
 NUXT_UPLOAD_MIME_WHITELIST_ENABLED=false
 ```
+
+## 小带宽时间线地图
+
+时间线工具栏提供“自动 / 省流 / 流畅”三种网络模式。自动模式会参考浏览器的省流设置、有效网络类型、估算下行带宽和往返延迟；无法检测网络时默认采用省流模式。用户的选择保存在当前浏览器中。
+
+省流模式会限制自动播放的落地缩放级别、关闭跨缩放级别瓦片预取，并在远距离地点之间使用一次地图跳转，避免下载移动路径沿途短暂出现的瓦片。PMTiles Range 数据会在浏览器 Cache Storage 中保留最多约 64 MB，重复访问同一路线时优先读取本地缓存。
+
+设置页的“时间线 PMTiles 文件”可以填写一个位于 `/app/map` 的轻量地图档案，例如 `timeline-lite.pmtiles`。配置后，省流模式优先使用该档案；留空时继续使用主 PMTiles。轻量档案建议只保留 0–10 级的陆地、水域、行政边界、主要道路和地点名称。
+
+地图 Marker 使用独立的 96/256px WebP 缩略图。生成结果缓存在 `/app/data/map-thumbnail-cache/v1`，不需要新增 Docker 挂载。
+
+### Nginx Proxy Manager
+
+在 Proxy Host 中启用 HTTP/2 与 Websockets Support，并在 Advanced 中加入以下配置。Nitro 对 PMTiles Range 响应发送 `X-Accel-Buffering: no`，Nginx Proxy Manager 会立即转发小范围数据，避免先写入代理临时文件。
+
+```nginx
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 5;
+gzip_min_length 1024;
+gzip_types
+  text/plain
+  text/css
+  text/xml
+  application/json
+  application/javascript
+  application/xml
+  application/manifest+json
+  image/svg+xml;
+```
+
+启用 Websockets Support 后，Nginx Proxy Manager 会自动生成 `proxy_http_version 1.1;`，不要在 Advanced 中重复添加，否则该 Proxy Host 会因指令重复而显示 Offline。PMTiles 接口已经通过 `X-Accel-Buffering: no` 单独关闭响应缓冲，因此也不需要在整个 Proxy Host 上设置 `proxy_request_buffering` 或 `proxy_max_temp_file_size`。
+
+不要为 `/map/pmtiles` 配置忽略 `Range` 请求头的普通整文件缓存。该接口必须将浏览器的 `Range` 请求原样转发，并保留上游返回的 `206`、`Content-Range`、`Content-Length`、`ETag` 和 `Accept-Ranges` 响应头。

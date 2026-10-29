@@ -1,13 +1,20 @@
 import { and, desc, eq, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm'
+import { faceMaxDistance } from './config'
+import { bufferToFloat32, cosineDistance } from './vector'
 import { randomUUID } from 'node:crypto'
+import { readCollectionAccess, replaceCollectionAccess } from '../collections/access-grants'
 
 export type PersonVisibility = 'public' | 'login' | 'admin'
 export type PersonViewer = 'public' | 'user' | 'admin'
 
 export function normalizeVisibility(person: {
+  collectionId?: number | null
   visibility?: string | null
   isHidden?: boolean | null
 }): PersonVisibility {
+  if (person.collectionId) {
+    return readCollectionAccess(person.collectionId).visibility
+  }
   if (
     person.visibility === 'public' ||
     person.visibility === 'login' ||
@@ -19,7 +26,7 @@ export function normalizeVisibility(person: {
 }
 
 export function viewerFromActor(actor: {
-  user?: { id?: string } | null
+  user?: { id?: string | number } | null
   isAdmin?: boolean
 }): PersonViewer {
   if (actor.isAdmin) return 'admin'
@@ -39,45 +46,23 @@ export function visibilityAllows(visibility: PersonVisibility, viewer: PersonVie
  * 把其中一个人改回公开后，其余人若仍是登录可见或仅管理员，照片继续隐藏。
  */
 export function photoAllowedByPeopleSql(viewer: PersonViewer): SQL {
-  ensureVisibilityColumn()
   if (viewer === 'admin') return sql`1`
-  const restricted =
-    viewer === 'user'
-      ? sql`(
-          ${tables.people.visibility} = 'admin'
-          OR (
-            (${tables.people.visibility} IS NULL OR ${tables.people.visibility} = '')
-            AND ${tables.people.isHidden} = 1
-          )
-        )`
-      : sql`(
-          ${tables.people.visibility} IN ('login', 'admin')
-          OR (
-            (${tables.people.visibility} IS NULL OR ${tables.people.visibility} = '')
-            AND ${tables.people.isHidden} = 1
-          )
-        )`
-  const facesHidden = sql`EXISTS (
+  const blockedAudiences =
+    viewer === 'user' ? sql`('admin')` : sql`('login', 'admin')`
+  return sql`NOT EXISTS (
     SELECT 1
     FROM ${tables.assetFaces}
     INNER JOIN ${tables.people}
       ON ${tables.assetFaces.personId} = ${tables.people.id}
+    INNER JOIN ${tables.accessGrants}
+      ON ${tables.accessGrants.collectionId} = ${tables.people.collectionId}
     WHERE ${tables.assetFaces.photoId} = ${tables.photos.id}
-      AND ${restricted}
+      AND ${tables.accessGrants.audience} IN ${blockedAudiences}
   )`
-  const manualHidden = sql`EXISTS (
-    SELECT 1
-    FROM ${tables.personPhotos}
-    INNER JOIN ${tables.people}
-      ON ${tables.personPhotos.personId} = ${tables.people.id}
-    WHERE ${tables.personPhotos.photoId} = ${tables.photos.id}
-      AND ${restricted}
-  )`
-  return sql`NOT (${facesHidden} OR ${manualHidden})`
 }
 
 export function blockedPhotoIdsForActor(actor: {
-  user?: { id?: string } | null
+  user?: { id?: string | number } | null
   isAdmin?: boolean
 }) {
   ensureVisibilityColumn()
@@ -86,8 +71,7 @@ export function blockedPhotoIdsForActor(actor: {
   const rows = useDB()
     .select({
       photoId: tables.assetFaces.photoId,
-      visibility: tables.people.visibility,
-      isHidden: tables.people.isHidden,
+      collectionId: tables.people.collectionId,
     })
     .from(tables.assetFaces)
     .innerJoin(tables.people, eq(tables.assetFaces.personId, tables.people.id))
@@ -95,47 +79,21 @@ export function blockedPhotoIdsForActor(actor: {
   for (const row of rows) {
     if (row.photoId && !canSeePerson(row, actor)) blocked.add(row.photoId)
   }
-  const manual = useDB()
-    .select({
-      photoId: tables.personPhotos.photoId,
-      visibility: tables.people.visibility,
-      isHidden: tables.people.isHidden,
-    })
-    .from(tables.personPhotos)
-    .innerJoin(tables.people, eq(tables.personPhotos.personId, tables.people.id))
-    .all()
-  for (const row of manual) {
-    if (row.photoId && !canSeePerson(row, actor)) blocked.add(row.photoId)
-  }
   return blocked
 }
 
 export function canSeePerson(
-  person: { visibility?: string | null; isHidden?: boolean | null },
-  actor: { user?: { id?: string } | null; isAdmin?: boolean },
+  person: {
+    collectionId?: number | null
+    visibility?: string | null
+    isHidden?: boolean | null
+  },
+  actor: { user?: { id?: string | number } | null; isAdmin?: boolean },
 ) {
   return visibilityAllows(normalizeVisibility(person), viewerFromActor(actor))
 }
 
-let visibilityColumnReady = false
-
-/** 迁移被跳过时补上 visibility，避免「仅登录」写入失败后仍对访客公开。 */
-function ensureVisibilityColumn() {
-  if (visibilityColumnReady) return
-  const sqlite = useSqlite()
-  const table = sqlite
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'people'`)
-    .get()
-  if (!table) return
-  const cols = sqlite.prepare(`PRAGMA table_info(people)`).all() as { name: string }[]
-  if (!cols.some((col) => col.name === 'visibility')) {
-    sqlite.exec(
-      `ALTER TABLE people ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`,
-    )
-    sqlite.exec(`UPDATE people SET visibility = 'admin' WHERE is_hidden = 1`)
-  }
-  visibilityColumnReady = true
-}
+function ensureVisibilityColumn() {}
 
 function recount(personId: string) {
   reconcilePerson(personId)
@@ -166,13 +124,16 @@ export function reconcilePerson(personId: string) {
     .all()
     .filter((f) => !f.deletedAt)
   const count = faces.length
-  const manualCount = db
-    .select({ photoId: tables.personPhotos.photoId })
-    .from(tables.personPhotos)
-    .where(eq(tables.personPhotos.personId, personId))
-    .all().length
-
-  if (count === 0 && manualCount === 0 && !person.name?.trim()) {
+  if (
+    person.origin !== 'manual' &&
+    count === 0 &&
+    !person.name?.trim()
+  ) {
+    if (person.collectionId) {
+      db.delete(tables.collections)
+        .where(eq(tables.collections.id, person.collectionId))
+        .run()
+    }
     db.delete(tables.people).where(eq(tables.people.id, personId)).run()
     return
   }
@@ -221,32 +182,78 @@ export function listPeople(options?: {
     if (b.name) return 1
     return b.faceCount - a.faceCount
   })
-  return rows
+  return rows.map((person) => {
+    const visibility = normalizeVisibility(person)
+    return { ...person, visibility, isHidden: visibility !== 'public' }
+  })
 }
 
 export function getPerson(id: string) {
   ensureVisibilityColumn()
-  return useDB()
+  const person = useDB()
     .select()
     .from(tables.people)
     .where(eq(tables.people.id, id))
     .get()
+  if (!person) return undefined
+  const visibility = normalizeVisibility(person)
+  return { ...person, visibility, isHidden: visibility !== 'public' }
 }
 
-export function createPerson(name?: string | null) {
+export function ensurePersonCollection(
+  personId: string,
+  audience?: PersonVisibility,
+) {
+  const db = useDB()
+  const person = db
+    .select()
+    .from(tables.people)
+    .where(eq(tables.people.id, personId))
+    .get()
+  if (!person) return null
+  let collectionId = person.collectionId
+  if (!collectionId) {
+    const created = db
+      .insert(tables.collections)
+      .values({
+        kind: 'person',
+        title: person.name,
+        showOnGallery: true,
+        showOnAlbums: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning({ id: tables.collections.id })
+      .get()
+    collectionId = created.id
+    db.update(tables.people)
+      .set({ collectionId, updatedAt: new Date() })
+      .where(eq(tables.people.id, personId))
+      .run()
+  }
+  const nextAudience = audience ?? normalizeVisibility(person)
+  replaceCollectionAccess(collectionId, { visibility: nextAudience }, db)
+  return collectionId
+}
+
+export function createPerson(
+  name?: string | null,
+  options?: { origin?: 'ml' | 'manual'; visibility?: PersonVisibility },
+) {
   const id = randomUUID()
+  const visibility = options?.visibility ?? 'public'
   useDB()
     .insert(tables.people)
     .values({
       id,
       name: name?.trim() || null,
       ownerId: null,
-      visibility: 'public',
-      isHidden: false,
+      origin: options?.origin ?? 'ml',
       thumbnailFaceId: null,
       faceCount: 0,
     })
     .run()
+  ensurePersonCollection(id, visibility)
   return getPerson(id)
 }
 
@@ -263,24 +270,19 @@ export function updatePerson(
   const db = useDB()
   const next: {
     name?: string | null
-    isHidden?: boolean
-    visibility?: PersonVisibility
     thumbnailFaceId?: string | null
     updatedAt: Date
   } = { updatedAt: new Date() }
   if (patch.name !== undefined) next.name = patch.name
   if (patch.thumbnailFaceId !== undefined) next.thumbnailFaceId = patch.thumbnailFaceId
-  if (patch.visibility !== undefined) {
-    next.visibility = patch.visibility
-    next.isHidden = patch.visibility !== 'public'
-  } else if (patch.isHidden !== undefined) {
-    next.isHidden = patch.isHidden
-    next.visibility = patch.isHidden ? 'admin' : 'public'
-  }
   db.update(tables.people)
     .set(next)
     .where(eq(tables.people.id, id))
     .run()
+  const visibility =
+    patch.visibility ??
+    (patch.isHidden === undefined ? undefined : patch.isHidden ? 'admin' : 'public')
+  ensurePersonCollection(id, visibility)
   return getPerson(id)
 }
 
@@ -290,9 +292,19 @@ export function deletePeople(ids: string[]) {
   const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))]
   if (!unique.length) return 0
   const db = useDB()
-  db.delete(tables.personPhotos)
-    .where(inArray(tables.personPhotos.personId, unique))
-    .run()
+  const rows = db
+    .select({ collectionId: tables.people.collectionId })
+    .from(tables.people)
+    .where(inArray(tables.people.id, unique))
+    .all()
+  const collectionIds = rows
+    .map((row) => row.collectionId)
+    .filter((id): id is number => id != null)
+  if (collectionIds.length) {
+    db.delete(tables.collections)
+      .where(inArray(tables.collections.id, collectionIds))
+      .run()
+  }
   db.update(tables.assetFaces)
     .set({ personId: null })
     .where(inArray(tables.assetFaces.personId, unique))
@@ -313,13 +325,6 @@ function linkedPhotoIds(personId: string) {
     .where(eq(tables.assetFaces.personId, personId))
     .all()) {
     if (row.photoId) ids.add(row.photoId)
-  }
-  for (const row of db
-    .select({ photoId: tables.personPhotos.photoId })
-    .from(tables.personPhotos)
-    .where(eq(tables.personPhotos.personId, personId))
-    .all()) {
-    ids.add(row.photoId)
   }
   return ids
 }
@@ -361,9 +366,21 @@ export function addPhotosToPerson(personId: string, photoIds: string[]) {
       .where(eq(tables.photos.id, photoId))
       .get()
     if (!photo || photo.deletedAt) continue
-    db.insert(tables.personPhotos)
-      .values({ personId, photoId })
-      .onConflictDoNothing()
+    db.insert(tables.assetFaces)
+      .values({
+        id: randomUUID(),
+        photoId,
+        personId,
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 0,
+        imageWidth: 0,
+        imageHeight: 0,
+        score: 0,
+        source: 'manual',
+        pinned: false,
+      })
       .run()
     linked.add(photoId)
     added++
@@ -371,48 +388,82 @@ export function addPhotosToPerson(personId: string, photoIds: string[]) {
   return { added, already, photoCount: linked.size }
 }
 
-export function searchPhotosForPerson(personId: string, query: string, limit = 48) {
+export function searchPhotosForPerson(
+  personId: string,
+  query: string,
+  limit = 48,
+  cursor = '',
+) {
   if (!getPerson(personId)) {
     throw createError({ statusCode: 404, message: 'Person not found' })
   }
   const db = useDB()
   const cap = Math.min(80, Math.max(1, limit))
   const q = query.trim()
-  const columns = {
-    id: tables.photos.id,
-    title: tables.photos.title,
-    thumbnailUrl: tables.photos.thumbnailUrl,
-    dateTaken: tables.photos.dateTaken,
+  const term = q ? `%${q.replace(/[%_]/g, '')}%` : ''
+  const separator = cursor.indexOf('|')
+  const cursorDate = separator >= 0 ? cursor.slice(0, separator) : ''
+  const cursorId = separator >= 0 ? cursor.slice(separator + 1) : ''
+  const filters: SQL[] = [
+    isNull(tables.photos.deletedAt),
+    or(
+      isNull(tables.photos.libraryId),
+      sql`EXISTS (
+        SELECT 1 FROM ${tables.libraries}
+        WHERE ${tables.libraries.id} = ${tables.photos.libraryId}
+          AND ${tables.libraries.enabled} = 1
+      )`,
+    )!,
+  ]
+  if (term) {
+    filters.push(
+      or(
+        like(tables.photos.title, term),
+        like(tables.photos.id, term),
+        like(tables.photos.libraryPath, term),
+        like(tables.photos.city, term),
+        like(tables.photos.locationName, term),
+      )!,
+    )
   }
-  const rows = q
-    ? db
-        .select(columns)
-        .from(tables.photos)
-        .where(
-          and(
-            isNull(tables.photos.deletedAt),
-            or(
-              like(tables.photos.title, `%${q.replace(/[%_]/g, '')}%`),
-              like(tables.photos.id, `%${q.replace(/[%_]/g, '')}%`),
-              like(tables.photos.libraryPath, `%${q.replace(/[%_]/g, '')}%`),
-            ),
-          ),
-        )
-        .orderBy(desc(tables.photos.dateTaken))
-        .limit(cap)
-        .all()
-    : db
-        .select(columns)
-        .from(tables.photos)
-        .where(isNull(tables.photos.deletedAt))
-        .orderBy(desc(tables.photos.dateTaken))
-        .limit(cap)
-        .all()
+  if (cursorId) {
+    filters.push(sql`(
+      COALESCE(${tables.photos.dateTaken}, '') < ${cursorDate}
+      OR (
+        COALESCE(${tables.photos.dateTaken}, '') = ${cursorDate}
+        AND ${tables.photos.id} < ${cursorId}
+      )
+    )`)
+  }
+
+  const rows = db
+    .select({
+      id: tables.photos.id,
+      title: tables.photos.title,
+      thumbnailUrl: tables.photos.thumbnailUrl,
+      dateTaken: tables.photos.dateTaken,
+    })
+    .from(tables.photos)
+    .where(and(...filters))
+    .orderBy(
+      sql`COALESCE(${tables.photos.dateTaken}, '') DESC`,
+      desc(tables.photos.id),
+    )
+    .limit(cap + 1)
+    .all()
+  const page = rows.slice(0, cap)
   const linked = linkedPhotoIds(personId)
-  return rows.map((row) => ({
-    ...row,
-    already: linked.has(row.id),
-  }))
+  const last = page.at(-1)
+  return {
+    photos: page.map((row) => ({
+      ...row,
+      already: linked.has(row.id),
+    })),
+    nextCursor:
+      rows.length > cap && last
+        ? `${last.dateTaken || ''}|${last.id}`
+        : null,
+  }
 }
 
 export function photoCountByPerson() {
@@ -436,15 +487,6 @@ export function photoCountByPerson() {
     .all()) {
     add(row.personId, row.photoId)
   }
-  for (const row of db
-    .select({
-      personId: tables.personPhotos.personId,
-      photoId: tables.personPhotos.photoId,
-    })
-    .from(tables.personPhotos)
-    .all()) {
-    add(row.personId, row.photoId)
-  }
   return new Map([...groups].map(([id, photos]) => [id, photos.size]))
 }
 
@@ -454,6 +496,87 @@ export function getFacesForPhoto(photoId: string) {
     .from(tables.assetFaces)
     .where(eq(tables.assetFaces.photoId, photoId))
     .all()
+}
+
+/** 手建人物的照片在检测出唯一一张脸后，把这张脸固定为锚点。 */
+export async function anchorManualMembers(photoId: string) {
+  const db = useDB()
+  const manualFaces = db
+    .select({ personId: tables.assetFaces.personId })
+    .from(tables.assetFaces)
+    .where(
+      and(
+        eq(tables.assetFaces.photoId, photoId),
+        eq(tables.assetFaces.source, 'manual'),
+      ),
+    )
+    .all()
+  const personIds = new Set(
+    manualFaces
+      .map((row) => row.personId)
+      .filter((id): id is string => Boolean(id)),
+  )
+  if (personIds.size !== 1) return
+  const personId = [...personIds][0]!
+  const person = getPerson(personId)
+  if (!person || person.origin !== 'manual') return
+  const detected = db
+    .select()
+    .from(tables.assetFaces)
+    .where(
+      and(
+        eq(tables.assetFaces.photoId, photoId),
+        eq(tables.assetFaces.source, 'ml'),
+      ),
+    )
+    .all()
+  if (detected.length !== 1) return
+  const face = detected[0]!
+  if (face.personId && face.personId !== personId) {
+    const current = getPerson(face.personId)
+    if (!current || current.origin === 'manual' || current.name?.trim()) return
+  }
+  db.update(tables.assetFaces)
+    .set({ personId, pinned: true })
+    .where(eq(tables.assetFaces.id, face.id))
+    .run()
+  if (face.personId && face.personId !== personId) {
+    const maxDistance = await faceMaxDistance()
+    const anchorEmb = db
+      .select()
+      .from(tables.faceEmbeddings)
+      .where(eq(tables.faceEmbeddings.faceId, face.id))
+      .get()
+    const anchorVec = anchorEmb
+      ? bufferToFloat32(anchorEmb.embedding as Buffer)
+      : null
+    const others = db
+      .select()
+      .from(tables.assetFaces)
+      .where(eq(tables.assetFaces.personId, face.personId))
+      .all()
+    for (const other of others) {
+      if (other.id === face.id) continue
+      if (!anchorVec) continue
+      const otherEmb = db
+        .select()
+        .from(tables.faceEmbeddings)
+        .where(eq(tables.faceEmbeddings.faceId, other.id))
+        .get()
+      if (!otherEmb) continue
+      const distance = cosineDistance(
+        anchorVec,
+        bufferToFloat32(otherEmb.embedding as Buffer),
+      )
+      if (distance > maxDistance) continue
+      db.update(tables.assetFaces)
+        .set({ personId })
+        .where(eq(tables.assetFaces.id, other.id))
+        .run()
+    }
+    reconcilePerson(face.personId)
+  }
+  reconcilePerson(personId)
 }
 
 export function reassignFace(faceId: string, personId: string | null) {
@@ -467,7 +590,7 @@ export function reassignFace(faceId: string, personId: string | null) {
 
   const oldPerson = face.personId
   db.update(tables.assetFaces)
-    .set({ personId })
+    .set({ personId, pinned: personId != null })
     .where(eq(tables.assetFaces.id, faceId))
     .run()
   if (oldPerson) recount(oldPerson)

@@ -1042,7 +1042,12 @@
           "tags": "标签",
           "tagsHint": "按下 Enter 键添加每个标签。",
           "location": "拍摄位置",
-          "locationHint": "点击地图选择或更新拍摄位置。",
+          "locationHint": "搜索中文地名，或点击地图选择拍摄位置。",
+          "locationSearch": "搜索地点，例如：云台山、九寨沟",
+          "locationSearchEmpty": "没有找到匹配的地点",
+          "locationSearchFailed": "地点搜索失败，请稍后重试",
+          "expandMap": "放大地图",
+          "confirmLocation": "完成选择",
           "clearLocation": "抹除位置信息",
           "coordinates": "坐标",
           "noLocation": "未选择位置",
@@ -1608,11 +1613,15 @@
       "selectAll": "全选当前列表",
       "clearSelection": "取消全选",
       "addPhotos": "添加照片",
+      "createName": "人物姓名",
+      "createButton": "新建人物",
+      "createFailed": "新建人物失败",
       "addTitle": "添加到「{name}」",
       "addHint": "人脸聚合漏掉的照片可以在这里搜到并加入。已经属于这个人的照片不能重复添加。",
       "addSearch": "按标题、路径或编号搜索",
       "addEmpty": "没有找到照片",
       "addAlready": "已在相册中",
+      "addLoadMore": "加载更多",
       "addConfirm": "加入所选（{count}）",
       "added": "已加入 {count} 张照片",
       "addFailed": "添加失败"
@@ -1897,6 +1906,11 @@
           "label": "PMTiles 文件名",
           "description": "放在容器 /app/map 目录中的 Protomaps 档案",
           "help": "默认读取 /app/map/20261018.pmtiles。只填写文件名，不要写路径。"
+        },
+        "timelineFile": {
+          "label": "时间线 PMTiles 文件",
+          "description": "小带宽下供时间线地图使用的可选轻量地图档案",
+          "help": "将 timeline-lite.pmtiles 等低层级地图放入 /app/map。留空时继续使用主地图档案。"
         }
       },
       "sectionDescription": "配置地图展示与地理编码服务。地图服务商会影响地图样式与访问凭证。"
@@ -2577,7 +2591,20 @@
       "toggle": "启用/关闭时间回溯",
       "playPause": "播放/暂停时间回溯",
       "follow": "跟随地点：换地方时先缩小，再平滑飞到下一处并放大",
-      "title": "时间回溯"
+      "title": "时间回溯",
+      "preloading": "地图加载中…",
+      "speed": "播放速度",
+      "resumeFollow": "继续跟随",
+      "pausedByInteraction": "已因手动操作暂停",
+      "loadingPhotos": "正在加载地图照片…",
+      "preparingPlace": "正在准备下一个地点…",
+      "markPhotos": "{count} 张",
+      "networkMode": {
+        "help": "网络模式：自动会检测连接；省流会跳过沿途瓦片；流畅保留完整飞行动画",
+        "auto": "自动",
+        "save-data": "省流",
+        "smooth": "流畅"
+      }
     }
   },
   "photo": {

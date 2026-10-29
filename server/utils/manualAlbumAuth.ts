@@ -1,21 +1,23 @@
 import { createHmac } from 'node:crypto'
-import { safeTokenEqual } from './albumAccess'
+import { safeTokenEqual } from './token'
 
 /**
- * 普通相簿（albums 表）的访问密码鉴权。
+ * 普通相簿（collections.kind=manual）的访问密码鉴权。
  *
- * 密码存于 albums.password_hash（单向哈希，由后台相簿编辑面板维护）。
+ * 密码存于 collections.password_hash（单向哈希，由后台相簿编辑面板维护）。
  * 解锁令牌按相簿 id 签发，不同相簿互不干扰；密码变更后旧令牌自动失效。
  * - 管理员是否放行见各接口（默认与扫描相簿一致：仅当系统开关开启时才免密）。
  * - 无密码时视为开放相簿（直接放行）。
  */
 
-const DEFAULT_SECRET = 'chronoval-album-unlock'
-
 const cookieName = (albumId: number): string => `album_${albumId}`
 
-const getSecret = (): string =>
-  process.env.ALBUM_UNLOCK_SECRET || DEFAULT_SECRET
+const getSecret = (): string => {
+  const secret =
+    process.env.ALBUM_UNLOCK_SECRET || process.env.NUXT_SESSION_PASSWORD
+  if (!secret) throw new Error('Album unlock secret is not configured')
+  return secret
+}
 
 /** 生成与当前密码哈希绑定的解锁令牌 */
 export const albumToken = (
@@ -35,7 +37,11 @@ export const albumToken = (
  */
 export const hasAlbumAccess = (
   event: any,
-  opts: { albumId: number; passwordHash: string | null; sessionExempt?: boolean },
+  opts: {
+    albumId: number
+    passwordHash: string | null
+    sessionExempt?: boolean
+  },
   allowAdmin: boolean,
 ): boolean => {
   if (allowAdmin) return true
@@ -61,13 +67,18 @@ export const authorizeAlbum = (
   opts: { albumId: number; passwordHash: string | null },
 ): void => {
   const scope = cookieName(opts.albumId)
-  setCookie(event, scope, `${opts.albumId}:${albumToken(opts.albumId, opts.passwordHash)}`, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: false, // 与登录 cookie 保持一致
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30, // 30 天
-  })
+  setCookie(
+    event,
+    scope,
+    `${opts.albumId}:${albumToken(opts.albumId, opts.passwordHash)}`,
+    {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: useSecureCookie(event),
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30, // 30 天
+    },
+  )
 }
 
 /** 清除解锁 Cookie */

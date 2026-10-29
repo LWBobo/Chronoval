@@ -1,1 +1,0 @@
-ALTER TABLE `scan_album_meta` ADD `password` text;

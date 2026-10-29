@@ -49,12 +49,12 @@
 - 手工相簿可见范围：所有人、仅登录、仅管理员。没有密码时，仅登录的照片在登录后出现在首页。
 - 相簿设了访问密码：首页永远不放这些照片。只有打开相簿并解锁、或免密、或管理员，才能看见。
 - 免密：所有登录用户，或指定用户。
-- 一张照片属于多个相簿时，只要有一条路径允许，这张照片就可见。
+- 一张照片属于多个相簿时，按其中最严的一档决定能不能看。公开相簿和仅登录相簿各有一张相同照片时，未登录在两个相簿、首页和搜索里都看不到它。这是相对现有代码的改动：现在的实现是任一相簿允许就可见，重构后改为取严。
 - `hide_from_gallery` 只影响首页，不影响相簿页和搜索。
 - 扫描库 `gallery` 进首页、不进相册页；`album` 进相册页、不进首页；`both` 两边都进。禁用的扫描库两边都不进。
 - 扫描子目录可以单独隐藏、单独设密码。未单独设置时沿父目录继承。
-- 人物可见范围是所有人、仅登录、仅管理员。照片里只要有一个当前观众看不见的人，整张照片不出现。一个人改回公开后，如果另一个人仍是仅登录或仅管理员，照片继续隐藏。
-- 人脸漏检时，管理员可以把照片手动放进某个人物。
+- 人物相册只在人物页显示，不进相册页。它的可见范围仍是所有人、仅登录、仅管理员，并参与照片取严。照片里只要有一个当前观众看不见的人物相册，整张照片不出现。一个人改回公开后，如果另一个人仍是仅登录或仅管理员，照片继续隐藏。
+- 人脸漏检时，管理员可以不依赖检测框，直接新建一本人物相册并往里加照片。首页顶栏进入的人物页要列出这本相册。之后机器学习认出同一个人，新照片自动进入这本手建相册。
 - 机器学习标签、CLIP、OCR、人脸向量继续按现有产品工作。
 - 回收站照片任何前台都不出现。
 - 未知 `/api` 默认只有管理员能调。
@@ -65,7 +65,7 @@
 
 1. 一个实体一张表。手工相簿和扫描文件夹都是「集合」。
 2. 谁能看，只写在 `access_grants`。集合上不再放 `is_hidden`、`visibility`、免密 JSON。
-3. 照片自己不默认复制一份授权。照片的可见性由它所属的集合和人物推出来。
+3. 照片自己不默认复制一份授权。一张照片的有效档位等于它所属全部集合里最严的那一档，人物相册也是其中一种集合。
 4. 首页是否出现是展示开关，不是权限。权限拒绝的照片，展示开关不能把它放出来。
 5. 一对一的向量可以留在旁表，避免 `photos` 每一行都带大块二进制。不要为了少表把向量塞进 `photos`。
 6. 密码只存哈希。管理端需要改密码时重新输入，不再回显明文。
@@ -109,7 +109,7 @@ UPDATE users SET role = 'admin' WHERE is_admin = 1;
 ```sql
 CREATE TABLE collections (
   id integer PRIMARY KEY,
-  kind text NOT NULL,                 -- manual | folder
+  kind text NOT NULL,                 -- manual | folder | person
   parent_id integer REFERENCES collections(id) ON DELETE CASCADE,
   library_id integer REFERENCES libraries(id) ON DELETE CASCADE,
   rel_path text NOT NULL DEFAULT '',  -- folder 用；manual 恒为 ''
@@ -145,6 +145,7 @@ CREATE UNIQUE INDEX collections_folder_unique
 | --- | --- |
 | `kind=manual` | 每一行 `albums` |
 | `kind=folder` | 每个扫描库根，加每一条 `scan_album_meta`。没有 meta 的子目录不预建行，第一次被设置时再插入 |
+| `kind=person` | 每一个 `people` 一行。这是人物相册，见下文 |
 | `show_on_gallery` | 手工相簿：`hide_from_gallery=0`。扫描库：`display_mode` 为 `gallery` 或 `both` |
 | `show_on_albums` | 手工相簿恒为 1。扫描库：`display_mode` 为 `album` 或 `both` |
 | `password_hash` | 两边的 `password_hash`。`password` 明文列丢弃 |
@@ -171,6 +172,57 @@ CREATE TABLE libraries (
 
 `collection_photos` 取代 `album_photos`，结构不变：`(collection_id, photo_id)` 唯一，外加 `position`。只给 `kind=manual` 使用。文件夹集合的照片不写入此表，仍由 `photos.library_id + library_path` 是否落在 `rel_path` 下决定。这样扫描入库不用给每张照片插成员行。
 
+人物相册是 `kind=person` 的集合，不是第四套权限。`people` 仍保留，只放识别信息：姓名、封面脸 `thumbnail_face_id`、`face_count`。增加 `people.collection_id`，唯一指向它的那条集合。新建人物时先建集合，再写 `people`。删人物时删这条集合。`people.visibility` 不再使用，授权写到该集合的 `access_grants` 上，`resource_type` 只有 `collection`。
+
+三处入口按 `kind` 分开，照片权限仍把人物相册算进取严：
+
+| 入口 | 列出的集合 |
+| --- | --- |
+| 相册页 `/albums` 与相簿设置 | `manual`、`folder`，且 `show_on_albums=1` |
+| 人物页 `/people` 与人物设置 | 只有 `person` |
+| 首页照片 | 不列人物相册卡片。人物相册的授权档位仍参与照片取严 |
+
+`kind=person` 固定 `show_on_albums=0`，不读 `show_on_gallery`。否则「人物相册不出现在相册页」会被误当成 `show_on_gallery=0`，所有认出人脸的照片都会从首页消失。人物相册不设密码，`password_hash` 保持空。成员不写 `collection_photos`，由 `faces.person_id` 指向 `people`，再经 `people.collection_id` 找到这本相册。自动识别和手动补入都是成员。
+
+`people` 增加 `origin`，取值为 `ml` 或 `manual`。聚类新建的是 `ml`。管理端手建的是 `manual`，不要求事先有人脸框。
+
+手建入口在 `/dashboard/people`，按钮为「新建人物」：
+
+1. 姓名必填，去掉首尾空白后不能为空。默认授权为 `public`，创建时可以改成 `login` 或 `admin`。
+2. 先插入 `kind=person` 的集合和一条 `access_grants`，再插入 `people`：`origin=manual`，`collection_id` 指向该集合，`thumbnail_face_id` 为空，`face_count` 为 0。
+3. 创建完成后用第 4.6 节的选择器往这本相册加照片。此时还没有照片也可以保存，管理页要留下这张卡片。
+4. 机器学习合并、以及「没有脸又没有名字就删除」的清理，跳过 `origin=manual`。手建人物只有管理员删除时才消失。清空姓名也不删除。
+
+前台列表是首页顶栏「人物」打开的 `/people`。现在的实现只数 `asset_faces` 里的检测框，并且 `visibleFaces.length === 0` 时直接丢掉，所以只加了手动照片的人物不会出现。重构后的列出条件：
+
+- 观众档位打得开这本 `kind=person` 集合。
+- 至少有一张成员照片是当前观众可见的。成员含检测框和 `source=manual` 的行，按照片 id 去重。一张都没有则不出现在前台，避免空头像；管理页仍显示。
+- 封面优先用 `thumbnail_face_id` 的人脸切图。没有脸框时，用第一张可见成员照片的 `thumbnail_url`，整图放进圆形头像。不能因为没有脸框就滤掉这个人。
+
+`face_count` 改为可见成员照片数，而不是脸框行数。同一张照片上两张脸仍算一张照片。
+
+手建相册在有了锚点脸之后，后续识别到的同一个人自动成为成员。锚点是「这张脸就是这个人」的检测框，带有向量。没有锚点时，不能把别的照片并进来，因为合影里分不清是哪一张脸。
+
+`faces` 增加 `pinned`。为 1 表示这张脸固定属于当前 `person_id`，全量重聚类时不清空。下面三种情况写成 1：
+
+- 管理员在照片上把某一张脸指定给这个人物。
+- 手动加入的照片检测完之后只有一张脸，这张脸就是锚点。
+- 迁移时，已经挂在 `origin=manual` 人物上的检测框。
+
+手动加入一张照片后的处理：
+
+1. 若这张照片还没跑过检测，排进现有的人脸检测队列。检测完成再做下面两步，不要在没有框的时候猜。
+2. 只有一张脸：`person_id` 设为手建人物，`pinned=1`。这张脸已属于一个没有姓名的 `origin=ml` 人物时，改挂到手建人物，不保留两本相册。那个无名人物里、与这张锚点的余弦距离不大于 `faceMaxDistance` 的其他脸一并改过来。改完后无名人物若已经没有脸，删除该人物及其 `kind=person` 集合。
+3. 有多张脸：一张都不自动指定。管理员点选其中一张作为锚点。其余脸留给别人。
+
+识别任务 `processFaceRecognition` 保持「邻居里已经有人物就并入，否则新建」。补充三条：
+
+- 未归属脸与任一 `pinned=1` 的锚点距离不大于 `faceMaxDistance` 时，并入该锚点的人物，禁止为这一簇新建 `origin=ml` 人物。手建人物和机器学习人物都算合法邻居。
+- 并入只改这张脸的 `person_id`。照片因此出现在人物相册里，不再额外插入手动成员行。同一张合影上的其他脸可以属于其他人物。
+- 距离内同时贴近两个不同人物时，取更近的锚点。距离相同则不自动并入，留给管理员合并。已有姓名的人物，或另一本 `origin=manual` 相册，不会被整本吸入手建人物。
+
+全量重置 `resetMlPersonClustering` 只清空 `pinned=0` 的 `person_id`。锚点留下来，重置后的新脸仍能回到这本手建相册。
+
 ### 4.3 授权表：所有展示都读它
 
 这是唯一的权限表。
@@ -178,8 +230,8 @@ CREATE TABLE libraries (
 ```sql
 CREATE TABLE access_grants (
   id integer PRIMARY KEY,
-  resource_type text NOT NULL,   -- collection | person
-  resource_id text NOT NULL,     -- 集合用数字 id 的文本；人物用 people.id
+  resource_type text NOT NULL,   -- 只有 collection
+  resource_id text NOT NULL,     -- collections.id 的文本。人物相册用它自己的集合 id
   audience text NOT NULL,        -- public | login | admin | user
   user_id integer REFERENCES users(id) ON DELETE CASCADE,
   created_at integer NOT NULL
@@ -198,7 +250,7 @@ CREATE UNIQUE INDEX access_grants_unique
 | 仅管理员 | `audience=admin` |
 | 指定用户免密 | 每个用户一行 `audience=user` |
 | 任意登录用户免密 | `audience=login`，并且集合上仍有 `password_hash` |
-| 人物仅登录 / 仅管理员 | 同样三档，`resource_type=person` |
+| 人物仅登录 / 仅管理员 | 同样三档，写在该人物的 `kind=person` 集合上 |
 
 没有 `public` 行、只有 `login` 行时，访客看不见。管理员不查这张表，代码里直接放行。
 
@@ -213,31 +265,47 @@ CREATE UNIQUE INDEX access_grants_unique
 
 ### 4.4 照片可见性算法
 
-设观众 `viewer` 为 `public`、`login` 或 `admin`。`admin` 看到所有未删除、且所属扫描库仍启用的照片。
+档位从宽到严是 `public` < `login` < `admin`，记作 0、1、2。观众自己的档位：未登录 0，已登录 1，管理员 2。管理员看全部未删除、且所属扫描库仍启用的照片，不再往下比较。
 
-对其余观众，一张未删除照片可见，当且仅当下面四条都成立。
+一张照片不单独存权限。它的有效档位是所属范围内的最大值（最严的一档）：
 
-1. 所属 `libraries.enabled=1`。上传的照片没有库，跳过这一条。
-2. 人物没有把这张照片挡住。照片关联到的每个人物，都要有一条 `access_grants` 允许当前观众：`public` 谁都可以；`login` 要已登录；`user` 要是该用户。没有关联人物则通过。手动归入的人物同样算。
-3. 至少有一个集合允许当前观众，并且密码关卡已通过。手工照片看 `collection_photos`。扫描照片看路径落在哪个文件夹集合里，用最长 `rel_path` 那条；没有单独集合时用库根集合。允许的含义与人物相同。`password_hash` 为空则通过；非空则要已解锁，或存在匹配的免密授权。
-4. 若当前入口是首页，该集合 `show_on_gallery=1`，且密码关卡不是「必须解锁才能看」。有密码且未免密的照片继续不进首页。搜索和人物页不看 `show_on_gallery`。
+- 每一条 `collection_photos` 指向的手工集合，取该集合授权的档位。
+- 扫描照片再加它所在的那一个文件夹集合。从照片目录向根找第一条自己写了 `access_grants` 或 `password_hash` 的文件夹集合；没有则用库根集合。一张扫描照片只算这一个文件夹，不要把路径上每个祖先都算进去。
+- 每一张脸上的人物相册，包括 `faces.source=manual`。经 `faces.person_id` 找到 `people.collection_id`，取那条 `kind=person` 集合的档位。
+- 上面一个都没有时（只上传、未放进任何相簿、也没有人物），有效档位为 `public`。
 
-相册列表只列出 `show_on_albums=1` 且第 3 条允许的集合。
+集合或人物上若同时有多条档位授权，取最严的一条，避免宽授权把严授权抵消。`audience=user` 的免密行不参与档位，只参与密码。
 
-实现时只保留一个函数，例如 `photoVisibleSql(viewer, surface)`。`surface` 为 `gallery` 或 `discover`。首页、搜索、人物、地图、相簿内照片都调用它。删掉现在并列的 `homepageGalleryVisibilitySql` 和 `canDiscoverPhoto` 里各写一遍的条件。
+观众能看见这张照片，当且仅当：
+
+1. `deleted_at` 为空，且所属库 `enabled=1`。没有库的上传照片跳过库检查。
+2. 观众档位大于等于照片有效档位。
+3. 所属的每一个设了 `password_hash` 的集合，当前观众都已解锁，或对该集合免密。有一个集合的密码过不了，这张照片在首页、搜索、地图和另一个相簿里都不出现。管理员已在前面放行。
+
+因此：照片同时在公开相簿和仅登录相簿时，有效档位是 `login`。未登录用户打开那个公开相簿，也看不到这一张；同相簿里只属于公开相簿的其他照片仍可见。登录后，这张照片在两个相簿里都可见。若这张照片还属于一个仅管理员的人物相册，有效档位升到 `admin`，普通登录用户也看不到。该人物相册本身只出现在人物页，不出现在相册页。
+
+首页在第 2、3 条之外再取严，不放宽：
+
+- 任一所属的 `manual` 或 `folder` 集合 `show_on_gallery=0`，首页不放这张照片。`kind=person` 不参与这一条。相簿页和搜索仍按上面的档位显示。
+- 任一所属集合有密码且当前观众不免密，首页不放。解锁cookie 不能把它送回首页。
+
+相簿页只列出观众打得开的 `manual` 与 `folder` 集合：观众档位大于等于该集合自己的档位，且该集合的密码已解锁或免密。人物页只列出打得开的 `person` 集合，封面用 `people.thumbnail_face_id`。两边打开之后，里面仍逐张用照片有效档位过滤，不能因为这本相册是公开的就把更严成员带出来。
+
+搜索、地图、人物页使用和第 2、3 条相同的条件，不看 `show_on_gallery`。
+
+实现只留 `photoVisibleSql(viewer, surface)`。`surface` 为 `gallery` 或 `discover`。首页传 `gallery`，其余入口传 `discover`。不要为每张照片写回计算结果；改一个相簿的授权后，所有成员立刻按新档位生效。`collection_photos(photo_id)` 和 `faces(photo_id)` 上要有索引，供这个聚合查询使用。
 
 伪代码：
 
 ```text
+rank = max(每个所属集合的档位)  -- 含人物相册；没有则 0
 visible =
   deleted_at is null
   and library_enabled
-  and not person_blocked(viewer)
-  and collection_allows(viewer)
-  and (surface != gallery or (show_on_gallery and not password_walled))
+  and viewer_rank >= rank
+  and every password collection is unlocked or exempt
+  and (surface != gallery or (every manual/folder collection show_on_gallery = 1 and no password wall))
 ```
-
-`collection_allows` 对扫描照片的继承：从照片目录向根找第一条有 `access_grants` 或 `password_hash` 的文件夹集合；都没有则用库根。不要再用「任意祖先 is_hidden 取或」这种和授权表重复的规则。
 
 ### 4.5 可以合并或删除的机器学习表
 
@@ -260,7 +328,7 @@ visible =
 两个页面共用一个组件 `PhotoPickerModal`：
 
 - 相簿设置：`AlbumEditSlideover` 仅在 `kind=manual` 且相簿已经保存、有 id 时，在表单底部放「添加照片」。新建未保存时按钮禁用，提示先保存相簿。`kind=folder` 不渲染该按钮。
-- 人物相册：`/dashboard/people` 上现有的「添加照片」改为打开同一个组件，不再单独维护一套弹窗。
+- 人物相册：`/dashboard/people` 上现有的「添加照片」改为打开同一个组件。目标是该人物的 `kind=person` 集合，不再单独维护一套弹窗。
 
 弹窗行为：
 
@@ -274,21 +342,22 @@ visible =
 候选接口只有一个，管理员路由：
 
 ```text
-GET /api/picker/photos?target=collection|person&id=<id>&q=<text>&cursor=<dateTaken,id>&limit=48
+GET /api/picker/photos?collectionId=<id>&q=<text>&cursor=<dateTaken,id>&limit=48
 ```
 
-返回 `{ items: [{ id, title, thumbnailUrl, dateTaken, already }], nextCursor }`。`already` 在服务端算：集合查 `collection_photos`，人物查 `faces` 里该 `person_id` 的任意来源（自动脸和手动补入都算已加入）。排序为 `date_taken` 降序，空日期放最后，再用 `id` 降序断开并列。游标用上一页最后一条的 `dateTaken` 和 `id`，不用 `OFFSET`，这样入库过程中翻页不会跳行或重复。
+返回 `{ items: [{ id, title, thumbnailUrl, dateTaken, already }], nextCursor }`。`already` 在服务端按集合种类算：`manual` 查 `collection_photos`；`person` 查 `faces` 里该人物的任意来源（自动脸和手动补入都算已加入）；`folder` 不提供这个接口。排序为 `date_taken` 降序，空日期放最后，再用 `id` 降序断开并列。游标用上一页最后一条的 `dateTaken` 和 `id`，不用 `OFFSET`，这样入库过程中翻页不会跳行或重复。
 
 只列出 `deleted_at` 为空、且所属库仍启用的照片。这是管理端候选，不套用首页的 `show_on_gallery`，否则管理员无法把「不进首页」的照片放进相簿。仍排除回收站。
 
-写入接口沿用现有两个，重构后改它们的落点，不合并成一个，避免人物和相簿的副作用缠在一起：
+写入只用一个接口 `POST /api/collections/:id/photos`，body `{ photoIds }`。按 `kind` 分落点：
 
-| 入口 | 接口 | 写入 |
-| --- | --- | --- |
-| 手工相簿 | `POST /api/collections/:id/photos`，body `{ photoIds }` | `collection_photos`，`position` 在当前最大值上每次加 10。相簿还没有封面时，用本次第一张作 `cover_photo_id`。已存在的 `(collection_id, photo_id)` 跳过 |
-| 人物 | `POST /api/people/:id/photos`，body `{ photoIds }` | `faces` 插入 `source=manual`、坐标为空的一行。该人物已经有这张照片的脸或手动行时跳过。不改已经识别出的 `person_id`，一张照片可以同时在多个人物相册里 |
+| `kind` | 写入 |
+| --- | --- |
+| `manual` | `collection_photos`，`position` 在当前最大值上每次加 10。相簿还没有封面时，用本次第一张作 `cover_photo_id`。已存在的 `(collection_id, photo_id)` 跳过 |
+| `person` | `faces` 插入 `source=manual`、坐标为空的一行，`person_id` 取 `people.collection_id` 等于该集合的那个人。该人物已经有这张照片的脸或手动行时跳过。不改已经识别出的其他人脸。一张照片可以同时在多个人物相册里 |
+| `folder` | 返回 400。成员由扫描路径决定 |
 
-两个接口都校验 id 属于未删除照片，非法 id 跳过不报整批失败。目标不存在返回 404。`kind=folder` 的集合调用写入接口返回 400。一次超过 500 张返回 400。
+接口校验 id 属于未删除照片，非法 id 跳过不报整批失败。目标不存在返回 404。一次超过 500 张返回 400。
 
 从照片管理页勾选后「加入相簿 / 加入人物」的现有批量入口保留，调用同一对写入函数。选择器只是另一个调用方。
 
@@ -303,7 +372,7 @@ GET /api/picker/photos?target=collection|person&id=<id>&q=<text>&cursor=<dateTak
 3. 每个 `albums` 行复制为 `kind=manual` 的集合，`collection_photos` 复制 `album_photos`。
 4. 每个扫描库建一条 `kind=folder`、`rel_path=''` 的根集合。每条 `scan_album_meta` 再建子集合，`parent_id` 按路径最长前缀接上。
 5. 按第 4.3 节的对照表写 `access_grants`。`visibility=public` 或旧的 `is_hidden=0` 且没有 visibility 时写 `public`。`login` 或旧 `is_hidden=1` 写 `login`。`admin` 写 `admin`。免密 JSON 里的邮箱匹配 `users.email` 后写 `user` 行；匹配不到的邮箱记日志，不静默丢弃，迁移脚本打印名单。
-6. 人物同样写入 `access_grants`。
+6. 每个 `people` 建一条 `kind=person` 的集合，`show_on_albums=0`，`people.collection_id` 指过去。人物原来的 `visibility` 写成该集合的 `access_grants`，不再使用 `resource_type=person`。已有人物的 `origin` 写成 `ml`。只有 `person_photos`、没有脸框、并且有姓名的，写成 `manual`。
 7. `photos` 增加 `library_id`、`face_scanned_at`。用 `library_mount` 名字回填 `library_id`。`photo_face_scans` 的时间写入 `face_scanned_at`。
 8. `ml_tags` 增加向量列，从 `ml_tag_vectors` 拷贝。
 9. `faces.source=manual` 吃掉 `person_photos`：没有对应脸框的补一行坐标为空的脸。
@@ -314,7 +383,7 @@ GET /api/picker/photos?target=collection|person&id=<id>&q=<text>&cursor=<dateTak
 
 1. `photoVisibleSql` 只查 `access_grants`、`collections`、`libraries`、`faces`。
 2. 相簿设置页写集合和授权，不再写 `visibility` 与免密 JSON。
-3. 人物设置页同样只写授权。手工相簿和人物相册的「添加照片」改用第 4.6 节的 `PhotoPickerModal` 与候选接口。人物写入改为 `faces.source=manual`。
+3. 人物设置页改写该人物集合的授权，并提供「新建人物」。相册页查询排除 `kind=person`。前台 `/people` 按第 4.2 节的成员规则列出，手建人物在加过至少一张可见照片后出现。添加照片改用第 4.6 节的 `PhotoPickerModal`，人物成员写入 `faces.source=manual`。
 4. 扫描入库把 `library_id` 写上。文件夹集合在管理员第一次改这个目录时创建，不要为每个子目录预插空行。
 5. 首页、搜索、地图、人物、相簿照片列表全部改为这一个 SQL。
 6. 路由表 `server/utils/access.ts` 保持原样。
@@ -342,4 +411,4 @@ GET /api/picker/photos?target=collection|person&id=<id>&q=<text>&cursor=<dateTak
 
 业务表从现在约 24 张收到约 18 张。减少的是重复的相簿元数据和一对一附属表，不是把向量和关系表压扁。
 
-照片是否显示只经过 `access_grants` 这一张权限表，再加上集合成员或扫描路径、人物脸、库是否启用。设置页上的「所有人 / 仅登录 / 仅管理员 / 密码 / 免密」都写成这张表的行。
+照片是否显示只经过 `access_grants` 这一张权限表，再加上集合成员、扫描路径或人物脸、库是否启用。人物相册是 `kind=person` 的集合，只在人物页列出，它的授权仍参与取严。一张照片有多个所属时，取这些授权里最严的档位，而不是任一通过即可。设置页上的「所有人 / 仅登录 / 仅管理员 / 密码 / 免密」都写成这张表的行。

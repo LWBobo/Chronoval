@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { getStorageManager } from '~~/server/plugins/3.storage'
-import { getMusicById } from '~~/server/services/music'
 import { logger } from '~~/server/utils/logger'
+import { requireMusicAccess } from '~~/server/utils/music-access'
 
 /**
  * 流式返回一首 BGM 的音频内容（公开访问，无需登录，供前台相簿 BGM 播放）。
@@ -13,10 +13,7 @@ export default eventHandler(async (event) => {
     z.object({ id: z.string().transform((v) => parseInt(v, 10)) }).parse,
   )
 
-  const musicRow = await getMusicById(id)
-  if (!musicRow) {
-    throw createError({ statusCode: 404, statusMessage: 'Not Found' })
-  }
+  const musicRow = await requireMusicAccess(event, id)
 
   const manager = getStorageManager()
   const provider = manager.getProvider()
@@ -37,7 +34,8 @@ export default eventHandler(async (event) => {
   setHeader(event, 'Content-Type', contentType)
   setHeader(event, 'Accept-Ranges', 'bytes')
   // 时间长可永久缓存，BGM 文件基本只增不改
-  setHeader(event, 'Cache-Control', 'public, max-age=31536000')
+  setHeader(event, 'Cache-Control', 'private, no-cache')
+  setHeader(event, 'Vary', 'Cookie')
 
   // Range 支持（音频 seek）
   const range = getHeader(event, 'range')

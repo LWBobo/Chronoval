@@ -2,9 +2,11 @@
 node_modules
 **/node_modules
 
-# 数据目录
+# 数据目录：排除运行时 DB/日志，但保留 map_info 地名种子以便 COPY 进镜像
 .data
-data
+data/*
+!data/map_info/
+!data/map_info/**
 
 # 开发工具
 .vscode
@@ -49,3 +51,17 @@ docker-compose.yaml
 
 # 编辑器配置
 .editorconfig
+
+# 运行时绑定挂载，不进入镜像构建上下文
+map_file
+map_file/**
+
+storage
+storage/**
+
+ml-cache
+ml-cache/**
+
+# 外部扫描库
+data/library
+data/library/**

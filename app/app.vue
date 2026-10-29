@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { clearImageLoaderCache } from '~/libs/image-loader-manager'
 import type { NuxtApp } from 'nuxt/app'
 import dayjsLocale_zhCN from 'dayjs/locale/zh-cn'
 import dayjsLocale_zhTW from 'dayjs/locale/zh-tw'
@@ -112,7 +113,8 @@ useHead({
 // 根据用户登录状态和当前路由决定使用哪个 API
 // 登录用户或后台管理页面显示所有照片，未登录用户在前端页面只显示可见照片
 const route = useRoute()
-const { loggedIn } = useUserSession()
+const { loggedIn, user } = useUserSession()
+const photoViewerKey = computed(() => loggedIn.value ? `${user.value?.id}:${Boolean(user.value?.isAdmin)}` : 'guest')
 const apiEndpoint = computed(() => {
   // 后台管理页面始终显示所有照片
   if (route.path.startsWith('/dashboard')) {
@@ -136,6 +138,7 @@ const pagedUrl = (base: string, limit: number, offset: number) =>
 const firstChunkUrl = computed(() =>
   pagedUrl(apiEndpoint.value, PHOTO_FIRST_CHUNK, 0),
 )
+const firstChunkKey = computed(() => `${firstChunkUrl.value}|${photoViewerKey.value}`)
 
 // 全局照片池的客户端 TTL 缓存（key 为带 limit 参数的首批 URL）：
 // - complete=true → TTL 内直接复用，不发任何请求
@@ -166,7 +169,8 @@ const getCachedPhotoData = (
 
 const { data: firstChunk, refresh: refreshFirstChunk, status } =
   await useFetch<Photo[]>(firstChunkUrl, {
-    watch: [firstChunkUrl],
+    key: firstChunkKey,
+    watch: [firstChunkUrl, photoViewerKey],
     getCachedData: getCachedPhotoData,
   })
 
@@ -194,7 +198,7 @@ const hydrateRemaining = (key: string) => {
     // 先把连接留给首屏缩略图，再补后面的照片元数据。
     await new Promise((resolve) => setTimeout(resolve, 1500))
     for (;;) {
-      if (seq !== hydrationSeq || firstChunkUrl.value !== key) return
+      if (seq !== hydrationSeq || firstChunkKey.value !== key) return
       const offset = photos.value.length
       let rows: Photo[]
       try {
@@ -205,7 +209,7 @@ const hydrateRemaining = (key: string) => {
         // 网络抖动：下次 TTL 到期或 refresh 时会重新补齐
         return
       }
-      if (seq !== hydrationSeq || firstChunkUrl.value !== key) return
+      if (seq !== hydrationSeq || firstChunkKey.value !== key) return
       if (!rows || rows.length === 0) {
         markCacheComplete(key, photos.value)
         return
@@ -227,7 +231,7 @@ watch(
   firstChunk,
   (val) => {
     if (!val) return
-    const key = firstChunkUrl.value
+    const key = firstChunkKey.value
     photos.value = [...val]
     if (!import.meta.client) return
     // SSR payload 复用路径：只带了首批（600 张），客户端仍需后台补齐其余部分
@@ -303,7 +307,7 @@ if (import.meta.client) {
   })
 }
 
-const { switchToIndex, closeViewer, clearReturnRoute } = useViewerState()
+const { switchToIndex, closeViewer, closePanoramaViewer, clearReturnRoute } = useViewerState()
 const {
   currentPhotoIndex,
   isViewerOpen,
@@ -311,6 +315,20 @@ const {
   isDirectAccess,
   scopedPhotos,
 } = storeToRefs(useViewerState())
+
+// 退出或切换账号时立即丢弃旧身份的元数据、查看器作用域和内存图片。
+watch(photoViewerKey, () => {
+  hydrationSeq++
+  photoEndpointCache.clear()
+  lastServedPayloadKey = null
+  photos.value = []
+  scopedPhotos.value = null
+  closeViewer()
+  closePanoramaViewer()
+  clearReturnRoute()
+  clearImageLoaderCache()
+}, { flush: 'sync' })
+
 
 // 从画廊查看器跳转到系统页面（如后台 /dashboard）时主动关闭查看器。
 // 查看器是 Teleport 到 body 的全屏覆盖层（z-50，固定在照片上方），若停留在打开态，

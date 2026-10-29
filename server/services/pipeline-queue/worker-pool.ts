@@ -1,6 +1,6 @@
 import type { ConsolaInstance } from 'consola'
 import { consola } from 'consola'
-import { eq } from 'drizzle-orm'
+import { and, eq, lt } from 'drizzle-orm'
 import { useDB, tables } from '~~/server/utils/db'
 import { QueueManager } from './manager'
 
@@ -15,6 +15,10 @@ export interface WorkerPoolConfig {
   enableLoadBalancing: boolean
   /** 统计报告间隔（毫秒） */
   statsReportInterval: number
+  /** 已完成任务保留天数；小于等于 0 时不自动清理 */
+  completedRetentionDays: number
+  /** 队列维护间隔（毫秒） */
+  maintenanceIntervalMs: number
 }
 
 export interface WorkerStats {
@@ -43,6 +47,7 @@ export class WorkerPool {
   private logger: ConsolaInstance
   private config: WorkerPoolConfig
   private statsInterval: NodeJS.Timeout | null = null
+  private maintenanceInterval: NodeJS.Timeout | null = null
   private isRunning: boolean = false
 
   constructor(config: Partial<WorkerPoolConfig>, logger?: ConsolaInstance) {
@@ -52,6 +57,8 @@ export class WorkerPool {
       intervalOffset: 300,
       enableLoadBalancing: true,
       statsReportInterval: 30000,
+      completedRetentionDays: 30,
+      maintenanceIntervalMs: 24 * 60 * 60 * 1000,
       ...config,
     }
     this.logger = logger || consola.withTag('worker-pool')
@@ -72,6 +79,7 @@ export class WorkerPool {
 
     // 在启动工作器之前，清理死任务
     await this.cleanupDeadTasks()
+    await this.cleanupOldCompletedTasks()
 
     // 创建工作器
     for (let i = 1; i <= this.config.workerCount; i++) {
@@ -91,6 +99,16 @@ export class WorkerPool {
     // 启动统计报告
     if (this.config.statsReportInterval > 0) {
       this.startStatsReporting()
+    }
+    if (
+      this.config.completedRetentionDays > 0 &&
+      this.config.maintenanceIntervalMs > 0
+    ) {
+      this.maintenanceInterval = setInterval(() => {
+        this.cleanupOldCompletedTasks().catch((error) => {
+          this.logger.error('Queue retention cleanup failed:', error)
+        })
+      }, this.config.maintenanceIntervalMs)
     }
 
     this.logger.success(
@@ -113,6 +131,10 @@ export class WorkerPool {
     if (this.statsInterval) {
       clearInterval(this.statsInterval)
       this.statsInterval = null
+    }
+    if (this.maintenanceInterval) {
+      clearInterval(this.maintenanceInterval)
+      this.maintenanceInterval = null
     }
 
     // 停止所有工作器
@@ -283,6 +305,32 @@ export class WorkerPool {
     } catch (error) {
       this.logger.error('Failed to cleanup dead tasks:', error)
       // 不抛出错误，允许工作器池继续启动
+    }
+  }
+
+  /**
+   * 定期删除过期的已完成任务。失败任务继续保留，便于在后台查看和重试。
+   * completed_at 上的复合索引让清理成本与过期记录数相关，而不是扫描整张队列表。
+   */
+  private async cleanupOldCompletedTasks(): Promise<void> {
+    const retentionDays = this.config.completedRetentionDays
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return
+
+    const threshold = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
+    const result = useDB()
+      .delete(tables.pipelineQueue)
+      .where(
+        and(
+          eq(tables.pipelineQueue.status, 'completed'),
+          lt(tables.pipelineQueue.completedAt, threshold),
+        ),
+      )
+      .run()
+
+    if (result.changes > 0) {
+      this.logger.info(
+        `Removed ${result.changes} completed queue tasks older than ${retentionDays} days`,
+      )
     }
   }
 

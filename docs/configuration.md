@@ -43,6 +43,12 @@ Chronoval 的所有配置通过环境变量提供（Docker 场景写入 `.env`�
 | `LIBRARY_SCAN_INTERVAL_MS` | 自动扫描间隔（毫秒） | `300000`（5 分钟） |
 | `LIBRARY_THUMBNAIL_DIR` | 缩略图相对目录（位于本地存储根下，历史保留） | `library/thumbnails` |
 
+## 后台处理队列
+
+| 变量 | 说明 | 默认 |
+|---|---|---|
+| `PIPELINE_COMPLETED_RETENTION_DAYS` | 已完成任务的保留天数；失败任务始终保留，设为 `0` 关闭自动清理 | `30` |
+
 ### S3 兼容存储
 `NUXT_STORAGE_PROVIDER=s3` 时启用：
 

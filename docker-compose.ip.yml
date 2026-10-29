@@ -35,16 +35,16 @@ services:
       - ./data:/app/data
       # 本地存储+统一缩略图：可写，上传落 photos/，纯存储不扫描（不再 ro）
       - ./storage:/app/storage
+      # 离线地图 Protomaps：mkdir -p map && 放入 *.pmtiles 后取消注释
+      # - ./map:/app/map:ro
       # 可选：外部扫描库（先 mkdir -p data/library，再取消下面注释以启用）
       # - ./data/library:/app/library
     healthcheck:
       test:
         - CMD
-        - wget
-        - -q
-        - -O
-        - /dev/null
-        - http://localhost:3000/
+        - /usr/bin/node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then((response) => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3

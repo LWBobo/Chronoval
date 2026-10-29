@@ -1,3 +1,4 @@
+import { normalizeAlbumPath } from '../../utils/album-path'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { and, count, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm'
@@ -8,13 +9,17 @@ import {
 } from '~~/server/services/storage/events'
 import { applyScanAlbumMeta, getScanAlbumMeta } from './album-meta'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
-import { scanLibraries } from '~~/server/database/schema'
+import { libraries } from '~~/server/database/schema'
 import type { NeededExif } from '~~/shared/types/photo'
 import {
   type LibraryMount,
   IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
 } from '../library/config'
+import {
+  readCollectionAccess,
+  type CollectionAudience,
+} from '../collections/access-grants'
 
 /**
  * 本地扫描库（独立存储方式）
@@ -103,12 +108,12 @@ const cleanName = (s: string) =>
 
 
 /** 读取全部（含禁用）扫描库原始行 */
-export const listRawScanLibraries = (): Array<typeof scanLibraries.$inferSelect> => {
+export const listRawScanLibraries = (): Array<typeof libraries.$inferSelect> => {
   const db = useDB()
   return db
     .select()
-    .from(scanLibraries)
-    .orderBy(scanLibraries.id)
+    .from(libraries)
+    .orderBy(libraries.id)
     .all()
 }
 
@@ -119,9 +124,9 @@ const backfillScanLibraryUrlKeys = (): number => {
   for (const row of listRawScanLibraries()) {
     const expect = generateUrlKeyById(row.id)
     if (row.urlKey === expect) continue
-    db.update(scanLibraries)
+    db.update(libraries)
       .set({ urlKey: expect, updatedAt: new Date() })
-      .where(eq(scanLibraries.id, row.id))
+      .where(eq(libraries.id, row.id))
       .run()
     updated++
   }
@@ -240,9 +245,9 @@ export const getAllScalableMounts = (): LibraryMount[] => buildLibraryMounts()
 export const createScanLibrary = async (input: ScanLibraryInput): Promise<number> => {
   const db = useDB()
   const name =
-    cleanName(input.name) || path.basename(path.resolve(input.rootPath))
+    cleanName(input.name || '') || path.basename(path.resolve(input.rootPath))
   const res = db
-    .insert(scanLibraries)
+    .insert(libraries)
     .values({
       name,
       rootPath: path.resolve(input.rootPath),
@@ -254,13 +259,15 @@ export const createScanLibrary = async (input: ScanLibraryInput): Promise<number
       childPosition: input.childPosition ?? 'start',
       watchIntervalMs: input.watchIntervalMs ?? 60000,
     })
-    .returning({ id: scanLibraries.id })
+    .returning({ id: libraries.id })
     .get()
   // 依据 id 确定性生成并持久化 urlKey，供按 key 反查
-  db.update(scanLibraries)
+  db.update(libraries)
     .set({ urlKey: generateUrlKeyById(res.id), updatedAt: new Date() })
-    .where(eq(scanLibraries.id, res.id))
+    .where(eq(libraries.id, res.id))
     .run()
+  const { syncLibraryFolders } = await import('../collections/sync-folder')
+  syncLibraryFolders(res.id)
   invalidateLibraryMountsCache()
   return res.id
 }
@@ -268,7 +275,7 @@ export const createScanLibrary = async (input: ScanLibraryInput): Promise<number
 /** 更新扫描库 */
 export const updateScanLibrary = async (
   id: number,
-  input: ScanLibraryInput,
+  input: Partial<ScanLibraryInput>,
 ): Promise<boolean> => {
   const db = useDB()
   const patch: Partial<ScanLibraryInput> = {}
@@ -304,13 +311,15 @@ export const updateScanLibrary = async (
     }
   }
 
-  // 密码已下沉到「相簿」级别（scan_album_meta.password_hash），此处不再处理库级密码
+  // 密码已下沉到「相簿」级别（collections.password_hash），此处不再处理库级密码
   if (Object.keys(colPatch).length === 0) return false
   await db
-    .update(scanLibraries)
+    .update(libraries)
     .set({ ...colPatch, updatedAt: new Date() })
-    .where(eq(scanLibraries.id, id))
+    .where(eq(libraries.id, id))
     .run()
+  const { syncLibraryFolders } = await import('../collections/sync-folder')
+  syncLibraryFolders(id)
   invalidateLibraryMountsCache()
   return true
 }
@@ -365,7 +374,8 @@ export const deleteScanLibrary = async (id: number): Promise<boolean> => {
   }
 
   await db.delete(tables.photos).where(eq(tables.photos.libraryMount, mount)).run()
-  await db.delete(scanLibraries).where(eq(scanLibraries.id, id)).run()
+  const { removeLibraryCollections } = await import('../collections/sync-folder')
+  removeLibraryCollections(id)
   invalidateLibraryMountsCache()
   return true
 }
@@ -379,9 +389,9 @@ export const recordScanResult = (
   if (id === null) return
   const db = useDB()
   const summary = `indexed=${result.indexed} updated=${result.updated} failed=${result.failed}`
-  db.update(scanLibraries)
+  db.update(libraries)
     .set({ lastScanAt: new Date(), lastScanResult: summary, updatedAt: new Date() })
-    .where(eq(scanLibraries.id, id))
+    .where(eq(libraries.id, id))
     .run()
 }
 
@@ -399,12 +409,12 @@ export const getMinWatchIntervalMs = (): number | null => {
 /** 只读单条扫描库行 */
 export const getScanLibraryRow = (
   id: number,
-): (typeof scanLibraries.$inferSelect) | null => {
+): (typeof libraries.$inferSelect) | null => {
   const db = useDB()
   const row = db
     .select()
-    .from(scanLibraries)
-    .where(eq(scanLibraries.id, id))
+    .from(libraries)
+    .where(eq(libraries.id, id))
     .get()
   return row ?? null
 }
@@ -415,15 +425,15 @@ export const getScanLibraryRow = (
  */
 export const getScanLibraryByKey = (
   key: string,
-): (typeof scanLibraries.$inferSelect) | null => {
+): (typeof libraries.$inferSelect) | null => {
   const db = useDB()
   const cleaned = (key || '').trim()
   if (!cleaned) return null
   backfillScanLibraryUrlKeys()
   const byUrl = db
     .select()
-    .from(scanLibraries)
-    .where(eq(scanLibraries.urlKey, cleaned))
+    .from(libraries)
+    .where(eq(libraries.urlKey, cleaned))
     .get()
   if (byUrl) return byUrl
   if (/^\d+$/.test(cleaned)) return getScanLibraryRow(Number(cleaned))
@@ -433,7 +443,7 @@ export const getScanLibraryByKey = (
 /**
  * 计算某相簿（含其上级）生效的相簿访问密码哈希。
  * 自身 meta 优先；未单独设置则向上继承最近一级；均无密码时返回 null（开放相簿）。
- * 密码仅存于相簿级别（scan_album_meta.password_hash），与扫描库级无关。
+ * 密码仅存于相簿级别（collections.password_hash），与扫描库级无关。
  */
 export const getScanAlbumEffectivePasswordHash = async (
   libId: number,
@@ -443,7 +453,7 @@ export const getScanAlbumEffectivePasswordHash = async (
   if (!lib) return null
   const mount = scanMountName(libId)
   // 从自身向根逐级（deepest → shallowest）查找带密码的 meta
-  const segs = relPath.split('/').filter(Boolean)
+  const segs = normalizeAlbumPath(relPath).split('/').filter(Boolean)
   const deepToRoot: string[] = []
   let acc = ''
   segs.forEach((s) => {
@@ -456,7 +466,7 @@ export const getScanAlbumEffectivePasswordHash = async (
     const meta = await getScanAlbumMeta(mount, p)
     if (meta?.passwordHash) return meta.passwordHash
   }
-  // 密码仅存在于相簿级别（scan_album_meta.password_hash）；无相簿密码即视为开放
+  // 密码仅存在于相簿级别（collections.password_hash）；无相簿密码即视为开放
   return null
 }
 
@@ -470,13 +480,14 @@ export const getScanAlbumEffectiveAuth = async (
   relPath: string,
 ): Promise<{
   passwordHash: string | null
+  passwordPath: string | null
   exemptMode: 'logged_in' | 'selected' | null
   exemptUsers: string[]
 }> => {
   const lib = getScanLibraryRow(libId)
-  if (!lib) return { passwordHash: null, exemptMode: null, exemptUsers: [] }
+  if (!lib) return { passwordHash: null, passwordPath: null, exemptMode: null, exemptUsers: [] }
   const mount = scanMountName(libId)
-  const segs = relPath.split('/').filter(Boolean)
+  const segs = normalizeAlbumPath(relPath).split('/').filter(Boolean)
   const deepToRoot: string[] = []
   let acc = ''
   segs.forEach((s) => {
@@ -490,24 +501,65 @@ export const getScanAlbumEffectiveAuth = async (
     if (meta?.passwordHash) {
       return {
         passwordHash: meta.passwordHash,
+        passwordPath: p,
         exemptMode: meta.passwordExemptMode ?? null,
         exemptUsers: parseExemptUsers(meta.passwordExemptUsers),
       }
     }
   }
-  return { passwordHash: null, exemptMode: null, exemptUsers: [] }
+  return { passwordHash: null, passwordPath: null, exemptMode: null, exemptUsers: [] }
+}
+
+const audienceRank: Record<CollectionAudience, number> = {
+  public: 0,
+  login: 1,
+  admin: 2,
+}
+
+/**
+ * 计算扫描相簿目录链上最严格的访问级别。
+ * 父目录的 login/admin 限制必须向下继承，子目录不能通过自定义为 public 降级。
+ */
+export const getScanAlbumEffectiveVisibility = (
+  libId: number,
+  relPath: string,
+): CollectionAudience => {
+  const normalized = normalizeAlbumPath(relPath)
+  const db = useDB()
+  const rows = db
+    .select({ id: tables.collections.id, relPath: tables.collections.relPath })
+    .from(tables.collections)
+    .where(
+      and(
+        eq(tables.collections.kind, 'folder'),
+        eq(tables.collections.libraryId, libId),
+      ),
+    )
+    .all()
+
+  let visibility: CollectionAudience = 'public'
+  for (const row of rows) {
+    const onPath =
+      row.relPath === '' ||
+      normalized === row.relPath ||
+      normalized.startsWith(`${row.relPath}/`)
+    if (!onPath) continue
+    const current = readCollectionAccess(row.id, db).visibility
+    if (audienceRank[current] > audienceRank[visibility]) visibility = current
+  }
+  return visibility
 }
 
 /** 以「相簿」展示（album/both）且启用的扫描库挂载名集合（如 scan_1） */
 export const getAlbumScanMountSet = (): Set<string> => {
   const db = useDB()
   const rows = db
-    .select({ id: scanLibraries.id })
-    .from(scanLibraries)
+    .select({ id: libraries.id })
+    .from(libraries)
     .where(
       and(
-        inArray(scanLibraries.displayMode, ['album', 'both']),
-        eq(scanLibraries.enabled, true),
+        inArray(libraries.displayMode, ['album', 'both']),
+        eq(libraries.enabled, true),
       ),
     )
     .all()
@@ -525,12 +577,12 @@ export const getAlbumScanMountSet = (): Set<string> => {
 export const getGalleryHiddenScanMountSet = (): Set<string> => {
   const db = useDB()
   const rows = db
-    .select({ id: scanLibraries.id })
-    .from(scanLibraries)
+    .select({ id: libraries.id })
+    .from(libraries)
     .where(
       or(
-        eq(scanLibraries.displayMode, 'album'),
-        eq(scanLibraries.enabled, false),
+        eq(libraries.displayMode, 'album'),
+        eq(libraries.enabled, false),
       ),
     )
     .all()
@@ -549,9 +601,9 @@ export const getGalleryHiddenScanMountSet = (): Set<string> => {
 export const getDisabledScanMountSet = (): Set<string> => {
   const db = useDB()
   const rows = db
-    .select({ id: scanLibraries.id })
-    .from(scanLibraries)
-    .where(eq(scanLibraries.enabled, false))
+    .select({ id: libraries.id })
+    .from(libraries)
+    .where(eq(libraries.enabled, false))
     .all()
   return new Set(rows.map((r) => scanMountName(r.id)))
 }
@@ -609,6 +661,8 @@ export interface ScanAlbumNode {
   external: boolean
   /** 是否在前台相册列表隐藏（有自定义隐藏设置时为 true） */
   isHidden?: boolean
+  /** 当前节点自身设置的访问级别；实际访问还会合并父目录限制。 */
+  visibility?: CollectionAudience
   /** 自定义URL别名（有设置时公开链接使用 /albums/s/{slug}） */
   slug?: string | null
   /** 是否存在自定义元数据覆盖 */
@@ -748,7 +802,7 @@ const buildScanAlbumNode = (
   }
   const effectiveCovers = covers
   const seg = relPath.split('/').filter(Boolean).pop()
-  const title = relPath === '' ? lib.name : decodeURIComponent(seg || relPath)
+  const title = relPath === '' ? lib.name : (seg || relPath)
   // 公开链接优先使用 urlKey（base36 时间戳），回退到数字 id 兼容存量
   const key = lib.urlKey || String(lib.id)
   const link =
@@ -777,7 +831,7 @@ const buildScanAlbumNode = (
     videoCount: dirPhotos.filter((p) => p.type === 'video').length,
     coverPhotoId: effectiveCovers[0]?.id ?? null,
     covers: effectiveCovers,
-    // 相簿级密码由 applyScanAlbumMeta 依据 scan_album_meta.password_hash 覆盖
+    // 相簿级密码由 applyScanAlbumMeta 依据 collections.password_hash 覆盖
     passwordProtected: false,
     hasChildren: childSegmentsOf(index, relPath).length > 0,
     external: true,
@@ -793,11 +847,11 @@ export const listScanAlbumRoots = async (
   const db = useDB()
   const rows = db
     .select()
-    .from(scanLibraries)
+    .from(libraries)
     .where(
       and(
-        inArray(scanLibraries.displayMode, ['album', 'both']),
-        eq(scanLibraries.enabled, true),
+        inArray(libraries.displayMode, ['album', 'both']),
+        eq(libraries.enabled, true),
       ),
     )
     .all()
@@ -917,12 +971,7 @@ export const getScanAlbumDetail = async (
   const lib = getScanLibraryRow(libId)
   if (!lib || lib.displayMode === 'gallery' || !lib.enabled) return null
 
-  const normalized =
-    relPath
-      .split('/')
-      .map((s) => decodeURIComponent(s))
-      .filter((s) => s && s !== '.' && s !== '..')
-      .join('/') || ''
+  const normalized = normalizeAlbumPath(relPath)
   const db = useDB()
   const mount = scanMountName(libId)
   // 只取最小列集 + 目录索引，避免大库全量反序列化 exif/tags 与逐节点 O(n) 过滤
@@ -1089,12 +1138,12 @@ export const cleanupExpiredDisabledScanLibraries = async (
 
   const expired = db
     .select()
-    .from(scanLibraries)
+    .from(libraries)
     .where(
       and(
-        eq(scanLibraries.enabled, false),
-        isNotNull(scanLibraries.disabledAt),
-        lt(scanLibraries.disabledAt, cutoff),
+        eq(libraries.enabled, false),
+        isNotNull(libraries.disabledAt),
+        lt(libraries.disabledAt, cutoff),
       ),
     )
     .all()
@@ -1111,8 +1160,8 @@ export const cleanupExpiredDisabledScanLibraries = async (
       .where(eq(tables.photos.libraryMount, mount))
       .run()
     await db
-      .delete(scanLibraries)
-      .where(eq(scanLibraries.id, row.id))
+      .delete(libraries)
+      .where(eq(libraries.id, row.id))
       .run()
     logger
       .dynamic('scan-library')
@@ -1124,4 +1173,3 @@ export const cleanupExpiredDisabledScanLibraries = async (
   invalidateLibraryMountsCache()
   return expired.length
 }
-

@@ -1612,7 +1612,14 @@
           "description": "MapLibre 지도 스타일 URL"
         }
       },
-      "sectionDescription": "지도 표시 및 지오코딩 서비스를 구성합니다. 지도 제공자는 지도 스타일과 액세스 자격 증명에 영향을 줍니다."
+      "sectionDescription": "지도 표시 및 지오코딩 서비스를 구성합니다. 지도 제공자는 지도 스타일과 액세스 자격 증명에 영향을 줍니다.",
+      "protomaps": {
+        "timelineFile": {
+          "label": "타임라인 PMTiles 파일",
+          "description": "느린 연결에서 사용할 선택적 경량 타임라인 지도",
+          "help": "timeline-lite.pmtiles 같은 저배율 지도를 /app/map에 넣으세요. 비워 두면 기본 지도를 사용합니다."
+        }
+      }
     },
     "location": {
       "language": {
@@ -2159,7 +2166,21 @@
     "timeline": {
       "toggle": "타임라인 활성화/비활성화",
       "playPause": "타임라인 재생/일시정지",
-      "title": "타임라인"
+      "follow": "장소 따라가기",
+      "title": "타임라인",
+      "preloading": "지도 불러오는 중…",
+      "speed": "재생 속도",
+      "resumeFollow": "따라가기 계속",
+      "pausedByInteraction": "지도 조작으로 일시 중지됨",
+      "loadingPhotos": "지도 사진 불러오는 중…",
+      "preparingPlace": "다음 장소 준비 중…",
+      "markPhotos": "사진 {count}장",
+      "networkMode": {
+        "help": "네트워크 모드: 자동은 연결을 감지하고, 데이터 절약은 이동 경로 타일을 건너뛰며, 부드럽게는 전체 카메라 이동을 유지합니다",
+        "auto": "자동",
+        "save-data": "데이터 절약",
+        "smooth": "부드럽게"
+      }
     }
   },
   "photo": {

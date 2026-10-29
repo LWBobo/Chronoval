@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { getMlState } from '~~/server/services/ml/state'
 import { pingMl } from '~~/server/services/ml/client'
 import {
   isClipEnabled,
@@ -16,11 +16,7 @@ export default eventHandler(async () => {
     pingMl(),
   ])
 
-  const sweep = useDB()
-    .select()
-    .from(tables.mlState)
-    .where(eq(tables.mlState.key, 'lastRecognitionSweep'))
-    .get()
+  const lastRecognitionSweep = getMlState('lastRecognitionSweep')
 
   return {
     enabled,
@@ -28,6 +24,6 @@ export default eventHandler(async () => {
     face,
     ocr,
     ping,
-    lastRecognitionSweep: sweep?.value ?? null,
+    lastRecognitionSweep,
   }
 })

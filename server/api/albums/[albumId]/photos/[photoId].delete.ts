@@ -25,11 +25,11 @@ export default eventHandler(async (event) => {
   // 检查相簌-照片关系是否存在
   const relation = await db
     .select()
-    .from(tables.albumPhotos)
+    .from(tables.collectionPhotos)
     .where(
       and(
-        eq(tables.albumPhotos.albumId, albumId),
-        eq(tables.albumPhotos.photoId, photoId),
+        eq(tables.collectionPhotos.collectionId, albumId),
+        eq(tables.collectionPhotos.photoId, photoId),
       ),
     )
     .get()
@@ -44,11 +44,11 @@ export default eventHandler(async (event) => {
   // 使用事务删除照片关系，如果该照片是封面则更新为 null
   db.transaction((tx) => {
     // 删除相簌-照片关系
-    tx.delete(tables.albumPhotos)
+    tx.delete(tables.collectionPhotos)
       .where(
         and(
-          eq(tables.albumPhotos.albumId, albumId),
-          eq(tables.albumPhotos.photoId, photoId),
+          eq(tables.collectionPhotos.collectionId, albumId),
+          eq(tables.collectionPhotos.photoId, photoId),
         ),
       )
       .run()
@@ -56,14 +56,14 @@ export default eventHandler(async (event) => {
     // 如果该照片是封面，清除封面
     const album = tx
       .select()
-      .from(tables.albums)
-      .where(eq(tables.albums.id, albumId))
+      .from(tables.collections)
+      .where(eq(tables.collections.id, albumId))
       .get()
 
     if (album && album.coverPhotoId === photoId) {
-      tx.update(tables.albums)
+      tx.update(tables.collections)
         .set({ coverPhotoId: null, updatedAt: new Date() })
-        .where(eq(tables.albums.id, albumId))
+        .where(eq(tables.collections.id, albumId))
         .run()
     }
   })

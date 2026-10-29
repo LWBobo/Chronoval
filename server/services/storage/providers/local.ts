@@ -5,6 +5,7 @@ import type {
   StorageObject,
   StorageProvider,
 } from '../interfaces'
+import { resolveInsideRoot } from '~~/server/utils/safe-path'
 
 const ensureDir = async (dirPath: string) => {
   await fs.mkdir(dirPath, { recursive: true })
@@ -33,7 +34,7 @@ export class LocalStorageProvider implements StorageProvider {
 
   private resolveAbsoluteKey(key: string): { absFile: string; relKey: string } {
     const relKey = sanitizeKey(combinePrefixAndKey(this.config.prefix, key))
-    const absFile = path.resolve(this.config.basePath, relKey)
+    const absFile = resolveInsideRoot(this.config.basePath, relKey)
     return { absFile, relKey }
   }
 
@@ -123,7 +124,7 @@ export class LocalStorageProvider implements StorageProvider {
 
     // Fallback: try without adding prefix (in case key already contains it or was stored raw)
     const rawRel = sanitizeKey(key)
-    const rawAbs = path.resolve(this.config.basePath, rawRel)
+    const rawAbs = resolveInsideRoot(this.config.basePath, rawRel)
     try {
       const stat = await fs.stat(rawAbs)
       if (!stat.isFile()) return null

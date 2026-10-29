@@ -30,6 +30,8 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Photo not found' })
   }
 
+  await requireVisiblePhoto(event, photo.id)
+
   const actor = await getActor(event)
   if (blockedPhotoIdsForActor(actor).has(photo.id)) {
     throw createError({ statusCode: 404, message: 'Photo not found' })

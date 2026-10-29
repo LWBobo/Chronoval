@@ -1,4 +1,4 @@
-import { and, isNull } from 'drizzle-orm'
+import { and, count, isNull, max, notInArray, or, type SQL } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
 import { viewerFromActor } from '~~/server/services/ml/person.service'
@@ -14,33 +14,39 @@ export default eventHandler(async (event) => {
   const db = useDB()
   const actor = await getActor(event)
 
-  const hiddenScanMounts = getGalleryHiddenScanMountSet()
+  const where: SQL[] = [
+    isNull(tables.photos.deletedAt),
+    homepageGalleryVisibilitySql(
+      Boolean(actor.user),
+      viewerFromActor(actor),
+      actor.user?.id ?? null,
+    ),
+  ]
 
-  // 只取 id / 挂载 / 拍摄时间，不加载大字段；排除已移入回收站的软删除照片
-  const rows = db
-    .select({
-      id: tables.photos.id,
-      libraryMount: tables.photos.libraryMount,
-      dateTaken: tables.photos.dateTaken,
-    })
-    .from(tables.photos)
-    .where(
-      and(
-        isNull(tables.photos.deletedAt),
-        homepageGalleryVisibilitySql(Boolean(actor.user), viewerFromActor(actor)),
-      ),
+  const hiddenScanMounts = [...getGalleryHiddenScanMountSet()]
+  if (hiddenScanMounts.length > 0) {
+    where.push(
+      or(
+        isNull(tables.photos.libraryMount),
+        notInArray(tables.photos.libraryMount, hiddenScanMounts),
+      )!,
     )
-    .all()
-
-  let count = 0
-  let maxDateTaken: string | null = null
-  for (const r of rows) {
-    if (r.libraryMount && hiddenScanMounts.has(r.libraryMount)) continue
-    count++
-    if (r.dateTaken && (!maxDateTaken || r.dateTaken > maxDateTaken)) {
-      maxDateTaken = r.dateTaken
-    }
   }
 
-  return { count, maxDateTaken, t: Date.now() }
+  // 聚合留在 SQLite 内完成。旧实现每 8 秒把全部可见照片 id/挂载/时间读进 Node
+  // 再循环统计，访客数量和照片数量增加时会造成不必要的对象分配与传输。
+  const row = db
+    .select({
+      count: count(),
+      maxDateTaken: max(tables.photos.dateTaken),
+    })
+    .from(tables.photos)
+    .where(and(...where))
+    .get()
+
+  return {
+    count: Number(row?.count || 0),
+    maxDateTaken: row?.maxDateTaken || null,
+    t: Date.now(),
+  }
 })

@@ -1,1 +1,0 @@
-ALTER TABLE `scan_libraries` ADD `disabled_at` integer;

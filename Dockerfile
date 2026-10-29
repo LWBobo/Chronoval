@@ -12,6 +12,9 @@ ENV npm_config_registry=${NPM_REGISTRY}
 # 环境变量名遵循 prebuild-install 约定：${package_name}_binary_host_mirror
 ENV npm_config_better_sqlite3_binary_host_mirror=https://registry.npmmirror.com/-/binary/better-sqlite3/
 
+# node-gyp 直接使用官方 Node 镜像自带的头文件，避免源码编译时联网下载
+ENV npm_config_nodedir=/usr/local
+
 # 构建容器默认网卡连不上外网，下载步骤改走宿主机网络
 RUN --network=host corepack enable && corepack prepare pnpm@10.34.1 --activate
 
@@ -67,6 +70,9 @@ COPY --from=runtime_deps /etc/ssl /etc/ssl
 
 COPY --from=build /usr/src/app/.output ./.output
 COPY --from=build /usr/src/app/server/database/migrations ./server/database/migrations
+# 地名种子：只读打进镜像；启动时按需写入挂载卷上的 SQLite（不把 DB 打进镜像）
+COPY data/map_info/geocode_places_90000.csv ./server/assets/geocode/geocode_places.csv
+COPY server/assets/geocode/seed.json ./server/assets/geocode/seed.json
 
 EXPOSE 3000
 VOLUME ["/app/data"]

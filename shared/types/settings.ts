@@ -18,9 +18,9 @@ export type SettingConfig = Omit<
 }
 
 export type SettingStorageProvider =
-  typeof schema.settings_storage_providers.$inferSelect
+  typeof schema.settingsStorageProviders.$inferSelect
 export type NewSettingStorageProvider =
-  typeof schema.settings_storage_providers.$inferInsert
+  typeof schema.settingsStorageProviders.$inferInsert
 
 /**
  * UI 字段类型枚举

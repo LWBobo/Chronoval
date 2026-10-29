@@ -1,21 +1,19 @@
+import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
-import { ensureAlbumUid } from '~~/server/utils/albumUid'
-import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
-import { ensureAlbumVisibilityColumn } from '~~/server/utils/albumVisibility'
+import {
+  readCollectionAccess,
+  replaceCollectionAccess,
+} from '~~/server/services/collections/access-grants'
+import { getManualAlbumById, toManualAlbum } from '~~/server/services/collections/manual-album'
 
 export default eventHandler(async (event) => {
-
   const { albumId } = await getValidatedRouterParams(
     event,
     z.object({
-      albumId: z
-        .string()
-        .regex(/^\d+$/)
-        .transform((val) => parseInt(val, 10)),
+      albumId: z.string().regex(/^\d+$/).transform(Number),
     }).parse,
   )
-
   const body = await readValidatedBody(
     event,
     z.object({
@@ -25,213 +23,156 @@ export default eventHandler(async (event) => {
       photoIds: z.array(z.string()).optional(),
       isHidden: z.boolean().optional(),
       visibility: z.enum(['public', 'login', 'admin']).optional(),
-      // 首页照片画廊隐藏：开启后照片不进首页照片流
       hideFromGallery: z.boolean().optional(),
-      // 相簿访问密码（明文）：配合 clearPassword 完成 设置/清除/保持
       password: z.string().max(128).optional(),
       clearPassword: z.boolean().optional(),
-      // 密码免密范围：null=清除（所有访问者都需密码）
       passwordExemptMode: z.enum(['logged_in', 'selected']).nullable().optional(),
-      // 免密用户邮箱列表（仅 selected 模式生效）；null=清除
       passwordExemptUsers: z.array(z.string().max(255)).nullable().optional(),
-      // 照片展示布局：瀑布流 / 统一网格
       layout: z.enum(['waterfall', 'grid', 'immersive', 'timeline']).optional(),
-      // 「随机一张照片」动画模式：default=直接打开 / wheel=3D轮盘 / compat=兼容动画
       randomAnimation: z.enum(['default', 'wheel', 'compat']).optional(),
-      // 「随机一张照片」是否使用 3D 轮盘动画（旧字段，兼容旧客户端）
       randomWheelAnimation: z.boolean().optional(),
-      // 「随机照片轮经典语录」扩展功能是否开启
       randomQuotesEnabled: z.boolean().optional(),
-      // 自定义语录（每行一条）；空=使用内置语录
       randomQuotes: z.string().max(5000).nullable().optional(),
-      // 「随机照片轮经典语录」标签来源：ancient=古诗语录 / modern=现代语录；null=未选（使用自定义）
       randomQuotesTag: z.enum(['ancient', 'modern']).nullable().optional(),
-      // 相簿背景音乐（音乐盒）；null=不播放 BGM
       bgmMusicId: z.number().int().nullable().optional(),
-      // 自定义公开URL别名：可选；未传则保持，null/空串则清除
       slug: z
         .string()
         .max(120)
         .nullable()
         .optional()
-        .transform((v) => (v ? v.replace(/[^a-zA-Z0-9-_]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') : v)),
+        .transform((value) =>
+          value
+            ? value
+                .replace(/[^a-zA-Z0-9-_]/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '')
+            : value,
+        ),
     }).parse,
   )
 
-  ensureAlbumVisibilityColumn()
   const db = useDB()
-
-  // 检查相簿是否存在
-  const album = await db
-    .select()
-    .from(tables.albums)
-    .where(eq(tables.albums.id, albumId))
-    .get()
-
-  if (!album) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: 'Album not found',
-    })
+  const current = getManualAlbumById(albumId)
+  if (!current) {
+    throw createError({ statusCode: 404, statusMessage: 'Album not found' })
   }
 
-  // 自定义 URL 别名：未传则保持；null/空串则清除；非空则查重后设置
-  let nextSlug: string | null | undefined
-  if (body.slug !== undefined) {
-    nextSlug = body.slug?.trim() || null
-    if (nextSlug) {
-      const dup = db
-        .select({ id: tables.albums.id })
-        .from(tables.albums)
-        .where(eq(tables.albums.slug, nextSlug))
-        .all()
-        .find((r) => r.id !== albumId)
-      if (dup) {
-        throw createError({ statusCode: 409, statusMessage: 'Slug already in use' })
-      }
+  const nextSlug = body.slug === undefined ? undefined : body.slug?.trim() || null
+  if (nextSlug) {
+    const duplicate = db
+      .select({ id: tables.collections.id })
+      .from(tables.collections)
+      .where(eq(tables.collections.slug, nextSlug))
+      .all()
+      .find((row) => row.id !== albumId)
+    if (duplicate) {
+      throw createError({ statusCode: 409, statusMessage: 'Slug already in use' })
     }
   }
 
-  // 使用事务更新相簿
-  const updatedAlbum = db.transaction((tx) => {
-    // 更新基本信息
-    const updateData: Record<string, any> = {
+  const updated = db.transaction((tx) => {
+    const patch: Partial<typeof tables.collections.$inferInsert> = {
       updatedAt: new Date(),
     }
+    if (body.title !== undefined) patch.title = body.title
+    if (body.description !== undefined)
+      patch.description = body.description || null
+    if (body.coverPhotoId !== undefined)
+      patch.coverPhotoId = body.coverPhotoId || null
+    if (body.hideFromGallery !== undefined)
+      patch.showOnGallery = !body.hideFromGallery
+    if (body.layout !== undefined) patch.layout = body.layout
+    if (body.randomAnimation !== undefined)
+      patch.randomAnimation = body.randomAnimation
+    else if (body.randomWheelAnimation !== undefined)
+      patch.randomAnimation = body.randomWheelAnimation ? 'wheel' : 'default'
+    if (body.randomQuotesEnabled !== undefined)
+      patch.randomQuotesEnabled = body.randomQuotesEnabled
+    if (body.randomQuotes !== undefined)
+      patch.randomQuotes = body.randomQuotes || null
+    if (body.randomQuotesTag !== undefined)
+      patch.randomQuotesTag = body.randomQuotesTag || null
+    if (body.bgmMusicId !== undefined) patch.bgmMusicId = body.bgmMusicId
+    if (nextSlug !== undefined) patch.slug = nextSlug
+    if (body.clearPassword) patch.passwordHash = null
+    else if (body.password?.trim())
+      patch.passwordHash = hashAlbumPassword(body.password.trim())
 
-
-    if (nextSlug !== undefined) {
-      updateData.slug = nextSlug
-    }
-
-    if (body.layout !== undefined) {
-      updateData.layout = body.layout
-    }
-
-    if (body.randomWheelAnimation !== undefined) {
-      updateData.randomWheelAnimation = body.randomWheelAnimation
-    }
-
-    if (body.randomAnimation !== undefined) {
-      updateData.randomAnimation = body.randomAnimation
-    }
-
-    if (body.randomQuotesEnabled !== undefined) {
-      updateData.randomQuotesEnabled = body.randomQuotesEnabled
-    }
-
-    if (body.randomQuotes !== undefined) {
-      updateData.randomQuotes = body.randomQuotes || null
-    }
-
-    if (body.randomQuotesTag !== undefined) {
-      updateData.randomQuotesTag = body.randomQuotesTag || null
-    }
-
-    if (body.bgmMusicId !== undefined) {
-      updateData.bgmMusicId = body.bgmMusicId ?? null
-    }
-
-    if (body.title !== undefined) {
-      updateData.title = body.title
-    }
-
-    if (body.description !== undefined) {
-      updateData.description = body.description || null
-    }
-
-    if (body.coverPhotoId !== undefined) {
-      updateData.coverPhotoId = body.coverPhotoId || null
-    }
-    if (body.visibility !== undefined) {
-      updateData.visibility = body.visibility
-      updateData.isHidden = body.visibility !== 'public'
-    } else if (body.isHidden !== undefined) {
-      updateData.isHidden = body.isHidden
-      updateData.visibility = body.isHidden ? 'login' : 'public'
-    }
-    if (body.hideFromGallery !== undefined) {
-      updateData.hideFromGallery = body.hideFromGallery
-    }
-
-    // 密码处理：clearPassword=true → 清除；非空明文 → 设置新密码；否则保持不变
-    // password（明文）与 passwordHash 同步维护：明文仅供管理端回显，验证仍以哈希为准。
-    if (body.clearPassword) {
-      updateData.passwordHash = null
-      updateData.password = null
-    } else if (body.password?.trim()) {
-      const plain = body.password.trim()
-      updateData.passwordHash = hashAlbumPassword(plain)
-      updateData.password = plain
-    }
-
-    // 密码免密范围：null=清除（所有访问者都需密码）；selected 时落库为邮箱 JSON 数组
-    if (body.passwordExemptMode !== undefined) {
-      updateData.passwordExemptMode =
-        body.passwordExemptMode === 'selected' &&
-        (body.passwordExemptUsers?.length ?? 0) === 0
-          ? null // selected 但未选用户视为无效配置，回落为需密码
-          : body.passwordExemptMode
-    }
-    if (body.passwordExemptUsers !== undefined) {
-      updateData.passwordExemptUsers = body.passwordExemptUsers?.length
-        ? JSON.stringify(parseExemptUsers(JSON.stringify(body.passwordExemptUsers)))
-        : null
-    }
-
-    // 修改密码后之前的解锁 Cookie 立即失效
-
-    tx.update(tables.albums)
-      .set(updateData)
-      .where(eq(tables.albums.id, albumId))
+    tx.update(tables.collections)
+      .set(patch)
+      .where(
+        and(
+          eq(tables.collections.id, albumId),
+          eq(tables.collections.kind, 'manual'),
+        ),
+      )
       .run()
 
-    // 如果提供了新的照片列表，替换现有照片
+    if (
+      body.visibility !== undefined ||
+      body.isHidden !== undefined ||
+      body.clearPassword ||
+      body.passwordExemptMode !== undefined ||
+      body.passwordExemptUsers !== undefined
+    ) {
+      const access = readCollectionAccess(albumId, tx)
+      replaceCollectionAccess(
+        albumId,
+        {
+          visibility:
+            body.visibility ??
+            (body.isHidden === undefined
+              ? access.visibility
+              : body.isHidden
+                ? 'login'
+                : 'public'),
+          passwordExemptMode:
+            body.clearPassword
+              ? null
+              : body.passwordExemptMode === undefined
+              ? access.passwordExemptMode
+              : body.passwordExemptMode === 'selected' &&
+                  !body.passwordExemptUsers?.length
+                ? null
+                : body.passwordExemptMode,
+          passwordExemptUsers:
+            body.clearPassword
+              ? null
+              : body.passwordExemptUsers === undefined
+              ? access.passwordExemptUsers
+              : body.passwordExemptUsers,
+        },
+        tx,
+      )
+    }
+
     if (body.photoIds !== undefined) {
-      // 删除现有的相簌-照片关系
-      tx.delete(tables.albumPhotos)
-        .where(eq(tables.albumPhotos.albumId, albumId))
+      tx.delete(tables.collectionPhotos)
+        .where(eq(tables.collectionPhotos.collectionId, albumId))
         .run()
-
-      // 添加新的相簌-照片关系
       const photoIds = new Set(body.photoIds)
-
-      // 确保 coverPhotoId 在列表中
-      if (body.coverPhotoId) {
-        photoIds.add(body.coverPhotoId)
-      }
-
-      if (photoIds.size > 0) {
-        let pos = 1000000
-        for (const photoId of photoIds) {
-          tx.insert(tables.albumPhotos)
-            .values({
-              albumId,
-              photoId,
-              position: (pos += 10),
-            })
-            .onConflictDoNothing()
-            .run()
-        }
+      if (body.coverPhotoId) photoIds.add(body.coverPhotoId)
+      let position = 1000000
+      for (const photoId of photoIds) {
+        tx.insert(tables.collectionPhotos)
+          .values({
+            collectionId: albumId,
+            photoId,
+            position: (position += 10),
+          })
+          .onConflictDoNothing()
+          .run()
       }
     }
 
     return tx
       .select()
-      .from(tables.albums)
-      .where(eq(tables.albums.id, albumId))
-      .get()
+      .from(tables.collections)
+      .where(eq(tables.collections.id, albumId))
+      .get()!
   })
 
-  // 事务后相簿应必然存在；防御性兜底
-  if (!updatedAlbum) {
-    throw createError({ statusCode: 404, statusMessage: 'Album not found' })
-  }
-
-  // 惰性补全并返回公开 UID
-  const uid = await ensureAlbumUid(db, updatedAlbum)
-
-  // 不回传密码哈希
-  const { passwordHash: _ph, ...safeAlbum } = { ...updatedAlbum, uid }
+  const album = toManualAlbum(updated, db)
+  const { passwordHash: _passwordHash, ...safeAlbum } = album
   return safeAlbum
 })

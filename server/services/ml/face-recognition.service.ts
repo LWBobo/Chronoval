@@ -1,8 +1,7 @@
-import { eq, isNull } from 'drizzle-orm'
-import { randomUUID } from 'node:crypto'
+import { and, eq, isNull } from 'drizzle-orm'
 import { faceMaxDistance, faceMinFaces, isFaceEnabled } from './config'
 import { isFaceReindexActive } from './face-reindex'
-import { reconcilePeople, reconcilePerson } from './person.service'
+import { createPerson, reconcilePeople, reconcilePerson } from './person.service'
 import { bufferToFloat32, cosineDistance } from './vector'
 
 const log = () => logger.dynamic('ml-face-recog')
@@ -138,22 +137,37 @@ export async function processFaceRecognition(options?: {
     let personId = withPerson?.personId || null
 
     if (!personId) {
-      // Search any assigned face among broader neighbors
       const assignedNeighbor = neighbors.find((n) => n.personId)
       personId = assignedNeighbor?.personId || null
     }
 
+    const anchors = allFaces.filter((row) => row.pinned && personByFace.get(row.id))
+    let nearest: { personId: string; distance: number } | null = null
+    let tied = false
+    for (const anchor of anchors) {
+      const ov = embMap.get(anchor.id)
+      if (!ov) continue
+      const distance = cosineDistance(vec, ov)
+      if (distance > maxDistance) continue
+      const anchorPerson = personByFace.get(anchor.id)
+      if (!anchorPerson) continue
+      if (!nearest || distance < nearest.distance) {
+        nearest = { personId: anchorPerson, distance }
+        tied = false
+      } else if (distance === nearest.distance && anchorPerson !== nearest.personId) {
+        tied = true
+      }
+    }
+    if (tied) continue
+    if (nearest) personId = nearest.personId
+
     if (!personId) {
-      personId = randomUUID()
-      db.insert(tables.people)
-        .values({
-          id: personId,
-          name: null,
-          visibility: 'public',
-          isHidden: false,
-          thumbnailFaceId: face.id,
-          faceCount: 0,
-        })
+      const createdPerson = createPerson(null)
+      if (!createdPerson) continue
+      personId = createdPerson.id
+      db.update(tables.people)
+        .set({ thumbnailFaceId: face.id, updatedAt: new Date() })
+        .where(eq(tables.people.id, personId))
         .run()
       created++
     }
@@ -220,7 +234,9 @@ export function resetMlPersonClustering() {
 
   db.update(tables.assetFaces)
     .set({ personId: null })
-    .where(eq(tables.assetFaces.source, 'ml'))
+    .where(
+      and(eq(tables.assetFaces.source, 'ml'), eq(tables.assetFaces.pinned, false)),
+    )
     .run()
 
   // Also reconcile every person row (covers stale counts / broken thumbs).

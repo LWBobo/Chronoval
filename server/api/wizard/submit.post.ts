@@ -55,6 +55,7 @@ export default eventHandler(async (event) => {
           password: await hashPassword(body.admin.password),
           username: body.admin.username,
           isAdmin: 1,
+          role: 'admin',
         })
         .where(eq(tables.users.id, existingUser.id))
         .run()
@@ -73,6 +74,7 @@ export default eventHandler(async (event) => {
         username: body.admin.username,
         password: await hashPassword(body.admin.password),
         isAdmin: 1,
+        role: 'admin',
         createdAt: new Date(),
       })
       .run()
@@ -128,10 +130,10 @@ export default eventHandler(async (event) => {
   if (adminUser) {
     await setUserSession(
       event,
-      { user: adminUser },
+      { user: toSessionUser(adminUser) },
       {
         cookie: {
-          secure: false,
+          secure: useSecureCookie(event),
         },
       },
     )

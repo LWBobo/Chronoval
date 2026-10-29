@@ -1612,7 +1612,14 @@
           "description": "URL kiểu bản đồ MapLibre"
         }
       },
-      "sectionDescription": "Cấu hình dịch vụ hiển thị bản đồ và mã hóa vị trí. Nhà cung cấp bản đồ ảnh hưởng đến kiểu bản đồ và thông tin xác thực truy cập."
+      "sectionDescription": "Cấu hình dịch vụ hiển thị bản đồ và mã hóa vị trí. Nhà cung cấp bản đồ ảnh hưởng đến kiểu bản đồ và thông tin xác thực truy cập.",
+      "protomaps": {
+        "timelineFile": {
+          "label": "Tệp PMTiles dòng thời gian",
+          "description": "Bản đồ nhẹ tùy chọn cho kết nối băng thông thấp",
+          "help": "Đặt bản đồ mức thu phóng thấp như timeline-lite.pmtiles vào /app/map. Để trống để dùng bản đồ chính."
+        }
+      }
     },
     "location": {
       "language": {
@@ -2159,7 +2166,21 @@
     "timeline": {
       "toggle": "Bật/Tắt dòng thời gian",
       "playPause": "Phát/Tạm dừng dòng thời gian",
-      "title": "Dòng thời gian"
+      "follow": "Theo dõi địa điểm",
+      "title": "Dòng thời gian",
+      "preloading": "Đang tải bản đồ…",
+      "speed": "Tốc độ phát",
+      "resumeFollow": "Tiếp tục theo dõi",
+      "pausedByInteraction": "Đã tạm dừng sau khi thao tác bản đồ",
+      "loadingPhotos": "Đang tải ảnh bản đồ…",
+      "preparingPlace": "Đang chuẩn bị địa điểm tiếp theo…",
+      "markPhotos": "{count} ảnh",
+      "networkMode": {
+        "help": "Chế độ mạng: Tự động nhận diện kết nối; Tiết kiệm bỏ qua ô bản đồ dọc đường; Mượt giữ đầy đủ chuyển động camera",
+        "auto": "Tự động",
+        "save-data": "Tiết kiệm",
+        "smooth": "Mượt"
+      }
     }
   },
   "photo": {

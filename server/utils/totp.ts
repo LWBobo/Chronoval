@@ -108,26 +108,32 @@ export function buildTotpUri(opts: {
 // Cookie；前端带着 TOTP 验证码走第二步接口，验证通过后才建立正式会话。
 const CHALLENGE_TTL_SECONDS = 10 * 60
 const CHALLENGE_COOKIE = 'cframe_2fa_challenge'
+const usedChallengeNonces = new Map<string, number>()
 
 function challengeSecret(): string {
-  // 复用会话签名密钥，避免新增秘密；未配置时回退到随机值（仅用于签名一致性）
-  return (
+  const secret =
     process.env.NUXT_SESSION_PASSWORD ||
-    process.env.NUXT_AUTH_SESSION_PASSWORD ||
-    'chronoval-totp-challenge'
-  )
+    process.env.NUXT_AUTH_SESSION_PASSWORD
+  if (!secret) throw new Error('Session password is not configured')
+  return secret
 }
 
-function signChallenge(userId: number, exp: string): string {
-  const payload = `${userId}:${exp}`
+function signChallenge(userId: number, exp: string, nonce: string): string {
+  const payload = `${userId}:${exp}:${nonce}`
   const sig = createHmac('sha256', challengeSecret())
     .update(payload)
     .digest('base64url')
   return `${payload}.${sig}`
 }
 
-/** 校验挑战令牌并返回 userId；过期或被篡改返回 null */
-export function verifyChallenge(token: string): number | null {
+export interface ChallengePayload {
+  userId: number
+  expiresAt: number
+  nonce: string
+}
+
+/** 校验挑战令牌并返回一次性载荷；过期、被篡改或已使用时返回 null。 */
+export function verifyChallenge(token: string): ChallengePayload | null {
   const lastDot = token.lastIndexOf('.')
   if (lastDot === -1) return null
   const payload = token.slice(0, lastDot)
@@ -140,12 +146,26 @@ export function verifyChallenge(token: string): number | null {
   if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
     return null
   }
-  const [userIdStr, expStr] = payload.split(':')
+  const [userIdStr, expStr, nonce] = payload.split(':')
   const userId = Number(userIdStr)
   const exp = Number(expStr)
-  if (!Number.isFinite(userId) || !Number.isFinite(exp)) return null
+  if (!Number.isFinite(userId) || !Number.isFinite(exp) || !nonce) return null
   if (Date.now() / 1000 > exp) return null
-  return userId
+  if (usedChallengeNonces.has(nonce)) return null
+  return { userId, expiresAt: exp, nonce }
+}
+
+/** TOTP 校验成功后原子消费挑战，阻止复制 Cookie 后重复建立会话。 */
+export function consumeChallenge(challenge: ChallengePayload): boolean {
+  const now = Math.floor(Date.now() / 1000)
+  for (const [nonce, expiresAt] of usedChallengeNonces) {
+    if (expiresAt <= now) usedChallengeNonces.delete(nonce)
+  }
+  if (challenge.expiresAt <= now || usedChallengeNonces.has(challenge.nonce)) {
+    return false
+  }
+  usedChallengeNonces.set(challenge.nonce, challenge.expiresAt)
+  return true
 }
 
 /** 签发挑战 Cookie 值（httpOnly、SameSite=Lax、10 分钟有效） */
@@ -154,7 +174,11 @@ export function createChallengeToken(userId: number): {
   expiresAt: Date
 } {
   const exp = Math.floor(Date.now() / 1000) + CHALLENGE_TTL_SECONDS
-  return { token: signChallenge(userId, String(exp)), expiresAt: new Date(exp * 1000) }
+  const nonce = randomBytes(18).toString('base64url')
+  return {
+    token: signChallenge(userId, String(exp), nonce),
+    expiresAt: new Date(exp * 1000),
+  }
 }
 
 export const totpConstants = {

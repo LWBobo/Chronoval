@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+const requestFetch = useRequestFetch()
 const route = useRoute()
 const personId = computed(() => String(route.params.id || ''))
 
@@ -18,15 +19,7 @@ interface PersonOption {
   name: string | null
 }
 
-interface PersonPhoto {
-  id: string
-  title: string | null
-  thumbnailUrl: string | null
-  thumbnailHash: string | null
-  aspectRatio: number | null
-  dateTaken: string | null
-  type: string
-}
+type PersonPhoto = Photo
 
 const { loggedIn, user } = useUserSession()
 const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
@@ -41,7 +34,7 @@ const { data: peoplePayload, refresh: refreshPeople } = useAsyncData(
   'people-merge-options',
   () =>
     isAdmin.value
-      ? $fetch<{ people: PersonOption[] }>('/api/people', {
+      ? requestFetch<{ people: PersonOption[] }>('/api/people', {
           query: { minFaces: 0 },
         })
       : Promise.resolve({ people: [] as PersonOption[] }),
@@ -55,17 +48,26 @@ const mergeOptions = computed(() =>
 )
 
 const viewerKey = computed(() =>
-  loggedIn.value ? (isAdmin.value ? 'admin' : 'user') : 'guest',
+  loggedIn.value
+    ? `${user.value?.id}:${isAdmin.value ? 'admin' : 'user'}`
+    : 'guest',
 )
 
 const { data, pending, error, refresh } = useAsyncData(
   () => `person-${personId.value}-${viewerKey.value}`,
   () =>
-    $fetch<{ person: PersonDetail; photos: PersonPhoto[] }>(
+    requestFetch<{ person: PersonDetail; photos: PersonPhoto[] }>(
       `/api/people/${personId.value}`,
     ),
   { watch: [personId, viewerKey] },
 )
+
+const openPersonPhoto = (index: number) => {
+  const photo = photos.value[index]
+  if (!photo) return
+  useViewerState().openViewer(index, route.fullPath, photos.value)
+  void navigateTo(`/${encodeURIComponent(photo.id)}`)
+}
 
 const person = computed(() => data.value?.person)
 const photos = computed(() => data.value?.photos || [])
@@ -84,7 +86,8 @@ const currentVisibility = computed<PersonVisibility>(() => {
 })
 
 const displayName = computed(
-  () => person.value?.name?.trim() || (person.value ? t('ui.people.unnamed') : ''),
+  () =>
+    person.value?.name?.trim() || (person.value ? t('ui.people.unnamed') : ''),
 )
 
 watch(person, (value) => {
@@ -100,7 +103,7 @@ async function savePerson(patch: {
   if (patch.visibility && patch.visibility === currentVisibility.value) return
   saving.value = true
   try {
-    await $fetch(`/api/people/${person.value.id}`, {
+    await requestFetch(`/api/people/${person.value.id}`, {
       method: 'PUT',
       body: patch,
     })
@@ -121,7 +124,7 @@ async function mergeIntoThis() {
   if (!person.value || !mergeSourceId.value || saving.value) return
   saving.value = true
   try {
-    await $fetch('/api/people/merge', {
+    await requestFetch('/api/people/merge', {
       method: 'POST',
       body: {
         targetId: person.value.id,
@@ -229,7 +232,15 @@ useHead({
                   :key="level"
                   type="button"
                   size="sm"
-                  :color="currentVisibility === level ? (level === 'admin' ? 'error' : level === 'login' ? 'warning' : 'primary') : 'neutral'"
+                  :color="
+                    currentVisibility === level
+                      ? level === 'admin'
+                        ? 'error'
+                        : level === 'login'
+                          ? 'warning'
+                          : 'primary'
+                      : 'neutral'
+                  "
                   :variant="currentVisibility === level ? 'solid' : 'outline'"
                   :loading="saving && currentVisibility === level"
                   @click="savePerson({ visibility: level })"
@@ -290,9 +301,10 @@ useHead({
           class="columns-2 gap-2 sm:columns-3 md:columns-4 lg:columns-5"
         >
           <NuxtLink
-            v-for="photo in photos"
+            v-for="(photo, index) in photos"
             :key="photo.id"
-            :to="`/${photo.id}`"
+            :to="`/${encodeURIComponent(photo.id)}`"
+            @click.prevent="openPersonPhoto(index)"
             class="mb-2 block break-inside-avoid overflow-hidden rounded-md"
           >
             <ThumbImage

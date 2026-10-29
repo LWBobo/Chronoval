@@ -1,0 +1,6 @@
+{
+  "version": "20261020-90000",
+  "expectedCount": 90000,
+  "filename": "geocode_places.csv",
+  "description": "中国常见行政区/乡镇/景点坐标种子（WGS84）"
+}

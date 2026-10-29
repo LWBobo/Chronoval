@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+const requestFetch = useRequestFetch()
 useHead({
   title: () => $t('title.people'),
 })
@@ -16,13 +17,15 @@ interface PersonCard {
 const { loggedIn, user } = useUserSession()
 const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
 const viewerKey = computed(() =>
-  loggedIn.value ? (isAdmin.value ? 'admin' : 'user') : 'guest',
+  loggedIn.value
+    ? `${user.value?.id}:${isAdmin.value ? 'admin' : 'user'}`
+    : 'guest',
 )
 
 const { data, pending, error, refresh } = useAsyncData(
   () => `people-list-${viewerKey.value}`,
   () =>
-    $fetch<{ people: PersonCard[] }>('/api/people', {
+    requestFetch<{ people: PersonCard[] }>('/api/people', {
       query: { minFaces: 1 },
     }),
   { watch: [viewerKey] },
@@ -30,7 +33,8 @@ const { data, pending, error, refresh } = useAsyncData(
 
 const people = computed(() =>
   (data.value?.people || []).filter((person) => {
-    const visibility = person.visibility || (person.isHidden ? 'admin' : 'public')
+    const visibility =
+      person.visibility || (person.isHidden ? 'admin' : 'public')
     if (visibility === 'public') return true
     if (!loggedIn.value) return false
     if (visibility === 'admin') return isAdmin.value
@@ -40,8 +44,7 @@ const people = computed(() =>
 
 const { t } = useI18n()
 
-const displayName = (p: PersonCard) =>
-  p.name?.trim() || t('ui.people.unnamed')
+const displayName = (p: PersonCard) => p.name?.trim() || t('ui.people.unnamed')
 </script>
 
 <template>
@@ -54,7 +57,9 @@ const displayName = (p: PersonCard) =>
 
     <div class="mx-auto w-full max-w-6xl px-4 pt-16 pb-20">
       <header class="mb-8">
-        <h1 class="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">
+        <h1
+          class="text-2xl font-semibold text-neutral-900 dark:text-neutral-100"
+        >
           {{ $t('title.people') }}
         </h1>
         <p class="mt-1 text-sm text-neutral-500">
@@ -134,7 +139,9 @@ const displayName = (p: PersonCard) =>
               {{ $t('ui.people.faces', { count: person.faceCount }) }}
             </p>
             <p
-              v-if="isAdmin && person.visibility && person.visibility !== 'public'"
+              v-if="
+                isAdmin && person.visibility && person.visibility !== 'public'
+              "
               class="text-[11px] text-amber-600 dark:text-amber-400"
             >
               {{ $t(`ui.people.visibility.${person.visibility}`) }}

@@ -30,39 +30,44 @@ export function addPhotosToAlbums(albumIds: number[], photoIds: string[]) {
   for (const albumId of uniqueAlbums) {
     const album = db
       .select({
-        id: tables.albums.id,
-        coverPhotoId: tables.albums.coverPhotoId,
+        id: tables.collections.id,
+        coverPhotoId: tables.collections.coverPhotoId,
       })
-      .from(tables.albums)
-      .where(eq(tables.albums.id, albumId))
+      .from(tables.collections)
+      .where(
+        and(
+          eq(tables.collections.id, albumId),
+          eq(tables.collections.kind, 'manual'),
+        ),
+      )
       .get()
     if (!album) continue
     albums += 1
 
     const rows = db
       .select({
-        photoId: tables.albumPhotos.photoId,
-        position: tables.albumPhotos.position,
+        photoId: tables.collectionPhotos.photoId,
+        position: tables.collectionPhotos.position,
       })
-      .from(tables.albumPhotos)
-      .where(eq(tables.albumPhotos.albumId, albumId))
+      .from(tables.collectionPhotos)
+      .where(eq(tables.collectionPhotos.collectionId, albumId))
       .all()
     const have = new Set(rows.map((row) => row.photoId))
     let position = rows.reduce((max, row) => Math.max(max, row.position), 0)
 
-    const insert: { albumId: number; photoId: string; position: number }[] = []
+    const insert: { collectionId: number; photoId: string; position: number }[] = []
     for (const photoId of validPhotos) {
       if (have.has(photoId)) {
         already += 1
         continue
       }
       position += 10
-      insert.push({ albumId, photoId, position })
+      insert.push({ collectionId: albumId, photoId, position })
     }
     if (!insert.length) continue
 
     for (let offset = 0; offset < insert.length; offset += 80) {
-      db.insert(tables.albumPhotos)
+      db.insert(tables.collectionPhotos)
         .values(insert.slice(offset, offset + 80))
         .onConflictDoNothing()
         .run()
@@ -70,9 +75,9 @@ export function addPhotosToAlbums(albumIds: number[], photoIds: string[]) {
     added += insert.length
 
     if (!album.coverPhotoId) {
-      db.update(tables.albums)
+      db.update(tables.collections)
         .set({ coverPhotoId: insert[0]!.photoId, updatedAt: new Date() })
-        .where(eq(tables.albums.id, albumId))
+        .where(eq(tables.collections.id, albumId))
         .run()
     }
   }

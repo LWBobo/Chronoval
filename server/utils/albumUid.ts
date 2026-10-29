@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { eq, tables, useDB, type Album } from '~~/server/utils/db'
 
 type DB = ReturnType<typeof useDB>
+const UID_GENERATION_ATTEMPTS = 20
 
 /**
  * 生成普通相簿的不透明公开 UID。
@@ -17,6 +18,20 @@ export function generateAlbumUid(): string {
   return uid
 }
 
+/** Generate an unused UID with a bounded retry count for the unique index. */
+export function generateAvailableAlbumUid(db: DB): string {
+  for (let attempt = 0; attempt < UID_GENERATION_ATTEMPTS; attempt++) {
+    const uid = generateAlbumUid()
+    const exists = db
+      .select({ id: tables.collections.id })
+      .from(tables.collections)
+      .where(eq(tables.collections.uid, uid))
+      .get()
+    if (!exists) return uid
+  }
+  throw new Error('Unable to generate a unique album UID')
+}
+
 /**
  * 惰性补全相簿 UID：存量相簿首次被读取时生成并落库，兼容迁移前已存在的数据。
  * 返回最终有效的 uid。
@@ -27,21 +42,11 @@ export async function ensureAlbumUid(
 ): Promise<string> {
   if (album.uid) return album.uid
 
-  // 在唯一索引兜底下，循环生成直到不冲突
-  let uid = ''
-  do {
-    uid = generateAlbumUid()
-    const exists = db
-      .select({ id: tables.albums.id })
-      .from(tables.albums)
-      .where(eq(tables.albums.uid, uid))
-      .get()
-    if (!exists) break
-  } while (true)
+  const uid = generateAvailableAlbumUid(db)
 
-  db.update(tables.albums)
+  db.update(tables.collections)
     .set({ uid, updatedAt: new Date() })
-    .where(eq(tables.albums.id, album.id))
+    .where(eq(tables.collections.id, album.id))
     .run()
 
   return uid

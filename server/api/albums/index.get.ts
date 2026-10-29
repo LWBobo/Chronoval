@@ -2,16 +2,18 @@ import { eq, tables, useDB } from '~~/server/utils/db'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 import { redactAlbumSecrets } from '~~/server/utils/albumAccess'
 import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
-import {
-  ensureAlbumVisibilityColumn,
-  normalizeAlbumVisibility,
-} from '~~/server/utils/albumVisibility'
+import { listManualAlbums } from '~~/server/services/collections/manual-album'
+import { albumOpenToActor } from '~~/server/utils/albumVisibility'
+import { hasAlbumAccess } from '~~/server/utils/manualAlbumAuth'
+import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
+import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
+import { discoverablePhotoIds } from '~~/server/utils/photo-access'
+import { serializeScanAlbumNodes } from '~~/server/utils/scan-album-response'
 
 export default eventHandler(async (event) => {
   const db = useDB()
-  const { listScanAlbumRoots, getDisabledScanMountSet } = await import(
-    '~~/server/services/scan-library/manager'
-  )
+  const { listScanAlbumRoots, getDisabledScanMountSet } =
+    await import('~~/server/services/scan-library/manager')
   const { ensureAlbumUid } = await import('~~/server/utils/albumUid')
   const { serializeMusic, listMusic } = await import('~~/server/services/music')
 
@@ -26,14 +28,14 @@ export default eventHandler(async (event) => {
   const actor = await getActor(event)
   const { isAdmin } = actor
   const blockedByPerson = blockedPhotoIdsForActor(actor)
+  const adminBypass = await isAlbumAdminBypass(event, actor)
 
   // 非管理员：剔除「已禁用扫描库」的照片，避免相册封面/列表出现加载失败的坏图
   const disabledScanMounts = getDisabledScanMountSet()
 
   // 获取所有相册，按创建时间倒序。仅管理员相簿不返回给普通账号，避免标题泄露。
-  ensureAlbumVisibilityColumn()
-  const albums = (await db.select().from(tables.albums)).filter(
-    (album) => isAdmin || normalizeAlbumVisibility(album) !== 'admin',
+  const albums = listManualAlbums().filter((album) =>
+    albumOpenToActor(album, actor),
   )
 
   // 为每个相册获取照片 ID 列表与封面堆叠数据。
@@ -41,32 +43,60 @@ export default eventHandler(async (event) => {
   // 否则同一连接上的 prepared 语句参数状态会互相错乱。
   const albumsWithPhotoIds: any[] = []
   for (const album of albums) {
+    const passwordExempt = isPasswordExemptForUser(album, actor.user)
+    const authorized =
+      !album.passwordHash ||
+      isAdmin ||
+      passwordExempt ||
+      hasAlbumAccess(
+        event,
+        {
+          albumId: album.id,
+          passwordHash: album.passwordHash,
+          sessionExempt: passwordExempt,
+        },
+        Boolean(adminBypass),
+      )
+
     // 一次查询取回相簿照片及对应缩略图封面信息（按相簿内位置排序）。
     // 关键：不能对每个封面照片单独发查询，better-sqlite3 的 prepared 语句
     // 在多次复用时会参数错乱；合并成单条查询可绕开该问题。
     const photoRows = db
       .select({
-        photoId: tables.albumPhotos.photoId,
-        position: tables.albumPhotos.position,
+        photoId: tables.collectionPhotos.photoId,
+        position: tables.collectionPhotos.position,
         thumbnailUrl: tables.photos.thumbnailUrl,
         thumbnailHash: tables.photos.thumbnailHash,
         aspectRatio: tables.photos.aspectRatio,
         libraryMount: tables.photos.libraryMount,
         type: tables.photos.type,
       })
-      .from(tables.albumPhotos)
-      .leftJoin(tables.photos, eq(tables.albumPhotos.photoId, tables.photos.id))
-      .where(eq(tables.albumPhotos.albumId, album.id))
-      .orderBy(tables.albumPhotos.position)
+      .from(tables.collectionPhotos)
+      .leftJoin(
+        tables.photos,
+        eq(tables.collectionPhotos.photoId, tables.photos.id),
+      )
+      .where(eq(tables.collectionPhotos.collectionId, album.id))
+      .orderBy(tables.collectionPhotos.position)
       .all()
     // 非管理员：剔除已禁用扫描库的照片，封面与 photoIds 均不再引用
-    const rows = (
+    let rows = (
       !isAdmin && disabledScanMounts.size > 0
         ? photoRows.filter(
             (r) => !r.libraryMount || !disabledScanMounts.has(r.libraryMount),
           )
         : photoRows
     ).filter((row) => !blockedByPerson.has(row.photoId))
+
+    if (!isAdmin && rows.length > 0) {
+      const visibleIds = await discoverablePhotoIds(
+        event,
+        rows.map((row) => row.photoId),
+      )
+      rows = rows.filter((row) => visibleIds.has(row.photoId))
+    }
+    if (!authorized) rows = []
+
     const photoIds = rows.map((r) => r.photoId)
 
     const restAlbum = redactAlbumSecrets(album, false)
@@ -115,16 +145,23 @@ export default eventHandler(async (event) => {
 
     albumsWithPhotoIds.push({
       ...restAlbum,
+      coverPhotoId:
+        authorized &&
+        album.coverPhotoId &&
+        photoIds.includes(album.coverPhotoId)
+          ? album.coverPhotoId
+          : (covers[0]?.id ?? null),
       uid,
       kind: 'manual',
       covers,
       // 密码类型：是否有访问密码（不暴露真实哈希）
       passwordProtected: Boolean(album.passwordHash),
-      // 明文密码仅对管理员回显；公开访问一律不返回
-      password: isAdmin ? album.password ?? undefined : undefined,
       ...exemptAdminOnly,
       // 相簿背景音乐（音乐盒）：解析并返回 BGM 信息（null=未启用）
-      bgm: (album.bgmMusicId && musicMap.get(album.bgmMusicId)) || null,
+      bgm:
+        authorized && album.bgmMusicId
+          ? musicMap.get(album.bgmMusicId) || null
+          : null,
       // 即使是空相册，也返回空数组而不是 undefined
       photoIds,
       photoCount: rows.filter((r) => r.type !== 'video').length,
@@ -138,63 +175,19 @@ export default eventHandler(async (event) => {
   // 也不应拖垮整个相簿列表接口导致「加载相簿失败」——此处隔离兜底。
   let visibleScanRoots: Awaited<ReturnType<typeof listScanAlbumRoots>> = []
   try {
-    const scanRoots = await listScanAlbumRoots(isAdmin)
-    visibleScanRoots = isAdmin
-      ? scanRoots
-      : scanRoots.filter((node) => !node.isHidden)
+    visibleScanRoots = await serializeScanAlbumNodes(
+      event,
+      await listScanAlbumRoots(isAdmin),
+      {
+        actor,
+        manageMode: isAdmin,
+        adminBypass,
+        resolveBgm: (id) => (id ? musicMap.get(id) || null : null),
+      },
+    )
   } catch (error) {
-    console.error('[albums] 扫描库相簿加载失败，已忽略：', error)
+    console.error('[albums] 扫描库相簿加载失败：', error)
   }
-
-  // 公开访问时彻底剥离扫描相簿节点上的明文密码与免密用户列表（含二级子相簿）
-  if (!isAdmin) {
-    const strip = (node: any): any => {
-      const {
-        password: _pw,
-        passwordExemptMode: _pem,
-        passwordExemptUsers: _peu,
-        children,
-        ...rest
-      } = node
-      return children?.length
-        ? { ...rest, children: children.map(strip) }
-        : rest
-    }
-    visibleScanRoots = visibleScanRoots.map(strip)
-  }
-
-  // 为扫描库相簿节点回显 BGM（含子相簿）
-  const addScanBgm = (node: any): any => {
-    const { bgmMusicId, children, ...rest } = node
-    return {
-      ...rest,
-      bgm: (bgmMusicId && musicMap.get(bgmMusicId)) || null,
-      ...(children?.length ? { children: children.map(addScanBgm) } : {}),
-    }
-  }
-  visibleScanRoots = visibleScanRoots.map(addScanBgm)
-
-  const hideBlockedCovers = (node: any): any => {
-    if (!node || blockedByPerson.size === 0) return node
-    const covers = Array.isArray(node.covers)
-      ? node.covers.filter(
-          (cover: { id?: string }) => cover?.id && !blockedByPerson.has(cover.id),
-        )
-      : node.covers
-    const coverPhotoId =
-      node.coverPhotoId && blockedByPerson.has(node.coverPhotoId)
-        ? covers?.[0]?.id ?? null
-        : node.coverPhotoId
-    return {
-      ...node,
-      covers,
-      coverPhotoId,
-      ...(node.children?.length
-        ? { children: node.children.map(hideBlockedCovers) }
-        : {}),
-    }
-  }
-  visibleScanRoots = visibleScanRoots.map(hideBlockedCovers)
 
   const combined: unknown[] = [
     ...albumsWithPhotoIds.sort(

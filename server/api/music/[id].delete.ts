@@ -25,14 +25,10 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Music not found' })
   }
 
-  // 解除引用：相簿与扫描库相簿元数据的 bgmMusicId 置空
-  db.update(tables.albums)
+  // 所有类型的相簿都由 collections 统一持有 BGM 引用。
+  db.update(tables.collections)
     .set({ bgmMusicId: null })
-    .where(eq(tables.albums.bgmMusicId, id))
-    .run()
-  db.update(tables.scanAlbumMeta)
-    .set({ bgmMusicId: null })
-    .where(eq(tables.scanAlbumMeta.bgmMusicId, id))
+    .where(eq(tables.collections.bgmMusicId, id))
     .run()
 
   // 删除存储后端文件（失败不阻塞数据库删除）

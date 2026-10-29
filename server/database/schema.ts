@@ -8,6 +8,8 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  check,
+  type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core'
 import type { NeededExif } from '~~/shared/types/photo'
 import type { StorageConfig } from '../services/storage'
@@ -60,6 +62,8 @@ export const users = sqliteTable('users', {
   avatar: text('avatar'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   isAdmin: integer('is_admin').default(0).notNull(),
+  /** admin / user。读权限以本列为准，is_admin 仅作迁移过渡。 */
+  role: text('role', { enum: ['admin', 'user'] }).notNull().default('user'),
   // 两次验证（TOTP）：secret 在开启前先生成并暂存，用户用验证器扫码确认后才置 enabled
   totpSecret: text('totp_secret'),
   totpEnabled: integer('totp_enabled', { mode: 'boolean' })
@@ -106,7 +110,7 @@ export const loginLogs = sqliteTable(
 )
 
 export const photos = sqliteTable('photos', {
-  id: text('id').primaryKey().unique(),
+  id: text('id').primaryKey(),
   title: text('title'),
   description: text('description'),
   width: integer('width'),
@@ -147,10 +151,36 @@ export const photos = sqliteTable('photos', {
     .notNull(),
   // 本地库文件：映射目录 + 目录内相对路径
   libraryMount: text('library_mount'),
+  /** 所属扫描库。上传照片为空。挂载名仍是 scan_<library_id>。 */
+  libraryId: integer('library_id').references(() => libraries.id, {
+    onDelete: 'cascade',
+  }),
+  /** 人脸检测完成时间。非空表示扫过，包括零张脸。 */
+  faceScannedAt: integer('face_scanned_at', { mode: 'timestamp' }),
   libraryPath: text('library_path'),
   // 回收站软删除标记：null=正常；非 null=已移入回收站（该时间戳即删除时刻）
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
-})
+}, (table) => [
+  index('idx_photos_gallery_order')
+    .on(sql`${table.dateTaken} DESC`, sql`${table.id} ASC`)
+    .where(sql`${table.deletedAt} IS NULL`),
+  index('idx_photos_geo_timeline')
+    .on(sql`${table.dateTaken} ASC`, sql`${table.id} ASC`)
+    .where(
+      sql`${table.deletedAt} IS NULL AND ${table.latitude} IS NOT NULL AND ${table.longitude} IS NOT NULL`,
+    ),
+  index('idx_photos_library_path').on(table.libraryId, table.libraryPath),
+  index('idx_photos_library_deleted').on(table.libraryId, table.deletedAt),
+  index('idx_photos_mount_path').on(table.libraryMount, table.libraryPath),
+  check(
+    'photos_latitude_check',
+    sql`${table.latitude} IS NULL OR (${table.latitude} >= -90 AND ${table.latitude} <= 90)`,
+  ),
+  check(
+    'photos_longitude_check',
+    sql`${table.longitude} IS NULL OR (${table.longitude} >= -180 AND ${table.longitude} <= 180)`,
+  ),
+])
 
 export const pipelineQueue = sqliteTable('pipeline_queue', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -195,28 +225,55 @@ export const pipelineQueue = sqliteTable('pipeline_queue', {
     .notNull()
     .default(sql`(unixepoch())`),
   completedAt: integer('completed_at', { mode: 'timestamp' }),
-})
+}, (table) => [
+  index('idx_pipeline_queue_pending').on(
+    table.status,
+    sql`${table.priority} DESC`,
+    sql`${table.createdAt} ASC`,
+  ),
+  index('idx_pipeline_queue_status_completed').on(
+    table.status,
+    table.completedAt,
+  ),
+])
 
 // 照片表态表
-export const photoReactions = sqliteTable('photo_reactions', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  photoId: text('photo_id')
-    .notNull()
-    .references(() => photos.id, { onDelete: 'cascade' }),
-  reactionType: text('reaction_type', {
-    enum: ['like', 'love', 'amazing', 'funny', 'wow', 'sad', 'fire', 'sparkle'],
-  }).notNull(),
-  // 使用指纹而不是 IP 地址，更准确且支持匿名用户
-  fingerprint: text('fingerprint').notNull(),
-  ipAddress: text('ip_address'),
-  userAgent: text('user_agent'),
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-})
+export const photoReactions = sqliteTable(
+  'photo_reactions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    photoId: text('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    reactionType: text('reaction_type', {
+      enum: ['like', 'love', 'amazing', 'funny', 'wow', 'sad', 'fire', 'sparkle'],
+    }).notNull(),
+    // 使用指纹而不是 IP 地址，更准确且支持匿名用户
+    fingerprint: text('fingerprint').notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('photo_reactions_photo_fingerprint_unique').on(
+      table.photoId,
+      table.fingerprint,
+    ),
+    index('idx_photo_reactions_photo_type').on(
+      table.photoId,
+      table.reactionType,
+    ),
+    index('idx_photo_reactions_fingerprint_created').on(
+      table.fingerprint,
+      table.createdAt,
+    ),
+  ],
+)
 
 // 音乐盒（BGM）：管理员上传的背景音乐，可绑定到相簿/照片画廊，
 // 进入相簿时自动播放。实际音频文件存于存储后端（storage provider），
@@ -246,178 +303,6 @@ export const music = sqliteTable('music', {
     .notNull()
     .default(sql`(unixepoch())`),
 })
-
-// 相簿表
-export const albums = sqliteTable('albums', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  title: text('title').notNull(),
-  description: text('description'),
-  coverPhotoId: text('cover_photo_id').references(() => photos.id, {
-    onDelete: 'set null',
-  }),
-  // 相簿背景音乐（音乐盒）；null=不播放 BGM
-  bgmMusicId: integer('bgm_music_id').references(() => music.id, {
-    onDelete: 'set null',
-  }),
-  isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
-  // 公开 / 仅登录 / 仅管理员。非 public 时 isHidden 同步为 true，兼容旧的登录门槛。
-  visibility: text('visibility', { enum: ['public', 'login', 'admin'] })
-    .notNull()
-    .default('public'),
-  // 首页照片画廊展示开关（仅普通相簿）：开启后该相簿的照片不进入首页全局照片流
-  hideFromGallery: integer('hide_from_gallery', { mode: 'boolean' }).default(false).notNull(),
-  // 相簿访问密码哈希（单向存储）；null=未设置密码（开放）
-  passwordHash: text('password_hash'),
-  // 相簿访问密码明文（仅管理端编辑回显；访问验证仍以 password_hash 为准）
-  password: text('password'),
-  // 密码免密范围：null=所有访问者都需密码；'logged_in'=任意登录用户免密；'selected'=仅 password_exempt_users 内用户免密
-  passwordExemptMode: text('password_exempt_mode', {
-    enum: ['logged_in', 'selected'],
-  }),
-  // 免密用户邮箱列表（仅 selected 模式生效；JSON 数组字符串）
-  passwordExemptUsers: text('password_exempt_users'),
-  // 相簿公开标识（不透明 UID，替代自增 id 暴露在公网链接中）；
-  // 惰性生成：存量相簿首次返回时自动补全并落库。
-  uid: text('uid'),
-  // 自定义公开URL别名（全局唯一）；设置后公开链接使用 /albums/s/{slug}
-  slug: text('slug'),
-  // 照片展示布局：瀑布流 / 统一网格 / 沉浸式看图 / 时间线；null 视为默认（瀑布流）
-  layout: text('layout', { enum: ['waterfall', 'grid', 'immersive', 'timeline'] })
-    .default('waterfall')
-    .notNull(),
-  // 「随机一张照片」是否使用 3D 轮盘动画（样式功能）；false=直接随机打开一张照片
-  randomWheelAnimation: integer('random_wheel_animation', { mode: 'boolean' })
-    .default(false)
-    .notNull(),
-  // 「随机一张照片」动画模式：default=直接随机打开；wheel=3D轮盘动画；compat=轻量兼容动画
-  randomAnimation: text('random_animation', {
-    enum: ['default', 'wheel', 'compat'],
-  })
-    .default('default')
-    .notNull(),
-  // 「随机照片轮经典语录」扩展功能：是否开启（扩展功能，默认开启，可在相簿编辑「扩展」中关闭）
-  randomQuotesEnabled: integer('random_quotes_enabled', { mode: 'boolean' })
-    .default(true)
-    .notNull(),
-  // 自定义语录（每行一条）；空=使用内置语录
-  randomQuotes: text('random_quotes'),
-  // 「随机照片轮经典语录」标签来源：ancient=古诗语录 / modern=现代语录；null=未选（使用自定义语录）
-  randomQuotesTag: text('random_quotes_tag', {
-    enum: ['ancient', 'modern'],
-  }),
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-}, (table) => [
-  // uid 是公开标识，须全局唯一；slug 是自定义URL别名，亦须全局唯一
-  uniqueIndex('albums_uid_unique').on(table.uid),
-  uniqueIndex('albums_slug_unique').on(table.slug),
-])
-
-// 相簿-照片 多对多关系表
-export const albumPhotos = sqliteTable(
-  'album_photos',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    albumId: integer('album_id')
-      .notNull()
-      .references(() => albums.id, { onDelete: 'cascade' }),
-    photoId: text('photo_id')
-      .notNull()
-      .references(() => photos.id, { onDelete: 'cascade' }),
-    position: real('position').notNull().default(1000000),
-    addedAt: integer('added_at', { mode: 'timestamp' })
-      .notNull()
-      .default(sql`(unixepoch())`),
-  },
-  // 同一照片在同一相簿中只能出现一次；同时让 onConflictDoNothing 真正生效，
-  // 也从根源上杜绝相簿照片重复（此前无唯一约束，历史脏数据可能产生重复行）。
-  (table) => [uniqueIndex('album_photos_album_photo_unique').on(table.albumId, table.photoId)],
-)
-
-// 扫描库=相簿 的自定义元数据覆盖表。
-// 外部库文件夹作为相簿时其标题/介绍等默认由文件结构推导；管理端可通过此表保存
-// 覆盖值（自定义标题、介绍、封面、隐藏、自定义URL）。主键为 挂载名+相对路径。
-export const scanAlbumMeta = sqliteTable(
-  'scan_album_meta',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    // 扫描库挂载名（如 scan-{libId}）
-    mount: text('mount').notNull(),
-    // 目录相对路径：'' 表示库根（主相簿）；子目录为 'sub/dir'
-    relPath: text('rel_path').notNull().default(''),
-    // 自定义标题（覆盖默认由文件夹名推导的标题）；null=使用默认
-    title: text('title'),
-    description: text('description'),
-    coverPhotoId: text('cover_photo_id').references(() => photos.id, {
-      onDelete: 'set null',
-    }),
-    // 是否在前台相册列表隐藏（默认false）
-    isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
-    // 相簿访问密码哈希（单向存储）；null=继承父级；根相簿无值时回退到扫描库旧密码
-    passwordHash: text('password_hash'),
-    // 相簿访问密码明文（仅管理端编辑回显；访问验证仍以 password_hash 为准）
-    password: text('password'),
-    // 密码免密范围：null=所有访问者都需密码；'logged_in'=任意登录用户免密；'selected'=仅 password_exempt_users 内用户免密
-    passwordExemptMode: text('password_exempt_mode', {
-      enum: ['logged_in', 'selected'],
-    }),
-    // 免密用户邮箱列表（仅 selected 模式生效；JSON 数组字符串）
-    passwordExemptUsers: text('password_exempt_users'),
-    // 自定义公开URL别名（全局唯一）；设置后公开链接使用 /albums/s/{slug}
-    slug: text('slug'),
-    // 相簿自身的公开 URL 标识（随机生成、全局唯一）：设置后该相簿（含子目录）使用
-    // /albums/scan/{urlKey} 访问。与扫描库级 urlKey 分离，可被管理员手动重置；
-    // 不参与库级 backfill（那些仅针对 scan_libraries.url_key）。
-    urlKey: text('url_key'),
-    // 相簿背景音乐（音乐盒）；null=不播放 BGM
-    bgmMusicId: integer('bgm_music_id').references(() => music.id, {
-      onDelete: 'set null',
-    }),
-    // 照片展示布局：瀑布流 / 统一网格 / 沉浸式看图 / 时间线；null 视为默认（瀑布流）
-    layout: text('layout', { enum: ['waterfall', 'grid', 'immersive', 'timeline'] })
-      .default('waterfall')
-      .notNull(),
-    randomWheelAnimation: integer('random_wheel_animation', { mode: 'boolean' })
-      .default(false)
-      .notNull(),
-    // 「随机一张照片」动画模式：default=直接随机打开；wheel=3D轮盘动画；compat=轻量兼容动画
-    randomAnimation: text('random_animation', {
-      enum: ['default', 'wheel', 'compat'],
-    })
-      .default('default')
-      .notNull(),
-    // 「随机照片轮经典语录」扩展功能：是否开启（默认开启）
-    randomQuotesEnabled: integer('random_quotes_enabled', { mode: 'boolean' })
-      .default(true)
-      .notNull(),
-    // 自定义语录（每行一条）；空=使用内置语录
-    randomQuotes: text('random_quotes'),
-    // 「随机照片轮经典语录」标签来源：ancient=古诗语录 / modern=现代语录；null=未选（使用自定义语录）
-    randomQuotesTag: text('random_quotes_tag', {
-      enum: ['ancient', 'modern'],
-    }),
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .notNull()
-      .default(sql`(unixepoch())`),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .notNull()
-      .default(sql`(unixepoch())`),
-  },
-  (table) => ({
-    mountRelPathUnique: uniqueIndex('scan_album_meta_mount_relpath_unique').on(
-      table.mount,
-      table.relPath,
-    ),
-    slugUnique: uniqueIndex('scan_album_meta_slug_unique').on(table.slug),
-    albumUrlKeyUnique: uniqueIndex('scan_album_meta_url_key_unique').on(
-      table.urlKey,
-    ),
-  }),
-)
 
 export const settings = sqliteTable(
   'settings',
@@ -452,7 +337,7 @@ export const settings = sqliteTable(
   (t) => [uniqueIndex('idx_namespace_key').on(t.namespace, t.key)],
 )
 
-export const settings_storage_providers = sqliteTable(
+export const settingsStorageProviders = sqliteTable(
   'settings_storage_providers',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
@@ -471,53 +356,27 @@ export const settings_storage_providers = sqliteTable(
 )
 
 /**
- * 本地扫描库（独立存储方式）：把明文照片/视频放入某一文件夹即被自动扫描、生成缩略图。
- * 与 settings_storage_providers（上传加密 blob 存储后端）完全分离。
+ * 扫描目录本身。展示方式、密码和子相簿插页在该库根集合上，不在本表。
  */
-export const scanLibraries = sqliteTable(
-  'scan_libraries',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    name: text('name').notNull(),
-    /**
-     * 公开相簿 URL 标识：sha256 短前缀（形如 a1b2c3d4，类似 git 提交 hash）；
-     * 自动生成并做去重检测。为空时回退到数字 id。自定义 slug（scan_album_meta.slug）
-     * 优先级更高，相簿公开链接使用 /albums/s/{slug}。
-     */
-    urlKey: text('url_key'),
-    /** 扫描的根目录绝对路径（只读源，原图始终引用该目录） */
-    rootPath: text('root_path').notNull(),
+export const libraries = sqliteTable('libraries', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  urlKey: text('url_key').unique(),
+  rootPath: text('root_path').notNull().unique(),
   provider: text('provider', { enum: ['local'] }).default('local').notNull(),
-  enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
-  /**
-   * 展示方式（三态）：
-   * - gallery：照片画廊（默认，首页全局画廊显示，不进相册页）
-   * - album：相簿照片（相册页显示，首页全局画廊隐藏）
-   * - both：共存（相册页显示 + 首页全局画廊也显示）
-   * 注：旧布尔列 as_album 由数据迁移 v3 回填后不再读写，物理列保留以兼容旧镜像。
-   */
   displayMode: text('display_mode', { enum: ['gallery', 'album', 'both'] })
     .default('gallery')
     .notNull(),
-  /** 进入父相簿时，是否把子相簿以照片格插进本层照片流 */
   childInParent: integer('child_in_parent', { mode: 'boolean' })
     .default(true)
     .notNull(),
-  /** 子相簿格子相对本层照片的位置：开头 / 末尾 */
   childPosition: text('child_position', { enum: ['start', 'end'] })
     .default('start')
     .notNull(),
-  /** 相簿访问密码（哈希）；为空表示不设密码 */
-  passwordHash: text('password_hash'),
-  /** 自动监控轮询间隔（毫秒），默认 60s */
+  enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
   watchIntervalMs: integer('watch_interval_ms').default(60000).notNull(),
-  /** 最近一次扫描时间与结果摘要（供状态展示） */
   lastScanAt: integer('last_scan_at', { mode: 'timestamp' }),
   lastScanResult: text('last_scan_result'),
-  /**
-   * 最近一次被禁用的时间；为空表示当前为启用状态或从未被禁用。
-   * 用于「禁用超 7 天未恢复则自动清理其缩略图」的恢复缓冲判断。
-   */
   disabledAt: integer('disabled_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -525,8 +384,144 @@ export const scanLibraries = sqliteTable(
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
+})
+
+/** 手工相簿、扫描文件夹、人物相册。谁能看写在 access_grants。 */
+export const collections = sqliteTable(
+  'collections',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    kind: text('kind', { enum: ['manual', 'folder', 'person'] }).notNull(),
+    parentId: integer('parent_id').references(
+      (): AnySQLiteColumn => collections.id,
+      { onDelete: 'set null' },
+    ),
+    libraryId: integer('library_id').references(() => libraries.id, {
+      onDelete: 'cascade',
+    }),
+    relPath: text('rel_path').notNull().default(''),
+    title: text('title'),
+    description: text('description'),
+    coverPhotoId: text('cover_photo_id').references(() => photos.id, {
+      onDelete: 'set null',
+    }),
+    bgmMusicId: integer('bgm_music_id').references(() => music.id, {
+      onDelete: 'set null',
+    }),
+    uid: text('uid'),
+    slug: text('slug'),
+    urlKey: text('url_key'),
+    layout: text('layout', {
+      enum: ['waterfall', 'grid', 'immersive', 'timeline'],
+    })
+      .notNull()
+      .default('waterfall'),
+    showOnGallery: integer('show_on_gallery', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    showOnAlbums: integer('show_on_albums', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    childInParent: integer('child_in_parent', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    childPosition: text('child_position', { enum: ['start', 'end'] })
+      .notNull()
+      .default('start'),
+    randomAnimation: text('random_animation', {
+      enum: ['default', 'wheel', 'compat'],
+    })
+      .notNull()
+      .default('default'),
+    randomQuotesEnabled: integer('random_quotes_enabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    randomQuotes: text('random_quotes'),
+    randomQuotesTag: text('random_quotes_tag', { enum: ['ancient', 'modern'] }),
+    passwordHash: text('password_hash'),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
   },
-  (table) => [uniqueIndex('scan_libraries_url_key_unique').on(table.urlKey)],
+  (table) => [
+    uniqueIndex('collections_uid_unique').on(table.uid),
+    uniqueIndex('collections_slug_unique').on(table.slug),
+    uniqueIndex('collections_url_key_unique').on(table.urlKey),
+    uniqueIndex('collections_folder_path_unique')
+      .on(table.libraryId, table.relPath)
+      .where(sql`${table.kind} = 'folder'`),
+    index('idx_collections_library_parent').on(table.libraryId, table.parentId),
+    check(
+      'collections_kind_scope_check',
+      sql`(${table.kind} = 'folder' AND ${table.libraryId} IS NOT NULL) OR (${table.kind} IN ('manual', 'person') AND ${table.libraryId} IS NULL)`,
+    ),
+    check(
+      'collections_manual_identity_check',
+      sql`${table.kind} != 'manual' OR (${table.title} IS NOT NULL AND ${table.uid} IS NOT NULL)`,
+    ),
+  ],
+)
+
+/** 手工相簿成员。文件夹与人物相册不使用本表。 */
+export const collectionPhotos = sqliteTable(
+  'collection_photos',
+  {
+    collectionId: integer('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    photoId: text('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    position: real('position').notNull().default(1000000),
+    addedAt: integer('added_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.collectionId, table.photoId] }),
+    index('idx_collection_photos_photo').on(table.photoId),
+  ],
+)
+
+/**
+ * 谁能看一个集合。audience=user 且 user_id 为空表示全体登录用户免密，不参与档位。
+ */
+export const accessGrants = sqliteTable(
+  'access_grants',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    collectionId: integer('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    audience: text('audience', {
+      enum: ['public', 'login', 'admin', 'user'],
+    }).notNull(),
+    userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('access_grants_principal_unique')
+      .on(table.collectionId, table.audience, table.userId)
+      .where(sql`${table.userId} IS NOT NULL`),
+    uniqueIndex('access_grants_scope_unique')
+      .on(table.collectionId, table.audience)
+      .where(sql`${table.userId} IS NULL`),
+    index('idx_access_grants_collection').on(table.collectionId),
+    index('idx_access_grants_user').on(table.userId),
+    check(
+      'access_grants_user_scope_check',
+      sql`${table.audience} = 'user' OR ${table.userId} IS NULL`,
+    ),
+    check(
+      'access_grants_audience_check',
+      sql`${table.audience} IN ('public', 'login', 'admin', 'user')`,
+    ),
+  ],
 )
 
 // —— ML / AI：内容搜索、人脸、人物、OCR ——
@@ -545,6 +540,7 @@ export const photoEmbeddings = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
+  (table) => [index('idx_photo_embeddings_model').on(table.model)],
 )
 
 /** 人物（一期单租户扁平模型；owner_id 预留给以后的多用户） */
@@ -555,12 +551,12 @@ export const people = sqliteTable(
     name: text('name'),
     /** Reserved. Null while Chronoval is single-tenant. */
     ownerId: text('owner_id'),
-    /** 人物相册可见范围：public 所有人 / login 登录用户 / admin 仅管理员 */
-    visibility: text('visibility', { enum: ['public', 'login', 'admin'] })
-      .default('public')
-      .notNull(),
-    /** 非 public 时为 true，供仍读取该列的旧逻辑识别“未完全公开” */
-    isHidden: integer('is_hidden', { mode: 'boolean' }).default(false).notNull(),
+    /** 对应的 kind=person 集合。授权写在该集合上。 */
+    collectionId: integer('collection_id')
+      .unique()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    /** ml=聚类生成；manual=管理员手建，清理任务不得删除。 */
+    origin: text('origin', { enum: ['ml', 'manual'] }).notNull().default('ml'),
     thumbnailFaceId: text('thumbnail_face_id'),
     faceCount: integer('face_count').default(0).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp' })
@@ -571,26 +567,6 @@ export const people = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (table) => [index('idx_people_name').on(table.name)],
-)
-
-/** 手动加入人物相册的照片（人脸检测漏掉时由管理员补上） */
-export const personPhotos = sqliteTable(
-  'person_photos',
-  {
-    personId: text('person_id')
-      .notNull()
-      .references(() => people.id, { onDelete: 'cascade' }),
-    photoId: text('photo_id')
-      .notNull()
-      .references(() => photos.id, { onDelete: 'cascade' }),
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .notNull()
-      .default(sql`(unixepoch())`),
-  },
-  (table) => [
-    primaryKey({ columns: [table.personId, table.photoId] }),
-    index('idx_person_photos_photo').on(table.photoId),
-  ],
 )
 
 /** 检测到的人脸框 */
@@ -615,6 +591,8 @@ export const assetFaces = sqliteTable(
     source: text('source', { enum: ['ml', 'manual'] })
       .default('ml')
       .notNull(),
+    /** 1=固定归此人物，全量重聚类不清空。手建锚点使用。 */
+    pinned: integer('pinned', { mode: 'boolean' }).default(false).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -650,20 +628,6 @@ export const photoOcr = sqliteTable('photo_ocr', {
 })
 
 /**
- * Face-detection sentinel (incl. 0-face results).
- * Without this, "queue missing" cannot tell "scanned, no faces" from "never scanned".
- */
-export const photoFaceScans = sqliteTable('photo_face_scans', {
-  photoId: text('photo_id')
-    .primaryKey()
-    .references(() => photos.id, { onDelete: 'cascade' }),
-  faceCount: integer('face_count').default(0).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-})
-
-/**
  * 管理员维护的搜图候选标签。模型只能从这里面打标签。
  * nameKey / aliasKey 用于大小写不敏感的唯一约束。
  */
@@ -674,6 +638,11 @@ export const mlTags = sqliteTable(
     name: text('name').notNull(),
     nameKey: text('name_key').notNull(),
     prompt: text('prompt').notNull(),
+    /** 标签 prompt 的向量缓存，与标签同生命周期。 */
+    vectorModel: text('vector_model'),
+    vectorPrompt: text('vector_prompt'),
+    embedding: blob('embedding', { mode: 'buffer' }),
+    dim: integer('dim'),
     enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp' })
       .notNull()
@@ -705,20 +674,6 @@ export const mlTagAliases = sqliteTable(
   ],
 )
 
-/** 候选标签 prompt 的文本向量缓存。prompt 或模型变了就重新编码。 */
-export const mlTagVectors = sqliteTable('ml_tag_vectors', {
-  tagId: integer('tag_id')
-    .primaryKey()
-    .references(() => mlTags.id, { onDelete: 'cascade' }),
-  model: text('model').notNull(),
-  prompt: text('prompt').notNull(),
-  embedding: blob('embedding', { mode: 'buffer' }).notNull(),
-  dim: integer('dim').notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-})
-
 /**
  * 照片和候选标签的多对多关系。人工记录锁住该行，重跑识别不会覆盖。
  * decision=reject 表示管理员明确排除，自动打标会跳过。
@@ -745,11 +700,81 @@ export const photoMlTags = sqliteTable(
   ],
 )
 
-/** ML 任务水位（夜间聚类等） */
-export const mlState = sqliteTable('ml_state', {
+/**
+ * 本地常见地点库：选点搜索优先查此表，未命中再走外部地理编码。
+ * aliases 用英文分号 `;` 分隔；坐标为 WGS84。
+ */
+export const geocodePlaces = sqliteTable(
+  'geocode_places',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** 展示用主名称（中文），如「郑州市」 */
+    name: text('name').notNull(),
+    /** 英文名，可选 */
+    nameEn: text('name_en'),
+    /** 别名，英文分号分隔，如「郑州;Zhengzhou」 */
+    aliases: text('aliases'),
+    /** 全拼（小写、空格分隔），如「zheng zhou shi」 */
+    pinyin: text('pinyin'),
+    /** 简拼（小写无空格），如「zzs」 */
+    pinyinAbbr: text('pinyin_abbr'),
+    /** 纬度 WGS84，南纬为负 */
+    latitude: real('latitude').notNull(),
+    /** 经度 WGS84，西经为负 */
+    longitude: real('longitude').notNull(),
+    /** 国家，建议填「中国」 */
+    country: text('country'),
+    /** 省 / 直辖市 / 自治区 */
+    province: text('province'),
+    /** 地级市或直辖市城区名 */
+    city: text('city'),
+    /** 区 / 县 / 县级市 */
+    district: text('district'),
+    /**
+     * 地点类型：
+     * province | city | district | town | poi | landmark | other
+     */
+    placeType: text('place_type'),
+    /** 行政区划代码（国标或自定义），可选 */
+    adminCode: text('admin_code'),
+    /** 排序权重，越大越靠前；省会/热门景点可调高 */
+    priority: integer('priority').default(0).notNull(),
+    /** 是否参与搜索：1 启用，0 禁用 */
+    enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
+    /** 数据来源备注，如「手工」「高德导出」 */
+    source: text('source'),
+    /** 自由备注 */
+    notes: text('notes'),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index('idx_geocode_places_enabled_priority').on(
+      table.enabled,
+      table.priority,
+    ),
+    index('idx_geocode_places_name').on(table.name),
+    index('idx_geocode_places_city').on(table.city),
+    index('idx_geocode_places_province').on(table.province),
+    index('idx_geocode_places_district').on(table.district),
+    index('idx_geocode_places_place_type').on(table.placeType),
+    check(
+      'geocode_places_latitude_check',
+      sql`${table.latitude} >= -90 AND ${table.latitude} <= 90`,
+    ),
+    check(
+      'geocode_places_longitude_check',
+      sql`${table.longitude} >= -180 AND ${table.longitude} <= 180`,
+    ),
+  ],
+)
+
+/** Small idempotent initialization markers, including the geocode seed version. */
+export const appMeta = sqliteTable('app_meta', {
   key: text('key').primaryKey(),
-  value: text('value'),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
+  value: text('value').notNull(),
 })

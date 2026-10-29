@@ -1,3 +1,4 @@
+import { beginLoginChallenge } from '~~/server/utils/login-challenge'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
 
 const _accessDeniedError = createError({
@@ -21,28 +22,30 @@ async function onGithubOAuthSuccess(event: any, { user }: { user: any }) {
   )
 
   if (!userFromEmail) {
-    // create a new user without admin permission
-    db.insert(tables.users)
-      .values({
-        username: user.name || '',
-        email: user.email || '',
-        avatar: user.avatar_url || null,
-        createdAt: new Date(),
-      })
-      .returning()
-      .get()
-    // then reject login
+    // OAuth 只允许绑定到管理员预先创建的账号。未知邮箱直接拒绝，避免公开
+    // 登录入口被用来向用户表持续写入垃圾账号或探测注册行为。
+    logger.chrono.warn('Rejected GitHub OAuth for unknown email', user.email)
     throw _accessDeniedError
-  } else if (userFromEmail.isAdmin === 0) {
+  } else if (userFromEmail.role !== 'admin') {
     throw _accessDeniedError
   } else {
+    if (userFromEmail.totpEnabled && userFromEmail.totpSecret) {
+      await beginLoginChallenge(event, userFromEmail.id)
+      recordLoginAttempt(event, {
+        userId: userFromEmail.id,
+        email: userFromEmail.email,
+        method: 'github',
+        status: 'challenge',
+      })
+      return sendRedirect(event, '/login?step=verify')
+    }
     await setUserSession(
       event,
-      { user: userFromEmail },
+      { user: toSessionUser(userFromEmail) },
       {
         cookie: {
           // secure: !useRuntimeConfig().allowInsecureCookie,
-          secure: false,
+          secure: useSecureCookie(event),
         },
       },
     )
@@ -54,7 +57,7 @@ function onGithubOAuthError(_event: any, error: any) {
   logger.chrono.warn('GitHub OAuth login failed', error)
   throw createError({
     statusCode: 401,
-    statusMessage: `Authentication failed: ${error.message || 'Unknown error'}`,
+    statusMessage: 'Authentication failed',
   })
 }
 

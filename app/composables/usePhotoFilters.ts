@@ -210,6 +210,7 @@ export function usePhotoFilters() {
           photo.title || '',
           photo.description || '',
           photo.storageKey || '',
+          photo.originalUrl || '',
           photo.locationName || '',
         ]
           .join(' ')

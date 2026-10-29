@@ -287,6 +287,10 @@ export class SettingsManager {
     if (namespace === 'map' && key === 'protomaps.file') {
       value = mapPmtilesFilename(value == null ? undefined : String(value))
     }
+    if (namespace === 'map' && key === 'protomaps.timelineFile') {
+      const timelineFile = value == null ? '' : String(value).trim()
+      value = timelineFile ? mapPmtilesFilename(timelineFile) : ''
+    }
 
     if (!this.validateEnum(value, existing.enum)) {
       this._logger.warn(
@@ -437,7 +441,7 @@ export class SettingsManager {
       const db = useDB()
       const providers = db
         .select()
-        .from(tables.settings_storage_providers)
+        .from(tables.settingsStorageProviders)
         .all()
       return providers
     },
@@ -446,8 +450,8 @@ export class SettingsManager {
       const db = useDB()
       const provider = db
         .select()
-        .from(tables.settings_storage_providers)
-        .where(eq(tables.settings_storage_providers.id, id))
+        .from(tables.settingsStorageProviders)
+        .where(eq(tables.settingsStorageProviders.id, id))
         .get()
       return provider || null
     },
@@ -468,7 +472,7 @@ export class SettingsManager {
     ): Promise<number> {
       const db = useDB()
       const result = db
-        .insert(tables.settings_storage_providers)
+        .insert(tables.settingsStorageProviders)
         .values({
           name: providerConfig.name,
           provider: providerConfig.provider,
@@ -496,18 +500,18 @@ export class SettingsManager {
       providerConfig: Partial<NewSettingStorageProvider['config']>,
     ): Promise<void> {
       const db = useDB()
-      db.update(tables.settings_storage_providers)
+      db.update(tables.settingsStorageProviders)
         .set({
           ...providerConfig,
         })
-        .where(eq(tables.settings_storage_providers.id, id))
+        .where(eq(tables.settingsStorageProviders.id, id))
         .run()
     },
 
     async deleteProvider(id: number): Promise<void> {
       const db = useDB()
-      db.delete(tables.settings_storage_providers)
-        .where(eq(tables.settings_storage_providers.id, id))
+      db.delete(tables.settingsStorageProviders)
+        .where(eq(tables.settingsStorageProviders.id, id))
         .run()
     },
   }

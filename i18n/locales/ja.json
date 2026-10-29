@@ -1385,7 +1385,14 @@
           "description": "MapLibre 地図スタイル URL"
         }
       },
-      "sectionDescription": "地図の表示と地理コーディングサービスを設定します。地図プロバイダーは地図のスタイルとアクセス認証情報に影響します。"
+      "sectionDescription": "地図の表示と地理コーディングサービスを設定します。地図プロバイダーは地図のスタイルとアクセス認証情報に影響します。",
+      "protomaps": {
+        "timelineFile": {
+          "label": "タイムライン PMTiles ファイル",
+          "description": "低速回線向けの軽量なタイムライン地図アーカイブ",
+          "help": "timeline-lite.pmtiles などの低ズーム地図を /app/map に配置します。空欄の場合はメイン地図を使用します。"
+        }
+      }
     },
     "location": {
       "language": {
@@ -1756,7 +1763,21 @@
     "timeline": {
       "toggle": "タイムラインの有効/無効",
       "playPause": "タイムライン再生/一時停止",
-      "title": "タイムライン"
+      "follow": "場所を追従",
+      "title": "タイムライン",
+      "preloading": "地図を読み込み中…",
+      "speed": "再生速度",
+      "resumeFollow": "追従を再開",
+      "pausedByInteraction": "地図操作により一時停止しました",
+      "loadingPhotos": "地図写真を読み込み中…",
+      "preparingPlace": "次の場所を準備中…",
+      "markPhotos": "{count} 枚",
+      "networkMode": {
+        "help": "ネットワークモード：自動は回線を検出し、データ節約は移動経路のタイルを省き、滑らかは完全なカメラ移動を維持します",
+        "auto": "自動",
+        "save-data": "データ節約",
+        "smooth": "滑らか"
+      }
     }
   },
   "upload": {

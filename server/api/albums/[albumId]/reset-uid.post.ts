@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { generateAlbumUid } from '~~/server/utils/albumUid'
+import { and } from 'drizzle-orm'
+import { generateAvailableAlbumUid } from '~~/server/utils/albumUid'
 
 /**
  * 手动重置相簿公开 UID（仅普通相簿）。
@@ -22,31 +23,31 @@ export default eventHandler(async (event) => {
 
   const album = await db
     .select()
-    .from(tables.albums)
-    .where(eq(tables.albums.id, albumId))
+    .from(tables.collections)
+    .where(
+      and(
+        eq(tables.collections.id, albumId),
+        eq(tables.collections.kind, 'manual'),
+      ),
+    )
     .get()
 
   if (!album) {
     throw createError({ statusCode: 404, statusMessage: 'Album not found' })
   }
 
-  // 在唯一索引兜底下生成一个不冲突的新 UID
-  let uid = ''
-  do {
-    uid = generateAlbumUid()
-    const exists = db
-      .select({ id: tables.albums.id })
-      .from(tables.albums)
-      .where(eq(tables.albums.uid, uid))
-      .get()
-    if (!exists) break
-  } while (true)
+  const uid = generateAvailableAlbumUid(db)
 
   const updatedAlbum = db.transaction((tx) =>
     tx
-      .update(tables.albums)
+      .update(tables.collections)
       .set({ uid, updatedAt: new Date() })
-      .where(eq(tables.albums.id, albumId))
+      .where(
+        and(
+          eq(tables.collections.id, albumId),
+          eq(tables.collections.kind, 'manual'),
+        ),
+      )
       .returning()
       .get(),
   )
@@ -55,6 +56,6 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Album not found' })
   }
 
-  const { passwordHash: _ph, password: _pwd, ...safeAlbum } = updatedAlbum
+  const { passwordHash: _ph, ...safeAlbum } = updatedAlbum
   return { ...safeAlbum, uid }
 })

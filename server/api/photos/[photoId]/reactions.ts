@@ -59,6 +59,8 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  await requireVisiblePhoto(event, photoId)
+
   const db = useDB()
   const method = event.method
 
@@ -183,6 +185,17 @@ export default defineEventHandler(async (event) => {
         fingerprint,
         ipAddress,
         userAgent,
+      }).onConflictDoUpdate({
+        target: [
+          tables.photoReactions.photoId,
+          tables.photoReactions.fingerprint,
+        ],
+        set: {
+          reactionType,
+          ipAddress,
+          userAgent,
+          updatedAt: new Date(),
+        },
       })
 
       return {

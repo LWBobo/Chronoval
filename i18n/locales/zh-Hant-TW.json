@@ -1437,7 +1437,14 @@
           "description": "MapLibre 地圖樣式 URL"
         }
       },
-      "sectionDescription": "設定地圖展示與地理編碼服務。地圖服務商會影響地圖樣式與存取憑證。"
+      "sectionDescription": "設定地圖展示與地理編碼服務。地圖服務商會影響地圖樣式與存取憑證。",
+      "protomaps": {
+        "timelineFile": {
+          "label": "時間線 PMTiles 檔案",
+          "description": "小頻寬下供時間線地圖使用的可選輕量地圖檔案",
+          "help": "將 timeline-lite.pmtiles 等低縮放層級地圖放入 /app/map。留空時繼續使用主要地圖檔案。"
+        }
+      }
     },
     "location": {
       "language": {
@@ -1808,7 +1815,21 @@
     "timeline": {
       "toggle": "啟用/關閉時間回溯",
       "playPause": "播放/暫停時間回溯",
-      "title": "時間回溯"
+      "follow": "跟隨地點",
+      "title": "時間回溯",
+      "preloading": "地圖載入中…",
+      "speed": "播放速度",
+      "resumeFollow": "繼續跟隨",
+      "pausedByInteraction": "已因手動操作暫停",
+      "loadingPhotos": "正在載入地圖照片…",
+      "preparingPlace": "正在準備下一個地點…",
+      "markPhotos": "{count} 張",
+      "networkMode": {
+        "help": "網路模式：自動會偵測連線；省流會略過沿途圖磚；流暢保留完整飛行動畫",
+        "auto": "自動",
+        "save-data": "省流",
+        "smooth": "流暢"
+      }
     }
   },
   "upload": {

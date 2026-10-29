@@ -19,7 +19,7 @@ const provider = computed(() => mapConfig.value.provider || 'maplibre')
 </script>
 
 <template>
-  <MapboxDefaultMarker
+  <LazyMapboxDefaultMarker
     v-if="provider === 'mapbox'"
     :marker-id
     :lnglat
@@ -27,7 +27,7 @@ const provider = computed(() => mapConfig.value.provider || 'maplibre')
     <template #marker>
       <slot name="marker" />
     </template>
-  </MapboxDefaultMarker>
+  </LazyMapboxDefaultMarker>
   <MglMarker
     v-else
     :coordinates="lnglat"

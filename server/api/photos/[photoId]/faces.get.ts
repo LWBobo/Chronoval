@@ -8,8 +8,12 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Missing photo id' })
   }
 
+  await requireVisiblePhoto(event, photoId)
+
   const actor = await getActor(event)
-  const faces = getFacesForPhoto(photoId)
+  const faces = getFacesForPhoto(photoId).filter(
+    (face) => face.imageWidth > 0 && face.imageHeight > 0,
+  )
   const db = useDB()
 
   const result = faces.map((face) => {
@@ -19,8 +23,7 @@ export default eventHandler(async (event) => {
       const person = db
         .select({
           name: tables.people.name,
-          visibility: tables.people.visibility,
-          isHidden: tables.people.isHidden,
+          collectionId: tables.people.collectionId,
         })
         .from(tables.people)
         .where(eq(tables.people.id, face.personId))

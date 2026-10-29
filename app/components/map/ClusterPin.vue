@@ -22,6 +22,14 @@ const emit = defineEmits<{
 }>()
 
 const dayjs = useDayjs()
+
+const formatDateTaken = (value?: string) => {
+  if (!value) return ''
+
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : value
+}
+
 const previewOpen = ref(false)
 const previewPhoto = ref<PhotoMarker | null>(null)
 
@@ -55,6 +63,12 @@ const sizeDelta = computed(() => {
   const count = pointCount.value
   return Math.min(64, Math.max(44, 32 + Math.log(count) * 10))
 })
+
+const mapThumbnailSrc = (photo: PhotoMarker, size = 256) => {
+  const base = photo.mapThumbnailUrl
+  if (!base) return photo.thumbnailUrl || ''
+  return `${base}${base.includes('?') ? '&' : '?'}size=${size}`
+}
 </script>
 
 <template>
@@ -85,16 +99,12 @@ const sizeDelta = computed(() => {
           >
             <!-- Background image -->
             <div class="absolute inset-0 overflow-hidden rounded-full">
-              <ThumbImage
-                :src="representativePhoto.thumbnailUrl!"
-                :alt="
-                  representativePhoto.title || $t('map.cluster.altFallback', { id: representativePhoto.id })
-                "
+              <ThumbHash
+                v-if="representativePhoto.thumbnailHash"
                 :thumbhash="representativePhoto.thumbnailHash"
-                :threshold="0.1"
-                root-margin="100px"
-                class="h-full w-full object-cover opacity-50"
+                class="absolute inset-0 size-full scale-110 opacity-70 blur-sm"
               />
+              <div v-else class="absolute inset-0 bg-neutral-300/70 dark:bg-neutral-700/70" />
               <div
                 class="absolute inset-0 bg-linear-to-br from-blue/40 to-purple/60 dark:from-blue/60 dark:to-purple/80"
               />
@@ -187,11 +197,11 @@ const sizeDelta = computed(() => {
                           @click.stop="openPreview(photo)"
                         >
                           <ThumbImage
-                            :src="photo.thumbnailUrl!"
+                            :src="mapThumbnailSrc(photo)"
+                            :fallback-src="photo.thumbnailUrl"
                             :alt="photo.title || $t('map.photo.altFallback', { id: photo.id })"
                             :thumbhash="photo.thumbnailHash"
-                            :threshold="0.1"
-                            root-margin="200px"
+                            :lazy="false"
                             class="pointer-events-none aspect-square w-full object-cover"
                           />
                         </button>
@@ -230,6 +240,18 @@ const sizeDelta = computed(() => {
                       >
                         {{ photo.title || $t('map.photo.altFallback', { id: photo.id }) }}
                       </NuxtLink>
+                      <div
+                        v-if="photo.dateTaken"
+                        class="flex items-center gap-0.5 px-0.5 pt-0.5 text-[9px] leading-tight text-neutral-500 dark:text-neutral-400"
+                      >
+                        <Icon
+                          name="tabler:calendar-time"
+                          class="size-2.5 shrink-0"
+                        />
+                        <span class="truncate">
+                          {{ formatDateTaken(photo.dateTaken) }}
+                        </span>
+                      </div>
                     </motion.div>
                   </div>
                   <MapPhotoLightbox

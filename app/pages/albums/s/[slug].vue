@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+const requestFetch = useRequestFetch()
 import ScanAlbumView from '~/components/albums/ScanAlbumView.vue'
 
 const route = useRoute()
@@ -8,20 +9,14 @@ type ResolveResult =
   | { kind: 'scan'; libId: number; mount: string; relPath: string }
 
 const rawSlug = computed(() => route.params.slug as string)
-const slug = computed<string[]>(() =>
-  rawSlug.value ? [decodeURIComponent(rawSlug.value)] : [],
-)
+const slug = computed<string[]>(() => (rawSlug.value ? [rawSlug.value] : []))
 const slugKey = computed(() => slug.value[0] || '')
 
 // 通过自定义 URL 别名解析归属：普通相簿走 uid 重定向，扫描相簿直接渲染
-const {
-  data,
-  status,
-  error,
-} = await useAsyncData<ResolveResult>(
+const { data, status, error } = await useAsyncData<ResolveResult>(
   `album-slug-${slugKey.value}`,
   () =>
-    $fetch<ResolveResult>(
+    requestFetch<ResolveResult>(
       `/api/albums/scan-by-slug/${encodeURIComponent(slugKey.value)}`,
     ),
   { watch: [slugKey] },
@@ -38,11 +33,17 @@ useHead({
 </script>
 
 <template>
-  <div v-if="status === 'pending'" class="flex min-h-[40vh] items-center justify-center p-8">
+  <div
+    v-if="status === 'pending'"
+    class="flex min-h-[40vh] items-center justify-center p-8"
+  >
     <p class="text-neutral-400">{{ $t('albums.scan.loading') }}</p>
   </div>
 
-  <div v-else-if="error || !data" class="flex min-h-[40vh] items-center justify-center p-8">
+  <div
+    v-else-if="error || !data"
+    class="flex min-h-[40vh] items-center justify-center p-8"
+  >
     <p class="text-neutral-400">{{ $t('albums.scan.notFound') }}</p>
   </div>
 
@@ -55,7 +56,10 @@ useHead({
   />
 
   <!-- 普通相簿：已被上方重定向，此处仅容错占位 -->
-  <div v-else class="flex min-h-[40vh] items-center justify-center p-8">
+  <div
+    v-else
+    class="flex min-h-[40vh] items-center justify-center p-8"
+  >
     <p class="text-neutral-400">{{ $t('albums.scan.loading') }}</p>
   </div>
 </template>

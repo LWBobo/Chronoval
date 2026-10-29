@@ -8,12 +8,7 @@ const route = useRoute()
 const slug = computed(() => (route.params.slug || []) as string[])
 // 第一段即公开标识：数字 id 或 urlKey 字符串
 const libKey = computed(() => slug.value[0] || '')
-const relPath = computed(() =>
-  slug.value
-    .slice(1)
-    .map((s: string) => decodeURIComponent(s))
-    .join('/'),
-)
+const relPath = computed(() => slug.value.slice(1).join('/'))
 </script>
 
 <template>

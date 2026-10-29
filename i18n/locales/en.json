@@ -1042,7 +1042,12 @@
           "tags": "Tags",
           "tagsHint": "Press Enter to add each tag.",
           "location": "Location",
-          "locationHint": "Click on the map to set the shooting location.",
+          "locationHint": "Search for a place name, or click the map to set the location.",
+          "locationSearch": "Search places, e.g. Beijing, Yosemite",
+          "locationSearchEmpty": "No matching places found",
+          "locationSearchFailed": "Place search failed. Please try again.",
+          "expandMap": "Expand map",
+          "confirmLocation": "Done",
           "clearLocation": "Erase location info",
           "coordinates": "Coordinates",
           "noLocation": "No location selected",
@@ -1614,11 +1619,15 @@
       "selectAll": "Select listed",
       "clearSelection": "Clear selection",
       "addPhotos": "Add photos",
+      "createName": "Person name",
+      "createButton": "New person",
+      "createFailed": "Could not create the person",
       "addTitle": "Add to “{name}”",
       "addHint": "Search for photos the face cluster missed. Photos already in this album stay as they are.",
       "addSearch": "Search by title, path, or id",
       "addEmpty": "No photos found",
       "addAlready": "Already in album",
+      "addLoadMore": "Load more",
       "addConfirm": "Add selected ({count})",
       "added": "Added {count} photos",
       "addFailed": "Could not add photos"
@@ -1903,6 +1912,11 @@
           "label": "PMTiles file",
           "description": "Protomaps archive stored in the container directory /app/map",
           "help": "Defaults to /app/map/20261018.pmtiles. Enter the file name only, not a path."
+        },
+        "timelineFile": {
+          "label": "Timeline PMTiles file",
+          "description": "Optional lightweight PMTiles archive for the globe on constrained connections",
+          "help": "Place a low-zoom archive such as timeline-lite.pmtiles in /app/map. Leave empty to keep using the main archive."
         }
       },
       "sectionDescription": "Configure map display and geocoding services. The map provider affects map styles and access credentials."
@@ -2583,7 +2597,20 @@
       "toggle": "Enable/Disable Timeline",
       "playPause": "Play/Pause Timeline",
       "follow": "Follow places: zoom out, then glide to the next spot and zoom in",
-      "title": "Timeline"
+      "title": "Timeline",
+      "preloading": "Loading map…",
+      "speed": "Playback speed",
+      "resumeFollow": "Resume follow",
+      "pausedByInteraction": "Paused after map interaction",
+      "loadingPhotos": "Loading map photos…",
+      "preparingPlace": "Preparing next place…",
+      "markPhotos": "{count} photos",
+      "networkMode": {
+        "help": "Network mode: Auto detects the connection; Data saver skips route tiles; Smooth keeps full camera animation",
+        "auto": "Auto",
+        "save-data": "Data saver",
+        "smooth": "Smooth"
+      }
     }
   },
   "photo": {

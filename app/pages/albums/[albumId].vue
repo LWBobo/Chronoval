@@ -10,6 +10,8 @@ const dayjs = useDayjs()
 
 // 相簿公开标识：可接受的数字 id（兼容存量链接）或不透明 uid，直接交由 API 解析
 const albumId = computed(() => route.params.albumId as string)
+const { user } = useUserSession()
+const viewerKey = computed(() => `${user.value?.id ?? 'guest'}:${Boolean(user.value?.isAdmin)}`)
 
 const {
   data: album,
@@ -17,7 +19,8 @@ const {
   pending,
   refresh,
 } = await useFetch(() => `/api/albums/${albumId.value}`, {
-  watch: [albumId],
+  key: computed(() => `album-detail-${albumId.value}-${viewerKey.value}`),
+  watch: [albumId, viewerKey],
 })
 
 if (error.value) {

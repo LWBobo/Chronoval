@@ -28,7 +28,13 @@ export default eventHandler(async (event) => {
 
   // 排除软删除。登录可见的相簿仅对已登录用户出现；密码相簿不进瀑布流。
   where.push(isNull(tables.photos.deletedAt))
-  where.push(homepageGalleryVisibilitySql(Boolean(actor.user), viewerFromActor(actor)))
+  where.push(
+    homepageGalleryVisibilitySql(
+      Boolean(actor.user),
+      viewerFromActor(actor),
+      actor.user?.id ?? null,
+    ),
+  )
 
   // 排除纯相簿展示（displayMode=album）或已禁用的扫描库照片。
   // 共存模式（both）仍留在首页画廊。过滤必须进 SQL，避免分页事后过滤缺行。
@@ -56,7 +62,7 @@ export default eventHandler(async (event) => {
   const rows = stmt.all()
   const mlTags = appliedTagNamesForPhotos(rows.map((row) => row.id))
   return rows.map((row) => ({
-    ...row,
+    ...(actor.isAdmin ? row : toPublicPhoto(row)),
     mlTags: mlTags.get(row.id) || [],
   }))
 })

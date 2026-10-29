@@ -59,7 +59,7 @@ const embedCode = computed(() => {
     props.photo.width && props.photo.height
       ? `${props.photo.width}:${props.photo.height}`
       : '4:3'
-  return `<script async src="${base}/share/embed.js" data-afilmory-photo="${props.photo.id}" data-aspect="${aspect}" data-width="100%"><\/script>`
+  return `<script async src="${base}/share/embed.js" data-afilmory-photo="${props.photo.id}" data-aspect="${aspect}" data-width="100%"></scr${'ipt'}>`
 })
 
 const ogPreviewUrl = computed(

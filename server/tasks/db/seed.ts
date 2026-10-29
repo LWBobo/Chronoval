@@ -22,6 +22,7 @@ export default defineTask({
         ),
         createdAt: new Date(),
         isAdmin: 1,
+        role: 'admin',
       })
       log.success('Default admin user created.')
     }

@@ -1,5 +1,17 @@
 import { useDB, tables, eq, or, and } from '~~/server/utils/db'
 
+// 旧数据库可能仍保留这些设置的 is_public=1。公开接口必须在读取时再次拒绝，
+// 不能只依赖初始化配置，否则升级后仍会泄露内部主机、代理和 ML 服务信息。
+const PRIVATE_SETTINGS = new Set([
+  'app:allowedHosts',
+  'system:scanAlbum.adminBypass',
+  'system:auth.github.clientSecret',
+  'location:nominatim.baseUrl',
+  'ml:url',
+  'ml:clip.model',
+  'ml:face.model',
+])
+
 /**
  * 获取所有公开设置
  * 仅返回 isPublic=true 的设置，按命名空间分组
@@ -13,11 +25,14 @@ export default eventHandler(async () => {
     .select()
     .from(tables.settings)
     .where(
-      or(
-        eq(tables.settings.isPublic, true),
-        and(
-          eq(tables.settings.namespace, 'system'),
-          eq(tables.settings.key, 'firstLaunch'),
+      and(
+        eq(tables.settings.isSecret, false),
+        or(
+          eq(tables.settings.isPublic, true),
+          and(
+            eq(tables.settings.namespace, 'system'),
+            eq(tables.settings.key, 'firstLaunch'),
+          ),
         ),
       ),
     )
@@ -27,6 +42,7 @@ export default eventHandler(async () => {
   const grouped: Record<string, Record<string, any>> = {}
 
   for (const setting of allSettings) {
+    if (PRIVATE_SETTINGS.has(`${setting.namespace}:${setting.key}`)) continue
     if (!grouped[setting.namespace]) {
       grouped[setting.namespace] = {}
     }

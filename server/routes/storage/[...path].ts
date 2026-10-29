@@ -1,4 +1,5 @@
-import path from 'node:path'
+import { decodeMediaPath } from '../../utils/media-http'
+import { resolveInsideRoot } from '../../utils/safe-path'
 import { createReadStream, promises as fs } from 'node:fs'
 import { getStorageManager } from '../../plugins/3.storage'
 // lightweight: avoid TS type dep; fallback when not resolvable
@@ -40,25 +41,10 @@ export default defineEventHandler(async (event) => {
 
   const p = getRouterParam(event, 'path') || ''
   const relPathRaw = Array.isArray(p) ? p.join('/') : p
-  // handle CJK characters in URL
-  const decodedPath = decodeURIComponent(relPathRaw)
-  const relPath = decodedPath
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/^\/+/, '')
-
-  // 阻止路径穿越
-  if (relPath.includes('..')) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid path' })
-  }
-
+  const relPath = decodeMediaPath(relPathRaw)
   const basePath = (provider as any).config.basePath as string
-  const absolute = path.resolve(basePath, relPath)
-
-  // 再次确认目标仍在 basePath 内
-  if (!absolute.startsWith(path.resolve(basePath) + path.sep)) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid path' })
-  }
+  const absolute = resolveInsideRoot(basePath, relPath)
+  await requireStorageMediaAccess(event, relPath)
 
   try {
     const stat = await fs.stat(absolute)
@@ -70,7 +56,8 @@ export default defineEventHandler(async (event) => {
     const etag = `W/"${stat.size}-${stat.mtimeMs}"`
     setHeader(event, 'ETag', etag)
     setHeader(event, 'Last-Modified', stat.mtime.toUTCString())
-    setHeader(event, 'Cache-Control', 'public, max-age=31536000, immutable')
+    setHeader(event, 'Cache-Control', 'private, no-cache')
+    setHeader(event, 'Vary', 'Cookie')
 
     // Content-Type
     const contentType = guessContentType(absolute)

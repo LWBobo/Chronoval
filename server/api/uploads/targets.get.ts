@@ -1,7 +1,7 @@
 import * as si from 'systeminformation'
 import { eq } from 'drizzle-orm'
 import { useDB } from '~~/server/utils/db'
-import { scanLibraries } from '~~/server/database/schema'
+import { libraries } from '~~/server/database/schema'
 import { settingsManager } from '../../services/settings/settingsManager'
 
 // 模块级缓存（Nitro 单实例进程内共享）
@@ -98,9 +98,9 @@ export default defineEventHandler(async () => {
   // 2) 已启用的外部扫描库
   try {
     const libs = useDB()
-      .select({ id: scanLibraries.id, rootPath: scanLibraries.rootPath })
-      .from(scanLibraries)
-      .where(eq(scanLibraries.enabled, true))
+      .select({ id: libraries.id, rootPath: libraries.rootPath })
+      .from(libraries)
+      .where(eq(libraries.enabled, true))
       .all()
     for (const lib of libs) {
       if (!lib.rootPath) continue

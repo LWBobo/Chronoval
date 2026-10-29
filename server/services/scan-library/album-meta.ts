@@ -1,12 +1,39 @@
+import { normalizeAlbumPath } from '../../utils/album-path'
 import { and, eq } from 'drizzle-orm'
-import { useDB, tables } from '../../utils/db'
 import { parseExemptUsers } from '../../utils/albumPasswordExempt'
 import type { ScanAlbumNode } from './manager'
+import {
+  readCollectionAccess,
+  replaceCollectionAccess,
+} from '../collections/access-grants'
+import { syncFolderCollection } from '../collections/sync-folder'
 
-export type ScanAlbumMetaRow = typeof tables.scanAlbumMeta.$inferSelect
-
-/** 「随机一张照片」动画模式：default=直接打开；wheel=3D轮盘动画；compat=轻量兼容动画 */
 export type RandomAnimationMode = 'default' | 'wheel' | 'compat'
+
+export interface ScanAlbumMetaRow {
+  id: number
+  mount: string
+  relPath: string
+  title: string | null
+  description: string | null
+  coverPhotoId: string | null
+  isHidden: boolean
+  visibility: 'public' | 'login' | 'admin'
+  passwordHash: string | null
+  passwordExemptMode: 'logged_in' | 'selected' | null
+  passwordExemptUsers: string[]
+  slug: string | null
+  urlKey: string | null
+  bgmMusicId: number | null
+  layout: 'waterfall' | 'grid' | 'immersive' | 'timeline'
+  randomWheelAnimation: boolean
+  randomAnimation: RandomAnimationMode
+  randomQuotesEnabled: boolean
+  randomQuotes: string | null
+  randomQuotesTag: 'ancient' | 'modern' | null
+  createdAt: Date
+  updatedAt: Date
+}
 
 export interface ScanAlbumMetaInput {
   mount: string
@@ -15,277 +42,273 @@ export interface ScanAlbumMetaInput {
   description?: string | null
   coverPhotoId?: string | null
   isHidden?: boolean | null
-  /** 相簿访问密码哈希；null=清除密码，undefined=保持不变 */
   passwordHash?: string | null
-  /** 相簿访问密码明文（仅管理端回显）；null=清除，undefined=保持不变 */
-  password?: string | null
-  /** 密码免密范围：null=清除（所有访问者都需密码），undefined=保持不变 */
   passwordExemptMode?: 'logged_in' | 'selected' | null
-  /** 免密用户邮箱列表（仅 selected 模式生效）；null=清除，undefined=保持不变 */
   passwordExemptUsers?: string[] | null
   slug?: string | null
-  /** 相簿自身公开 URL 标识（随机）；null=清除改用默认，undefined=保持不变 */
   urlKey?: string | null
-  /** 照片展示布局；undefined=保持不变 */
   layout?: 'waterfall' | 'grid' | 'immersive' | 'timeline'
-  /** 「随机一张照片」是否使用 3D 轮盘动画；undefined=保持不变（已废弃，改由 randomAnimation 接管） */
   randomWheelAnimation?: boolean
-  /** 「随机一张照片」动画模式；undefined=保持不变 */
   randomAnimation?: RandomAnimationMode
-  /** 「随机照片轮经典语录」扩展功能是否开启；undefined=保持不变 */
   randomQuotesEnabled?: boolean
-  /** 自定义语录（每行一条）；null=清除使用内置，undefined=保持不变 */
   randomQuotes?: string | null
-  /** 「随机照片轮经典语录」标签来源：ancient=古诗语录 / modern=现代语录；undefined=保持不变 */
   randomQuotesTag?: 'ancient' | 'modern' | null
-  /** 相簿背景音乐（音乐盒）；null=不播放 BGM，undefined=保持不变 */
   bgmMusicId?: number | null
 }
 
-const cleanRelPath = (p: string): string =>
-  p
-    .split('/')
-    .map((s) => decodeURIComponent(s))
-    .filter((s) => s && s !== '.' && s !== '..')
-    .join('/')
+const cleanRelPath = normalizeAlbumPath
 
-/** 按 挂载名+相对路径 读取一条扫描相簿元数据 */
+const libraryIdOfMount = (mount: string): number | null => {
+  const match = /^scan_(\d+)$/.exec(mount)
+  return match ? Number(match[1]) : null
+}
+
+function toMeta(row: typeof tables.collections.$inferSelect): ScanAlbumMetaRow {
+  const access = readCollectionAccess(row.id)
+  return {
+    id: row.id,
+    mount: `scan_${row.libraryId}`,
+    relPath: row.relPath,
+    title: row.title,
+    description: row.description,
+    coverPhotoId: row.coverPhotoId,
+    isHidden: access.isHidden,
+    visibility: access.visibility,
+    passwordHash: row.passwordHash,
+    passwordExemptMode: access.passwordExemptMode,
+    passwordExemptUsers: access.passwordExemptUsers,
+    slug: row.slug,
+    urlKey: row.urlKey,
+    bgmMusicId: row.bgmMusicId,
+    layout: row.layout,
+    randomWheelAnimation: row.randomAnimation === 'wheel',
+    randomAnimation: row.randomAnimation,
+    randomQuotesEnabled: row.randomQuotesEnabled,
+    randomQuotes: row.randomQuotes,
+    randomQuotesTag: row.randomQuotesTag,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+function folderCollection(mount: string, relPath: string) {
+  const libraryId = libraryIdOfMount(mount)
+  if (libraryId == null) return null
+  return (
+    useDB()
+      .select()
+      .from(tables.collections)
+      .where(
+        and(
+          eq(tables.collections.kind, 'folder'),
+          eq(tables.collections.libraryId, libraryId),
+          eq(tables.collections.relPath, cleanRelPath(relPath)),
+        ),
+      )
+      .get() ?? null
+  )
+}
+
 export const getScanAlbumMeta = async (
   mount: string,
   relPath: string,
 ): Promise<ScanAlbumMetaRow | null> => {
-  const row = await useDB()
-    .select()
-    .from(tables.scanAlbumMeta)
-    .where(
-      and(
-        eq(tables.scanAlbumMeta.mount, mount),
-        eq(tables.scanAlbumMeta.relPath, cleanRelPath(relPath)),
-      ),
-    )
-    .get()
-  return row ?? null
+  const row = folderCollection(mount, relPath)
+  return row ? toMeta(row) : null
 }
 
-/**
- * 新增或更新一条扫描相簿元数据。
- * 传入 null 的字段表示“使用默认值”，调用方需注意只传确实要覆盖的字段。
- */
 export const upsertScanAlbumMeta = async (
   input: ScanAlbumMetaInput,
 ): Promise<ScanAlbumMetaRow> => {
-  const db = useDB()
+  const libraryId = libraryIdOfMount(input.mount)
+  if (libraryId == null) {
+    throw createError({ statusCode: 404, statusMessage: 'Library not found' })
+  }
   const relPath = cleanRelPath(input.relPath)
-
-  const existing = await db
-    .select()
-    .from(tables.scanAlbumMeta)
-    .where(
-      and(
-        eq(tables.scanAlbumMeta.mount, input.mount),
-        eq(tables.scanAlbumMeta.relPath, relPath),
-      ),
-    )
-    .get()
-
-  if (existing) {
-    const updateData: Partial<ScanAlbumMetaRow> = { updatedAt: new Date() }
-    if (input.title !== undefined) updateData.title = input.title || null
-    if (input.description !== undefined)
-      updateData.description = input.description || null
-    if (input.coverPhotoId !== undefined)
-      updateData.coverPhotoId = input.coverPhotoId || null
-    if (input.isHidden !== undefined) updateData.isHidden = Boolean(input.isHidden)
-    if (input.passwordHash !== undefined)
-      updateData.passwordHash = input.passwordHash || null
-    if (input.password !== undefined)
-      updateData.password = input.password || null
-    if (input.passwordExemptMode !== undefined)
-      // selected 但未提供用户列表视为无效配置，回落为需密码
-      updateData.passwordExemptMode =
-        input.passwordExemptMode === 'selected' &&
-        (input.passwordExemptUsers?.length ?? 0) === 0
-          ? null
-          : input.passwordExemptMode
-    if (input.passwordExemptUsers !== undefined)
-      updateData.passwordExemptUsers = input.passwordExemptUsers?.length
-        ? JSON.stringify(input.passwordExemptUsers)
-        : null
-    if (input.slug !== undefined) updateData.slug = input.slug || null
-    if (input.urlKey !== undefined)
-      updateData.urlKey = (input.urlKey && input.urlKey.trim()) || null
-    if (input.layout !== undefined) updateData.layout = input.layout
-    if (input.randomWheelAnimation !== undefined)
-      updateData.randomWheelAnimation = Boolean(input.randomWheelAnimation)
-    if (input.randomAnimation !== undefined)
-      updateData.randomAnimation = input.randomAnimation
-    if (input.randomQuotesEnabled !== undefined)
-      updateData.randomQuotesEnabled = Boolean(input.randomQuotesEnabled)
-    if (input.randomQuotes !== undefined)
-      updateData.randomQuotes = input.randomQuotes || null
-    if (input.randomQuotesTag !== undefined)
-      updateData.randomQuotesTag = input.randomQuotesTag || null
-    if (input.bgmMusicId !== undefined)
-      updateData.bgmMusicId = input.bgmMusicId ?? null
-
-    await db
-      .update(tables.scanAlbumMeta)
-      .set(updateData)
-      .where(eq(tables.scanAlbumMeta.id, existing.id))
-      .run()
-
-    return db
-      .select()
-      .from(tables.scanAlbumMeta)
-      .where(eq(tables.scanAlbumMeta.id, existing.id))
-      .get() as ScanAlbumMetaRow
+  const collectionId =
+    folderCollection(input.mount, relPath)?.id ??
+    syncFolderCollection(input.mount, relPath)
+  if (!collectionId) {
+    throw createError({ statusCode: 404, statusMessage: 'Library not found' })
   }
 
-  return db
-    .insert(tables.scanAlbumMeta)
-    .values({
-      mount: input.mount,
-      relPath,
-      title: input.title || null,
-      description: input.description || null,
-      coverPhotoId: input.coverPhotoId || null,
-      isHidden: input.isHidden ? true : false,
-      passwordHash: input.passwordHash ?? null,
-      password: input.password ?? null,
+  const db = useDB()
+  const current = folderCollection(input.mount, relPath)!
+  const patch: Partial<typeof tables.collections.$inferInsert> = {
+    updatedAt: new Date(),
+  }
+  if (input.title !== undefined) patch.title = input.title?.trim() || null
+  if (input.description !== undefined)
+    patch.description = input.description?.trim() || null
+  if (input.coverPhotoId !== undefined)
+    patch.coverPhotoId = input.coverPhotoId || null
+  if (input.passwordHash !== undefined)
+    patch.passwordHash = input.passwordHash || null
+  if (input.slug !== undefined) patch.slug = input.slug?.trim() || null
+  if (input.urlKey !== undefined) patch.urlKey = input.urlKey?.trim() || null
+  if (input.layout !== undefined) patch.layout = input.layout
+  if (input.randomAnimation !== undefined)
+    patch.randomAnimation = input.randomAnimation
+  else if (input.randomWheelAnimation !== undefined)
+    patch.randomAnimation = input.randomWheelAnimation ? 'wheel' : 'default'
+  if (input.randomQuotesEnabled !== undefined)
+    patch.randomQuotesEnabled = input.randomQuotesEnabled
+  if (input.randomQuotes !== undefined)
+    patch.randomQuotes = input.randomQuotes || null
+  if (input.randomQuotesTag !== undefined)
+    patch.randomQuotesTag = input.randomQuotesTag || null
+  if (input.bgmMusicId !== undefined) patch.bgmMusicId = input.bgmMusicId
+
+  db.update(tables.collections)
+    .set(patch)
+    .where(eq(tables.collections.id, collectionId))
+    .run()
+
+  const access = readCollectionAccess(collectionId, db)
+  replaceCollectionAccess(
+    collectionId,
+    {
+      visibility:
+        input.isHidden === undefined
+          ? access.visibility
+          : input.isHidden
+            ? 'login'
+            : 'public',
       passwordExemptMode:
-        input.passwordExemptMode === 'selected' &&
-        (input.passwordExemptUsers?.length ?? 0) === 0
+        input.passwordHash === null
           ? null
-          : input.passwordExemptMode ?? null,
-      passwordExemptUsers: input.passwordExemptUsers?.length
-        ? JSON.stringify(input.passwordExemptUsers)
-        : null,
-      slug: input.slug || null,
-      urlKey: (input.urlKey && input.urlKey.trim()) || null,
-      layout: input.layout ?? 'waterfall',
-      randomWheelAnimation: input.randomWheelAnimation ? true : false,
-      randomAnimation: input.randomAnimation ?? 'default',
-      randomQuotesEnabled: input.randomQuotesEnabled ?? true,
-      randomQuotes: input.randomQuotes || null,
-      randomQuotesTag: input.randomQuotesTag ?? null,
-      bgmMusicId: input.bgmMusicId ?? null,
-    })
-    .returning()
-    .get()
+          : input.passwordExemptMode === undefined
+            ? access.passwordExemptMode
+            : input.passwordExemptMode,
+      passwordExemptUsers:
+        input.passwordHash === null
+          ? null
+          : input.passwordExemptUsers === undefined
+            ? access.passwordExemptUsers
+            : input.passwordExemptUsers,
+    },
+    db,
+  )
+
+  return toMeta(folderCollection(input.mount, relPath) ?? current)
 }
 
-/** 删除一条扫描相簿元数据（还原为默认推导值） */
 export const clearScanAlbumMeta = async (
   mount: string,
   relPath: string,
 ): Promise<boolean> => {
-  const res = await useDB()
-    .delete(tables.scanAlbumMeta)
-    .where(
-      and(
-        eq(tables.scanAlbumMeta.mount, mount),
-        eq(tables.scanAlbumMeta.relPath, cleanRelPath(relPath)),
-      ),
-    )
+  const row = folderCollection(mount, relPath)
+  if (!row) return false
+  const db = useDB()
+  if (row.relPath) {
+    db.delete(tables.collections).where(eq(tables.collections.id, row.id)).run()
+    return true
+  }
+  const library = db
+    .select()
+    .from(tables.libraries)
+    .where(eq(tables.libraries.id, row.libraryId!))
+    .get()
+  db.update(tables.collections)
+    .set({
+      title: library?.name ?? null,
+      description: null,
+      coverPhotoId: null,
+      bgmMusicId: null,
+      slug: null,
+      urlKey: library?.urlKey ?? null,
+      layout: 'waterfall',
+      randomAnimation: 'default',
+      randomQuotesEnabled: true,
+      randomQuotes: null,
+      randomQuotesTag: null,
+      passwordHash: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(tables.collections.id, row.id))
     .run()
-  return res.changes > 0
+  replaceCollectionAccess(row.id, { visibility: 'public' }, db)
+  return true
 }
 
-/** 按自定义URL别名读取相簿元数据（用于 /albums/s/{slug} 解析） */
 export const getScanAlbumMetaBySlug = async (
   slug: string,
 ): Promise<ScanAlbumMetaRow | null> => {
   if (!slug) return null
-  const row = await useDB()
+  const row = useDB()
     .select()
-    .from(tables.scanAlbumMeta)
-    .where(eq(tables.scanAlbumMeta.slug, slug))
+    .from(tables.collections)
+    .where(
+      and(
+        eq(tables.collections.kind, 'folder'),
+        eq(tables.collections.slug, slug),
+      ),
+    )
     .get()
-  return row ?? null
+  return row ? toMeta(row) : null
 }
 
-/** 按相簿自身的公开 URL 标识读取元数据（用于 /albums/scan/{urlKey} 反查） */
 export const getScanAlbumMetaByUrlKey = async (
   urlKey: string,
 ): Promise<ScanAlbumMetaRow | null> => {
   if (!urlKey) return null
-  const row = await useDB()
+  const row = useDB()
     .select()
-    .from(tables.scanAlbumMeta)
-    .where(eq(tables.scanAlbumMeta.urlKey, urlKey))
+    .from(tables.collections)
+    .where(
+      and(
+        eq(tables.collections.kind, 'folder'),
+        eq(tables.collections.urlKey, urlKey),
+      ),
+    )
     .get()
-  return row ?? null
+  return row ? toMeta(row) : null
 }
 
-/**
- * 把元数据覆盖应用到扫描相簿节点上：
- * - 标题 / 介绍 / 隐藏 / 自定义封面
- * - 自定义URL别名（有 slug 时公开链接改为 /albums/s/{slug}）
- * @param node 已构建的默认节点
- * @param photoById 挂载下照片索引（id → 封面字段），由调用方构建一次复用，
- *                  避免每个相簿节点对数万张照片做 O(n) find
- */
 export const applyScanAlbumMeta = async (
   node: ScanAlbumNode,
   photoById: Map<
     string,
-    { id: string; thumbnailUrl: string | null; thumbnailHash: string | null; aspectRatio: number | null }
+    {
+      id: string
+      thumbnailUrl: string | null
+      thumbnailHash: string | null
+      aspectRatio: number | null
+    }
   >,
 ): Promise<ScanAlbumNode> => {
   const meta = await getScanAlbumMeta(node.mount, node.relPath)
-  if (!meta) {
-    return { ...node, external: true }
-  }
+  if (!meta) return { ...node, external: true }
 
   const covers = [...node.covers]
   let coverPhotoId = node.coverPhotoId
-
   if (meta.coverPhotoId) {
     const photo = photoById.get(meta.coverPhotoId)
-    if (photo) {
-      // 自定义封面通常来自本相簿的默认封面（node.covers），
-      // unshift 前先去重，避免同一张封面在 covers 中出现两次。
-      const already = covers.some((c) => c.id === photo.id)
-      if (!already) {
-        covers.unshift({
-          id: photo.id,
-          thumbnailUrl: photo.thumbnailUrl,
-          thumbnailHash: photo.thumbnailHash,
-          aspectRatio: photo.aspectRatio,
-        })
-      }
-      coverPhotoId = photo.id
-    } else {
-      coverPhotoId = meta.coverPhotoId
+    if (photo && !covers.some((cover) => cover.id === photo.id)) {
+      covers.unshift(photo)
     }
+    coverPhotoId = meta.coverPhotoId
   }
 
   return {
     ...node,
     external: true,
     title: meta.title || node.title,
-    description: meta.description || null,
+    description: meta.description,
     isHidden: meta.isHidden,
-    passwordProtected: meta.passwordHash ? true : node.passwordProtected,
-    password: meta.password || undefined,
-    // 免密配置（管理端编辑面板回显；公开接口由调用方负责脱敏）
-    passwordExemptMode: meta.passwordExemptMode ?? null,
+    visibility: meta.visibility,
+    passwordProtected: Boolean(meta.passwordHash || node.passwordProtected),
+    passwordExemptMode: meta.passwordExemptMode,
     passwordExemptUsers: parseExemptUsers(meta.passwordExemptUsers),
     coverPhotoId,
     covers,
     urlKey: meta.urlKey || node.urlKey,
-    // 布局：自定义元数据优先，否则使用节点默认
-    layout: meta.layout ?? node.layout,
-    // 「随机一张照片」动画模式（default=直接打开 / wheel=轮盘 / compat=兼容动画）
-    randomAnimation: meta.randomAnimation ?? 'default',
-    // 「随机照片轮经典语录」扩展功能
-    randomQuotesEnabled: meta.randomQuotesEnabled ?? true,
-    randomQuotes: meta.randomQuotes || null,
-    randomQuotesTag: meta.randomQuotesTag ?? null,
-    bgmMusicId: meta.bgmMusicId ?? null,
-    // 公开链接优先级：自定义 slug > 相簿自身 urlKey > 库级默认
-    // 注意：仅对顶层（无上级路径）相簿做链接替换；子相簿必须保留完整子路径链接，
-    // 否则点击子相簿会退回到库根而“进不去”，因此子相簿始终用 node.link（含路径）。
+    layout: meta.layout,
+    randomAnimation: meta.randomAnimation,
+    randomQuotesEnabled: meta.randomQuotesEnabled,
+    randomQuotes: meta.randomQuotes,
+    randomQuotesTag: meta.randomQuotesTag,
+    bgmMusicId: meta.bgmMusicId,
     link: !node.relPath
       ? meta.slug
         ? `/albums/s/${encodeURIComponent(meta.slug)}`
@@ -293,7 +316,7 @@ export const applyScanAlbumMeta = async (
           ? `/albums/scan/${encodeURIComponent(meta.urlKey)}`
           : node.link
       : node.link,
-    slug: meta.slug || null,
+    slug: meta.slug,
     hasCustom: true,
   }
 }

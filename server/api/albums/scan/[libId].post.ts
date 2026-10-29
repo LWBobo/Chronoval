@@ -1,26 +1,18 @@
 import { z } from 'zod'
 import {
   getScanLibraryByKey,
-  getScanAlbumEffectivePasswordHash,
   getScanAlbumEffectiveAuth,
+  getScanAlbumDetail,
+  getScanAlbumEffectiveVisibility,
 } from '~~/server/services/scan-library/manager'
 import { getScanAlbumMetaByUrlKey } from '~~/server/services/scan-library/album-meta'
 import {
   authorizeScanAlbum,
-  authorizeScanLibrary,
 } from '~~/server/utils/scanAlbumAuth'
 import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
 import { verifyAlbumPassword } from '~~/server/utils/scanAlbumPassword'
 import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
-
-/** 签发库级解锁 cookie：任一次正确解锁后，会话内整个扫描库免密（无需逐相簿重复输入） */
-const authorizeScanLibraryUnlock = async (
-  event: any,
-  libIdNum: number,
-): Promise<void> => {
-  const libPasswordHash = await getScanAlbumEffectivePasswordHash(libIdNum, '')
-  authorizeScanLibrary(event, libIdNum, libPasswordHash)
-}
+import { albumOpenToActor } from '~~/server/utils/albumVisibility'
 
 export default eventHandler(async (event) => {
   const { libId } = await getValidatedRouterParams(
@@ -36,6 +28,13 @@ export default eventHandler(async (event) => {
     z.object({ password: z.string() }).parse,
   )
 
+  assertRateLimit(event, {
+    namespace: 'scan-album-unlock',
+    subject: `${libId}:${query.path}`,
+    limit: 15,
+    windowMs: 10 * 60 * 1000,
+  })
+
   // 与 GET 一致：先按相簿自身 urlKey 定位，命中则用其 mount/relPath
   const byMetaUrl = await getScanAlbumMetaByUrlKey(libId)
   let libIdNum: number
@@ -50,7 +49,9 @@ export default eventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Not Found' })
     }
     libIdNum = lib.id
-    relPath = byMetaUrl.relPath || ''
+    relPath = query.path
+      ? [byMetaUrl.relPath || '', query.path].filter(Boolean).join('/')
+      : byMetaUrl.relPath || ''
   } else {
     const lib = getScanLibraryByKey(libId)
     if (!lib || lib.displayMode === 'gallery' || !lib.enabled) {
@@ -66,6 +67,11 @@ export default eventHandler(async (event) => {
   // 管理员的「免密访问」只有在显式开启对应系统设置时才放行；
   // 默认关闭：即使登录管理员，也必须输入正确相簿密码。
   const actor = await getActor(event)
+  const detail = await getScanAlbumDetail(libIdNum, relPath)
+  const visibility = getScanAlbumEffectiveVisibility(libIdNum, relPath)
+  if (!detail || !albumOpenToActor({ visibility }, actor)) {
+    throw createError({ statusCode: 404, statusMessage: 'Not Found' })
+  }
   const adminBypass = await isAlbumAdminBypass(event, actor)
 
   if (adminBypass) {
@@ -74,7 +80,6 @@ export default eventHandler(async (event) => {
       relPath,
       passwordHash,
     })
-    await authorizeScanLibraryUnlock(event, libIdNum)
     return { authorized: true }
   }
 
@@ -90,7 +95,6 @@ export default eventHandler(async (event) => {
     )
   ) {
     authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
-    await authorizeScanLibraryUnlock(event, libIdNum)
     return { authorized: true }
   }
 
@@ -99,6 +103,5 @@ export default eventHandler(async (event) => {
   }
 
   authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
-  await authorizeScanLibraryUnlock(event, libIdNum)
   return { authorized: true }
 })

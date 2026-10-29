@@ -27,6 +27,7 @@ export default eventHandler(async (event) => {
           password: await hashPassword(password),
           username,
           isAdmin: 1,
+          role: 'admin',
         })
         .where(eq(tables.users.id, existingUser.id))
         .run()
@@ -46,6 +47,7 @@ export default eventHandler(async (event) => {
       username,
       password: await hashPassword(password),
       isAdmin: 1,
+      role: 'admin',
       createdAt: new Date(),
     })
     .run()

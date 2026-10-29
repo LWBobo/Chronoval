@@ -1,10 +1,7 @@
 import type { H3Event } from 'h3'
 import { eq, inArray } from 'drizzle-orm'
 import type { NeededExif } from '~~/shared/types/photo'
-import {
-  canDiscoverPhoto,
-  loadPhotoAccess,
-} from '~~/server/utils/photo-access'
+import { discoverablePhotoIds } from '~~/server/utils/photo-access'
 import { searchOcr } from './ocr.service'
 import { searchSmart, type SmartSearchHit } from './smart-search.service'
 import { appliedTagNamesForPhotos, searchTagHits } from './tags.service'
@@ -47,8 +44,7 @@ function photoMatchesFilters(
 
   const exif = photo.exif || {}
   if (filters.cameras?.length) {
-    const camera =
-      exif.Make && exif.Model ? `${exif.Make} ${exif.Model}` : ''
+    const camera = exif.Make && exif.Model ? `${exif.Make} ${exif.Model}` : ''
     if (!filters.cameras.includes(camera)) return false
   }
   if (filters.lenses?.length) {
@@ -78,13 +74,13 @@ function hasMetadataFilters(filters?: SmartQueryFilters) {
   if (!filters) return false
   return Boolean(
     filters.dateFrom ||
-      filters.dateTo ||
-      filters.cameras?.length ||
-      filters.lenses?.length ||
-      filters.cities?.length ||
-      filters.tags?.length ||
-      (filters.minRating && filters.minRating > 0) ||
-      filters.albumId,
+    filters.dateTo ||
+    filters.cameras?.length ||
+    filters.lenses?.length ||
+    filters.cities?.length ||
+    filters.tags?.length ||
+    (filters.minRating && filters.minRating > 0) ||
+    filters.albumId,
   )
 }
 
@@ -95,22 +91,8 @@ export async function filterVisibleHits(
 ): Promise<SmartSearchHit[]> {
   if (!hits.length) return []
 
-  const access = await loadPhotoAccess(event)
   const ids = hits.map((h) => h.photoId)
-  const rows = useDB()
-    .select({
-      id: tables.photos.id,
-      deletedAt: tables.photos.deletedAt,
-      libraryMount: tables.photos.libraryMount,
-      libraryPath: tables.photos.libraryPath,
-    })
-    .from(tables.photos)
-    .where(inArray(tables.photos.id, ids))
-    .all()
-
-  const visible = new Set(
-    rows.filter((photo) => canDiscoverPhoto(access, photo)).map((photo) => photo.id),
-  )
+  const visible = await discoverablePhotoIds(event, ids)
   return hits.filter((hit) => visible.has(hit.photoId))
 }
 
@@ -126,9 +108,9 @@ function applyMetadataFilters(
   if (spec.albumId) {
     allowed = new Set(
       db
-        .select({ id: tables.albumPhotos.photoId })
-        .from(tables.albumPhotos)
-        .where(eq(tables.albumPhotos.albumId, spec.albumId))
+        .select({ id: tables.collectionPhotos.photoId })
+        .from(tables.collectionPhotos)
+        .where(eq(tables.collectionPhotos.collectionId, spec.albumId))
         .all()
         .map((r) => r.id),
     )

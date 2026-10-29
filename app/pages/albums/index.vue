@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+const requestFetch = useRequestFetch()
 import { motion } from 'motion-v'
 import type { Album } from '~~/server/utils/db'
 interface ScanAlbumCover {
@@ -26,10 +27,10 @@ const { photos } = usePhotos()
 const { loggedIn, user } = useUserSession()
 const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
 const { data: albums } = useAsyncData<AlbumItem[]>(
-  'albums',
-  () => $fetch('/api/albums'),
+  () => `albums-${user.value?.id ?? 'guest'}-${isAdmin.value}`,
+  () => requestFetch('/api/albums'),
   {
-    watch: [],
+    watch: [() => user.value?.id, isAdmin],
   },
 )
 

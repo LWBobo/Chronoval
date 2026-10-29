@@ -1,20 +1,24 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import {
+  createHash,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual,
+} from 'node:crypto'
 
 /**
  * 相簿访问密码的哈希与校验。
  *
- * 新密码用「带盐 SHA-256」存储（形如 `sha256$<盐 hex>$<sha256(盐+密码) hex>`）。
- * 每个密码在设置时生成随机 16 字节盐，相同密码每次生成的存储值也不同，
- * 有效抵抗彩虹表 / 字典攻击。
+ * 新密码使用带随机盐的 scrypt-v1，提升弱密码面对离线字典攻击时的成本。
  *
  * 兼容性：
  * - `sha256$<hash>`           早前未加盐的 sha256（上一版写入）仍可校验
  * - `scrypt$…`                nuxt-auth-utils scrypt 历史密码仍可校验
- * - 重新设置密码后一律写入「带盐 sha256」格式
+ * - 重新设置密码后一律写入 `scrypt-v1$…` 格式
  */
 
 const SHA_PREFIX = 'sha256$'
 const SCRYPT_PREFIX = 'scrypt$'
+const SCRYPT_V1_PREFIX = 'scrypt-v1$'
 
 const sha256Hex = (input: string): string =>
   createHash('sha256').update(input).digest('hex')
@@ -27,13 +31,21 @@ const safeEquals = (a: string, b: string): boolean => {
 }
 
 /**
- * 生成相簿密码的「带盐 sha256」哈希：
- * 存储形如 `sha256$<盐>$<sha256(盐+密码)>`。
+ * 新密码使用内存困难的 scrypt。旧 SHA-256 与 nuxt-auth-utils scrypt
+ * 仅保留读取兼容，重新设置密码后自动升级为本格式。
  */
 export const hashAlbumPassword = (plain: string): string => {
   const salt = randomBytes(16).toString('hex')
-  const digest = sha256Hex(`${salt}${plain}`)
-  return `${SHA_PREFIX}${salt}$${digest}`
+  const cost = 16384
+  const blockSize = 8
+  const parallelization = 1
+  const digest = scryptSync(plain, salt, 32, {
+    N: cost,
+    r: blockSize,
+    p: parallelization,
+    maxmem: 64 * 1024 * 1024,
+  }).toString('hex')
+  return `${SCRYPT_V1_PREFIX}${cost}$${blockSize}$${parallelization}$${salt}$${digest}`
 }
 
 /**
@@ -47,6 +59,34 @@ export const verifyAlbumPassword = async (
   stored: string,
   plain: string,
 ): Promise<boolean> => {
+  if (stored.startsWith(SCRYPT_V1_PREFIX)) {
+    const [costRaw, blockRaw, parallelRaw, salt, digest] = stored
+      .slice(SCRYPT_V1_PREFIX.length)
+      .split('$')
+    const cost = Number(costRaw)
+    const blockSize = Number(blockRaw)
+    const parallelization = Number(parallelRaw)
+    if (
+      !Number.isInteger(cost) ||
+      !Number.isInteger(blockSize) ||
+      !Number.isInteger(parallelization) ||
+      !salt ||
+      !digest
+    ) {
+      return false
+    }
+    try {
+      const expected = scryptSync(plain, salt, 32, {
+        N: cost,
+        r: blockSize,
+        p: parallelization,
+        maxmem: 64 * 1024 * 1024,
+      }).toString('hex')
+      return safeEquals(digest.toLowerCase(), expected.toLowerCase())
+    } catch {
+      return false
+    }
+  }
   if (stored.startsWith(SHA_PREFIX)) {
     const parts = stored.slice(SHA_PREFIX.length).split('$')
     // 带盐格式：['盐', 'hash']

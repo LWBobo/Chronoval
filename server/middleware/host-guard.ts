@@ -1,5 +1,5 @@
-import type { H3Event } from 'h3'
 import { settingsManager } from '../services/settings/settingsManager'
+import type { H3Event } from 'h3'
 
 /**
  * 请求来源 Host 白名单守护（运行时生效，无需重启）。
@@ -15,7 +15,8 @@ import { settingsManager } from '../services/settings/settingsManager'
  *   3. 仍为空时使用「内置安全默认值 + 站点地址」。
  *
  * 支持 `*` 放行所有、`*.domain` 通配符、域名/IP。
- * 匹配时使用 Host 头，并兼容反代场景下的 X-Forwarded-Host。
+ * 默认只信任连接自身的 Host；仅当直连代理地址列入 NUXT_TRUST_PROXY_IPS 时，
+ * 才接受该代理提供的 X-Forwarded-Host。
  */
 
 interface HostRules {
@@ -37,6 +38,48 @@ function normalizeRule(rule: string): string {
   return rule.trim().toLowerCase()
 }
 
+function normalizeAddress(value: string): string {
+  return value.replace(/^::ffff:/, '').trim().toLowerCase()
+}
+
+function trustedProxyAddresses(): Set<string> {
+  return new Set(
+    (process.env.NUXT_TRUST_PROXY_IPS || '')
+      .split(',')
+      .map(normalizeAddress)
+      .filter(Boolean),
+  )
+}
+
+function requestHost(event: H3Event): string {
+  const direct = getRequestHost(event)
+  const peer = normalizeAddress(event.node.req.socket.remoteAddress || '')
+  if (!trustedProxyAddresses().has(peer)) return direct
+  const forwarded = getRequestHeader(event, 'x-forwarded-host')
+  return forwarded?.split(',')[0]?.trim() || direct
+}
+
+function hostnameOf(host: string): string {
+  try {
+    return new URL(`http://${host}`).hostname.toLowerCase()
+  } catch {
+    return host.replace(/^\[|\]$/g, '').split(':')[0]?.toLowerCase() || ''
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (char) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;',
+    }
+    return entities[char]!
+  })
+}
+
 /** 判断单个 hostname 是否匹配某条规则（支持 *.domain / 精确域名 / IP） */
 function matchHost(hostname: string, rule: string): boolean {
   if (!rule) return false
@@ -48,7 +91,7 @@ function matchHost(hostname: string, rule: string): boolean {
 }
 
 /** 解析最终 Host 白名单规则 */
-async function resolveHostRules(event: H3Event): Promise<HostRules> {
+async function resolveHostRules(): Promise<HostRules> {
   // 1. 基础设置 app.allowedHosts（可运行时修改）
   let list = ''
   try {
@@ -94,6 +137,7 @@ async function resolveHostRules(event: H3Event): Promise<HostRules> {
 /** 生成自包含的醒目拦截页（浏览器请求直接返回，不依赖 error.vue 管线） */
 function renderBlockedPage(host: string): string {
   const title = '无法访问此站点'
+  const safeHost = escapeHtml(host)
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -149,30 +193,30 @@ function renderBlockedPage(host: string): string {
     <p class="kicker">访问受限 · Host blocked</p>
     <h1>${title}</h1>
     <p class="desc">当前入口的主机（Host）未加入允许列表，本站暂时拒绝响应。</p>
-    <code class="host">${host}</code>
+    <code class="host">${safeHost}</code>
     <div class="steps">
       <b>如何放行当前 Host？</b>
       <ul>
-        <li><em>方式一（推荐）</em>：后台“设置 → 基础设置 → 允许访问的主机”中加入 <code>${host}</code>，保存即生效、无需重启。</li>
-        <li><em>方式二</em>：部署时用环境变量 <code>NUXT_ALLOWED_HOSTS</code> 加入该 Host（逗号分隔），如 <code>NUXT_ALLOWED_HOSTS="${host},dev.1xc.top"</code>，重启容器生效。</li>
+        <li><em>方式一（推荐）</em>：后台“设置 → 基础设置 → 允许访问的主机”中加入 <code>${safeHost}</code>，保存即生效、无需重启。</li>
+        <li><em>方式二</em>：部署时用环境变量 <code>NUXT_ALLOWED_HOSTS</code> 加入该 Host（逗号分隔），如 <code>NUXT_ALLOWED_HOSTS="${safeHost},dev.1xc.top"</code>，重启容器生效。</li>
       </ul>
     </div>
     <div class="btns">
       <a class="btn primary" href="javascript:location.reload()">重新加载</a>
       <a class="btn ghost" href="/">返回站点首页</a>
     </div>
-    <p class="foot">Host blocked · ${host}</p>
+    <p class="foot">Host blocked · ${safeHost}</p>
   </main>
 </body>
 </html>`
 }
 
 export default defineEventHandler(async (event) => {
-  const host = getRequestHost(event, { xForwardedHost: true })
-  const hostname = (host || '').split(':')[0]
+  const host = requestHost(event)
+  const hostname = hostnameOf(host || '')
   if (!hostname) return
 
-  const { allowAll, hosts } = await resolveHostRules(event)
+  const { allowAll, hosts } = await resolveHostRules()
   if (allowAll) return
 
   const normalizedHost = hostname.toLowerCase()

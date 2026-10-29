@@ -8,6 +8,8 @@ import { resolveAccess, requireAccess } from '../utils/access'
 export default defineEventHandler(async (event) => {
   const pathname = getRequestURL(event).pathname
   if (!pathname.startsWith('/api/')) return
+  setHeader(event, 'Cache-Control', 'private, no-store')
+  setHeader(event, 'Vary', 'Cookie')
 
   if (pathname.startsWith('/api/wizard')) {
     const firstLaunch = await settingsManager.get<boolean>(

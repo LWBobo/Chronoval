@@ -1,5 +1,6 @@
 import { withRetry, RetryPresets } from '../../utils/retry'
 import { settingsManager } from '../settings/settingsManager'
+import { findNearestLocalPlace, searchLocalPlaces } from './localPlaces'
 
 export interface LocationInfo {
   latitude: number
@@ -9,8 +10,20 @@ export interface LocationInfo {
   locationName?: string
 }
 
+export interface PlaceSearchHit {
+  latitude: number
+  longitude: number
+  label: string
+  country?: string
+  city?: string
+  province?: string
+  /** 本地库行政层级：province | city | district | town | landmark | poi | other */
+  placeType?: string
+}
+
 export interface GeocodingProvider {
   reverseGeocode(lat: number, lon: number): Promise<LocationInfo | null>
+  searchPlaces(query: string, limit?: number): Promise<PlaceSearchHit[]>
 }
 
 /**
@@ -116,6 +129,76 @@ export class MapboxGeocodingProvider implements GeocodingProvider {
     }
   }
 
+  async searchPlaces(query: string, limit = 8): Promise<PlaceSearchHit[]> {
+    const q = query.trim()
+    if (!q) return []
+    try {
+      return await withRetry(
+        async () => {
+          await this.applyRateLimit()
+          const language =
+            (await settingsManager.get<string>('location', 'language')) || 'en'
+          let mapboxLang = language
+          if (language === 'zh-CN') mapboxLang = 'zh-Hans'
+          else if (language === 'zh-TW') mapboxLang = 'zh-Hant'
+
+          const url = new URL('/search/geocode/v6/forward', this.baseUrl)
+          url.searchParams.set('access_token', this.accessToken)
+          url.searchParams.set('q', q)
+          url.searchParams.set('limit', String(Math.min(10, Math.max(1, limit))))
+          url.searchParams.set('language', mapboxLang)
+          url.searchParams.set('types', 'address,place,district,region,country,locality,neighborhood')
+
+          const response = await fetch(url.toString())
+          if (!response.ok) {
+            throw new Error(
+              `Mapbox API error: ${response.status} ${response.statusText}`,
+            )
+          }
+          const data = await response.json()
+          const features = Array.isArray(data?.features) ? data.features : []
+          return features
+            .map((feature: any): PlaceSearchHit | null => {
+              const coords = feature?.geometry?.coordinates
+              if (!Array.isArray(coords) || coords.length < 2) return null
+              const longitude = Number(coords[0])
+              const latitude = Number(coords[1])
+              if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                return null
+              }
+              const properties = feature.properties || {}
+              const context = properties.context || {}
+              return {
+                latitude,
+                longitude,
+                label:
+                  properties.full_address ||
+                  properties.place_formatted ||
+                  properties.name ||
+                  q,
+                country: context.country?.name,
+                city:
+                  context.locality?.name ||
+                  context.place?.name ||
+                  context.district?.name ||
+                  context.region?.name,
+              }
+            })
+            .filter((hit: PlaceSearchHit | null): hit is PlaceSearchHit => Boolean(hit))
+        },
+        {
+          ...RetryPresets.network,
+          timeout: 10000,
+          delayStrategy: 'exponential',
+        },
+        logger.location,
+      )
+    } catch (error) {
+      logger.location.error('Mapbox place search failed after all retries:', error)
+      return []
+    }
+  }
+
   private async applyRateLimit(): Promise<void> {
     const now = Date.now()
     const timeSinceLastRequest = now - this.lastRequestTime
@@ -207,9 +290,11 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
           }
         },
         {
-          ...RetryPresets.network,
-          timeout: 15000, // Nominatim 可能比较慢
-          delayStrategy: 'linear', // 线性退避，避免过快重试
+          // Keep short so air-gapped / intranet deploys fail fast and fall back to local places.
+          maxAttempts: 1,
+          baseDelay: 0,
+          timeout: 5000,
+          delayStrategy: 'linear' as const,
         },
         logger.location,
       )
@@ -219,6 +304,76 @@ export class NominatimGeocodingProvider implements GeocodingProvider {
         error,
       )
       return null
+    }
+  }
+
+  async searchPlaces(query: string, limit = 8): Promise<PlaceSearchHit[]> {
+    const q = query.trim()
+    if (!q) return []
+    try {
+      return await withRetry(
+        async () => {
+          await this.applyRateLimit()
+          const language =
+            (await settingsManager.get<string>('location', 'language')) || 'en'
+          const url = new URL('/search', this.baseUrl)
+          url.searchParams.set('q', q)
+          url.searchParams.set('format', 'json')
+          url.searchParams.set('addressdetails', '1')
+          url.searchParams.set(
+            'limit',
+            String(Math.min(10, Math.max(1, limit))),
+          )
+          url.searchParams.set('accept-language', `${language},en`)
+
+          const response = await fetch(url.toString(), {
+            headers: { 'User-Agent': this.userAgent },
+          })
+          if (!response.ok) {
+            throw new Error(
+              `Nominatim API error: ${response.status} ${response.statusText}`,
+            )
+          }
+          const data = await response.json()
+          if (!Array.isArray(data)) return []
+          return data
+            .map((item: any): PlaceSearchHit | null => {
+              const latitude = Number(item.lat)
+              const longitude = Number(item.lon)
+              if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                return null
+              }
+              const address = item.address || {}
+              return {
+                latitude,
+                longitude,
+                label: item.display_name || q,
+                country: address.country || address.country_code?.toUpperCase(),
+                city:
+                  address.district ||
+                  address.city ||
+                  address.town ||
+                  address.county ||
+                  address.state ||
+                  address.village ||
+                  address.hamlet,
+              }
+            })
+            .filter((hit: PlaceSearchHit | null): hit is PlaceSearchHit => Boolean(hit))
+        },
+        {
+          ...RetryPresets.network,
+          timeout: 15000,
+          delayStrategy: 'linear',
+        },
+        logger.location,
+      )
+    } catch (error) {
+      logger.location.error(
+        'Nominatim place search failed after all retries:',
+        error,
+      )
+      return []
     }
   }
 
@@ -257,6 +412,54 @@ async function createGeocodingProvider(): Promise<GeocodingProvider> {
   )
 }
 
+/**
+ * 按地名正向搜索，供编辑照片时选点。
+ * 本地 geocode_places 有命中时只返回本地结果（含多省同名列表）；
+ * 本地无结果再回退 Mapbox / Nominatim。
+ */
+export async function searchPlacesByName(
+  query: string,
+  limit = 20,
+): Promise<PlaceSearchHit[]> {
+  const q = query.trim()
+  if (!q) return []
+
+  const capped = Math.min(50, Math.max(1, limit))
+  const local = await searchLocalPlaces(q, capped)
+  if (local.length > 0) return local.slice(0, capped)
+
+  try {
+    const provider = await createGeocodingProvider()
+    const remote = await Promise.race([
+      provider.searchPlaces(q, capped),
+      new Promise<PlaceSearchHit[]>((resolve) => {
+        setTimeout(() => resolve([]), 5000)
+      }),
+    ])
+    return remote.slice(0, capped)
+  } catch (error) {
+    logger.location.warn(
+      'Remote place search failed; returning empty results:',
+      error,
+    )
+    return []
+  }
+}
+
+function locationFromLocalHit(
+  lat: number,
+  lon: number,
+  hit: NonNullable<Awaited<ReturnType<typeof findNearestLocalPlace>>>,
+): LocationInfo {
+  return {
+    latitude: lat,
+    longitude: lon,
+    country: hit.country,
+    city: hit.city,
+    locationName: hit.label,
+  }
+}
+
 export async function extractLocationFromGPS(
   gpsLatitude?: number,
   gpsLongitude?: number,
@@ -278,28 +481,44 @@ export async function extractLocationFromGPS(
     `Reverse geocoding coordinates: ${gpsLatitude}, ${gpsLongitude}`,
   )
 
-  // 如果没有指定提供者，使用默认提供者
-  const geocodingProvider = provider || (await createGeocodingProvider())
+  // Always resolve a local candidate first so intranet / air-gapped uploads
+  // never depend on Nominatim or Mapbox being reachable.
+  const localHit = await findNearestLocalPlace(gpsLatitude, gpsLongitude)
+  const localInfo = localHit
+    ? locationFromLocalHit(gpsLatitude, gpsLongitude, localHit)
+    : null
 
   try {
-    const locationInfo = await geocodingProvider.reverseGeocode(
-      gpsLatitude,
-      gpsLongitude,
-    )
+    const geocodingProvider = provider || (await createGeocodingProvider())
+    const remote = await Promise.race([
+      geocodingProvider.reverseGeocode(gpsLatitude, gpsLongitude),
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 6000)
+      }),
+    ])
 
-    if (locationInfo) {
+    if (remote) {
       logger.location.success(
-        `Location found: ${locationInfo.city}, ${locationInfo.country}`,
+        `Location found (remote): ${remote.city}, ${remote.country}`,
       )
-    } else {
-      logger.location.warn('No location found for coordinates')
+      return remote
     }
-
-    return locationInfo
   } catch (error) {
-    logger.location.error('Location extraction failed:', error)
-    return null
+    logger.location.warn(
+      'Remote reverse geocode unavailable; using local places if any:',
+      error,
+    )
   }
+
+  if (localInfo) {
+    logger.location.success(
+      `Location found (local ${localHit!.distanceKm.toFixed(1)}km): ${localInfo.city}, ${localInfo.country}`,
+    )
+    return localInfo
+  }
+
+  logger.location.warn('No location found for coordinates')
+  return null
 }
 
 /**

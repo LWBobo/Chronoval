@@ -1,22 +1,11 @@
 import { isFaceEnabled } from '../services/ml/config'
 import { queueRecognitionSweep } from '../services/ml/face-recognition.service'
+import { setMlState } from '../services/ml/state'
 
 const SWEEP_KEY = 'lastRecognitionSweep'
 
 function markSweep() {
-  const now = new Date()
-  useDB()
-    .insert(tables.mlState)
-    .values({
-      key: SWEEP_KEY,
-      value: now.toISOString(),
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: tables.mlState.key,
-      set: { value: now.toISOString(), updatedAt: now },
-    })
-    .run()
+  setMlState(SWEEP_KEY, new Date().toISOString())
 }
 
 let timer: NodeJS.Timeout | null = null

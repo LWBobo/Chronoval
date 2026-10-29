@@ -18,6 +18,10 @@ export default defineEventHandler(async (event) => {
     return {}
   }
 
+  const visibleIds = await discoverablePhotoIds(event, ids as string[])
+  const allowedIds = (ids as string[]).filter((id) => visibleIds.has(id))
+  if (allowedIds.length === 0) return {}
+
   const db = useDB()
 
   // 获取所有照片的表态统计
@@ -28,13 +32,13 @@ export default defineEventHandler(async (event) => {
       count: sql<number>`count(*)`,
     })
     .from(tables.photoReactions)
-    .where(inArray(tables.photoReactions.photoId, ids as string[]))
+    .where(inArray(tables.photoReactions.photoId, allowedIds))
     .groupBy(tables.photoReactions.photoId, tables.photoReactions.reactionType)
     .all()
 
   const result: Record<string, Record<string, number>> = {}
 
-  ids.forEach((id) => {
+  allowedIds.forEach((id) => {
     result[id as string] = {
       like: 0,
       love: 0,

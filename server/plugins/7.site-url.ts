@@ -48,8 +48,8 @@ export default defineNitroPlugin(async (nitroApp) => {
       })
   })
 
-  // 同步基础设置中的 站点地址 / 允许主机 进运行时公共配置，
-  // 供客户端（分享链接、OG 地址等）与常见服务端逻辑读取。
+  // 只把站点规范地址同步到公共运行时配置。Host 白名单属于服务端安全配置，
+  // 不写入 runtimeConfig.public，避免被客户端配置载荷公开。
   try {
     const publicConfig = useRuntimeConfig().public as Record<string, unknown>
 
@@ -78,7 +78,6 @@ export default defineNitroPlugin(async (nitroApp) => {
 
     const canonical: string = normalizeSiteUrl(siteUrl)
     assignPublic('siteUrl', canonical)
-    assignPublic('allowedHosts', allowedHosts)
 
     if (canonical) {
       const afterScheme = canonical.replace(/^[a-z]+:\/\//i, '')

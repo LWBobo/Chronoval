@@ -26,10 +26,36 @@ export interface PhotoMarker {
   longitude: number
   title?: string
   thumbnailUrl?: string
+  mapThumbnailUrl?: string
   thumbnailHash?: string
   dateTaken?: string
   city?: string
-  exif?: any
+  locationName?: string
+  focalLength?: number | null
+  shutterSeconds?: number | null
+  altitude?: number | null
+  cameraModel?: string | null
+}
+
+export interface GlobeMapPhoto {
+  id: string
+  latitude: number
+  longitude: number
+  dateTaken: string | null
+  title: string | null
+  city: string | null
+  locationName: string | null
+  thumbnailUrl: string | null
+  mapThumbnailUrl: string | null
+  thumbnailHash: string | null
+  focalLength: number | null
+  shutterSeconds: number | null
+  altitude: number | null
+  cameraModel: string | null
+}
+
+export interface GlobeMapPayload {
+  photos: GlobeMapPhoto[]
 }
 
 export interface ClusterPoint {

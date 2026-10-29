@@ -1,5 +1,3 @@
-import { eq } from 'drizzle-orm'
-
 export default eventHandler(async (event) => {
 
   const photoId = getRouterParam(event, 'photoId')
@@ -12,23 +10,7 @@ export default eventHandler(async (event) => {
   }
 
   try {
-    const db = useDB()
-
-    // 查询照片信息
-    const photos = await db
-      .select()
-      .from(tables.photos)
-      .where(eq(tables.photos.id, photoId))
-      .limit(1)
-
-    if (photos.length === 0) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: 'Photo not found',
-      })
-    }
-
-    const photo = photos[0]
+    const { photo } = await requireVisiblePhoto(event, photoId)
 
     return {
       id: photo.id,
@@ -38,7 +20,8 @@ export default eventHandler(async (event) => {
       originalUrl: photo.originalUrl,
       thumbnailUrl: photo.thumbnailUrl,
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.statusCode) throw error
     logger.chrono.error('Failed to get photo details:', error)
     throw createError({
       statusCode: 500,

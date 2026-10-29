@@ -48,3 +48,13 @@ NUXT_PUBLIC_MAP_MAPBOX_STYLE=
 Mount `20261018.pmtiles` at `/app/map/20261018.pmtiles` inside the container, then select Protomaps in map settings. Labels follow the interface language (`zh-Hans` or `zh-Hant` for Chinese). No MapTiler or Mapbox key is required.
 
 The file name can be changed in settings, but the archive must stay inside `/app/map` and end with `.pmtiles`.
+
+### Regional extracts (optional)
+
+For a smaller offline archive, cut a bounding box with the official CLI and mount that file instead:
+
+```bash
+pmtiles extract planet.pmtiles region.pmtiles --bbox=minLon,minLat,maxLon,maxLat
+```
+
+Place `region.pmtiles` under `/app/map` and set `protomaps.file` to that name — no code changes. Chronoval caches `/map/pmtiles` Range slices in-process (see `CHRONOVAL_PMTILES_CACHE_*`); no sidecar tile proxy is required.

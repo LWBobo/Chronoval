@@ -20,7 +20,7 @@ export function normalizeAlbumVisibility(album: {
 
 export function albumOpenToActor(
   album: { visibility?: string | null; isHidden?: boolean | null },
-  actor: { user?: { id?: string } | null; isAdmin?: boolean },
+  actor: { user?: { id?: string | number } | null; isAdmin?: boolean },
 ) {
   const visibility = normalizeAlbumVisibility(album)
   if (visibility === 'public') return true
@@ -28,26 +28,5 @@ export function albumOpenToActor(
   return Boolean(actor.isAdmin)
 }
 
-let visibilityColumnReady = false
-
-/** 迁移被跳过时补上 visibility。旧的隐藏相簿仍是「仅登录」，不会被抬成仅管理员。 */
-export function ensureAlbumVisibilityColumn() {
-  if (visibilityColumnReady) return
-  const sqlite = useSqlite()
-  const table = sqlite
-    .prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'albums'`,
-    )
-    .get()
-  if (!table) return
-  const cols = sqlite.prepare(`PRAGMA table_info(albums)`).all() as {
-    name: string
-  }[]
-  if (!cols.some((col) => col.name === 'visibility')) {
-    sqlite.exec(
-      `ALTER TABLE albums ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`,
-    )
-    sqlite.exec(`UPDATE albums SET visibility = 'login' WHERE is_hidden = 1`)
-  }
-  visibilityColumnReady = true
-}
+/** Kept as a no-op for callers shared with older clients. Grants own visibility. */
+export function ensureAlbumVisibilityColumn() {}

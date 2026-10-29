@@ -67,17 +67,21 @@ services:
       - ./data:/app/data
       # 本地存储 + 统一缩略图目录（必需，可写，上传落 photos/，纯存储不扫描）
       - ./storage:/app/storage
+      # ── 离线地图（Protomaps）：把 .pmtiles 放到宿主机 map/ 后挂载 ──
+      # 默认 provider=protomaps，文件名与设置里「protomaps.file」一致（如 20261018.pmtiles）
+      # 区域包（可选，体积更小）：pmtiles extract planet.pmtiles region.pmtiles --bbox=minLon,minLat,maxLon,maxLat
+      # 然后把 region.pmtiles 挂到 /app/map，并在设置里把 protomaps.file 指到该文件名即可（无需改代码）
+      # Range 缓存在同进程内，落在已有 ./data（data/pmtiles-range-cache），不新增 tiles 旁路服务
+      # - ./map:/app/map:ro
       # ── 可选：外部扫描库（默认不挂载）────────────────────────────
       # 需要“放图自动识别相册”时取消下面一行注释，并先执行：mkdir -p data/library
       - /vol2/1000/photos/shares:/app/library
     healthcheck:
       test:
         - CMD
-        - wget
-        - -q
-        - -O
-        - /dev/null
-        - http://localhost:3000/
+        - /usr/bin/node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then((response) => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3

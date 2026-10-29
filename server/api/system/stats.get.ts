@@ -2,7 +2,7 @@ import { sql, gte, isNull, eq } from 'drizzle-orm'
 import * as si from 'systeminformation'
 import { readFileSync } from 'node:fs'
 import { settingsManager } from '../../services/settings/settingsManager'
-import { scanLibraries } from '../../database/schema'
+import { libraries } from '../../database/schema'
 
 // 短 TTL 缓存：stats 数据变化频率远低于请求频率（后台页每 5s 轮询）
 const STATS_TTL_MS = 10_000
@@ -82,9 +82,9 @@ async function getStorageMeta(): Promise<{
     }
     try {
       const libs = useDB()
-        .select({ rootPath: scanLibraries.rootPath })
-        .from(scanLibraries)
-        .where(eq(scanLibraries.enabled, true))
+        .select({ rootPath: libraries.rootPath })
+        .from(libraries)
+        .where(eq(libraries.enabled, true))
         .all()
       for (const lib of libs) {
         if (
@@ -237,8 +237,7 @@ async function getCpuLoad(): Promise<{ current: number } | null> {
   }
 }
 
-export default eventHandler(async (event) => {
-
+export default eventHandler(async () => {
   // 命中缓存直接返回，避免重复执行 7 条聚合 + systeminformation
   if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) {
     return statsCache.data

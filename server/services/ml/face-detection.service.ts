@@ -10,21 +10,11 @@ import { float32ToBuffer, iou } from './vector'
 
 const log = () => logger.dynamic('ml-face-detect')
 
-function markFaceScan(photoId: string, faceCount: number) {
-  const db = useDB()
-  db.insert(tables.photoFaceScans)
-    .values({
-      photoId,
-      faceCount,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: tables.photoFaceScans.photoId,
-      set: {
-        faceCount,
-        updatedAt: new Date(),
-      },
-    })
+function markFaceScan(photoId: string) {
+  useDB()
+    .update(tables.photos)
+    .set({ faceScannedAt: new Date() })
+    .where(eq(tables.photos.id, photoId))
     .run()
 }
 
@@ -196,7 +186,9 @@ async function processFaceDetectionBody(
   reconcilePeople(affectedPeople)
 
   // Sentinel so "queue missing" does not re-run photos with 0 faces forever.
-  markFaceScan(photoId, result.faces.length)
+  markFaceScan(photoId)
+  const { anchorManualMembers } = await import('./person.service')
+  await anchorManualMembers(photoId)
 
   log().success(
     `Faces for ${photoId}: ${result.faces.length} detected, ${newFaceIds.length} new`,

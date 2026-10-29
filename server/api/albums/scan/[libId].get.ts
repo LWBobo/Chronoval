@@ -1,19 +1,18 @@
+import { serializeScanAlbumNodes } from '~~/server/utils/scan-album-response'
 import { z } from 'zod'
 import {
   getScanLibraryByKey,
   getScanAlbumDetail,
   getScanAlbumEffectiveAuth,
-  getScanAlbumEffectivePasswordHash,
+  getScanAlbumEffectiveVisibility,
 } from '~~/server/services/scan-library/manager'
 import { getScanAlbumMetaByUrlKey } from '~~/server/services/scan-library/album-meta'
-import {
-  hasScanAlbumAccess,
-  hasScanLibraryAccess,
-} from '~~/server/utils/scanAlbumAuth'
+import { hasInheritedScanAlbumAccess } from '~~/server/utils/scanAlbumAuth'
 import { isPasswordExemptForUser } from '~~/server/utils/albumPasswordExempt'
 import { isAlbumAdminBypass } from '~~/server/utils/albumAccess'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
-import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
+import { discoverablePhotoIds } from '~~/server/utils/photo-access'
+import { albumOpenToActor } from '~~/server/utils/albumVisibility'
 
 export default eventHandler(async (event) => {
   const { libId } = await getValidatedRouterParams(
@@ -87,9 +86,11 @@ export default eventHandler(async (event) => {
   // 访问权只认「解锁 cookie」「免密范围」或显式开启的「管理员免密」开关；
   // 默认不因管理员身份放行，避免「任意密码都可进入」。
   const actor = await getActor(event)
+  const visibility = getScanAlbumEffectiveVisibility(libIdNum, relPath)
+  if (!albumOpenToActor({ visibility }, actor)) {
+    throw createError({ statusCode: 404, statusMessage: 'Not Found' })
+  }
   const adminBypass = await isAlbumAdminBypass(event, actor)
-  // 库级会话解锁：任一次正确解锁后整库免密（顶层生效密码哈希，顶层开放时为 null）
-  const libPasswordHash = await getScanAlbumEffectivePasswordHash(libIdNum, '')
   // 登录用户在相簿配置的免密范围内（所有登录用户/指定用户）则免密
   const passwordExempt = isPasswordExemptForUser(
     {
@@ -100,19 +101,23 @@ export default eventHandler(async (event) => {
     actor.user,
   )
   const authorized =
-    hasScanLibraryAccess(event, libIdNum, libPasswordHash) ||
-    hasScanAlbumAccess(
+    !passwordHash ||
+    Boolean(adminBypass) ||
+    passwordExempt ||
+    hasInheritedScanAlbumAccess(
       event,
       {
         libId: libIdNum,
         relPath,
         passwordHash,
-        sessionExempt: passwordExempt,
+        passwordPath: effAuth.passwordPath,
       },
-      Boolean(adminBypass),
+      false,
     )
 
-  const passwordProtected = Boolean(detail.node.passwordProtected)
+  // 直接访问子目录时，节点自身可能没有密码，但父目录密码仍会向下生效。
+  // 锁定判断必须使用 effective auth，不能只看当前节点元数据。
+  const passwordProtected = Boolean(passwordHash)
 
   // 「随机照片轮经典语录」最终生效语录池：标签优先（内置古诗/现代库），否则自定义，两者皆无则空（旋转时不显示）
   const withRandomQuotePool = async (node: any): Promise<any> => {
@@ -123,7 +128,11 @@ export default eventHandler(async (event) => {
     const { password: _pw, children, ...rest } = stripPassword(node)
     const withBgm = { ...rest, bgm: resolveBgm(rest.bgmMusicId) }
     return children?.length
-      ? { ...withBgm, children: await Promise.all(children.map(withRandomQuotePool)), randomQuotesPool: pool }
+      ? {
+          ...withBgm,
+          children: await Promise.all(children.map(withRandomQuotePool)),
+          randomQuotesPool: pool,
+        }
       : { ...withBgm, randomQuotesPool: pool }
   }
 
@@ -143,8 +152,20 @@ export default eventHandler(async (event) => {
 
   // 未解锁的受保护相簿仅返回节点信息用于标题/封面展示，不返回目录照片与子相簿
   if (passwordProtected && !authorized) {
+    const lockedNode = await withRandomQuotePool(detail.node)
     return {
-      node: await withRandomQuotePool(detail.node),
+      node: {
+        ...lockedNode,
+        visibility,
+        coverPhotoId: null,
+        covers: [],
+        photoCount: 0,
+        videoCount: 0,
+        bgmMusicId: null,
+        bgm: null,
+        children: [],
+        hasChildren: false,
+      },
       dirPhotos: [],
       children: [],
       childInParent,
@@ -154,31 +175,28 @@ export default eventHandler(async (event) => {
     }
   }
 
-  const blockedByPerson = blockedPhotoIdsForActor(actor)
-  const hideBlockedCovers = (node: any): any => {
-    if (!node || blockedByPerson.size === 0) return node
-    const covers = Array.isArray(node.covers)
-      ? node.covers.filter(
-          (cover: { id?: string }) => cover?.id && !blockedByPerson.has(cover.id),
-        )
-      : node.covers
-    return {
-      ...node,
-      covers,
-      ...(node.children?.length
-        ? { children: node.children.map(hideBlockedCovers) }
-        : {}),
-    }
-  }
-  const node = hideBlockedCovers(await withRandomQuotePool(detail.node))
-  const children = await Promise.all(
-    detail.children.map(async (child) => hideBlockedCovers(await withRandomQuotePool(child))),
+  const visiblePhotoIds = await discoverablePhotoIds(
+    event,
+    detail.dirPhotos.map((photo) => photo.id),
   )
+  const safeNodes = await serializeScanAlbumNodes(
+    event,
+    [{ ...detail.node, children: detail.children }],
+    { actor, adminBypass, resolveBgm },
+  )
+  const safeNode = safeNodes[0]
+  if (!safeNode)
+    throw createError({ statusCode: 404, statusMessage: 'Not Found' })
+  const { children: safeChildren = [], ...safeRoot } = safeNode
+  const node = await withRandomQuotePool(safeRoot)
+  const children = await Promise.all(safeChildren.map(withRandomQuotePool))
 
   return {
     ...detail,
-    dirPhotos: detail.dirPhotos.filter((photo) => !blockedByPerson.has(photo.id)),
-    node,
+    dirPhotos: detail.dirPhotos
+      .filter((photo) => visiblePhotoIds.has(photo.id))
+      .map((photo) => (actor.isAdmin ? photo : toPublicPhoto(photo))),
+    node: { ...node, visibility },
     children,
     childInParent,
     childPosition,

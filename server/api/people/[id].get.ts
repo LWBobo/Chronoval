@@ -5,7 +5,7 @@ import {
   getPersonPhotoIds,
   normalizeVisibility,
 } from '~~/server/services/ml/person.service'
-import { canDiscoverPhoto, loadPhotoAccess } from '~~/server/utils/photo-access'
+import { discoverablePhotoIds } from '~~/server/utils/photo-access'
 
 export default eventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'private, no-store')
@@ -25,20 +25,14 @@ export default eventHandler(async (event) => {
   }
   const visibility = normalizeVisibility(person)
 
-  const access = await loadPhotoAccess(event)
-  const photos = getPersonPhotoIds(id)
-    .filter((photo) => canDiscoverPhoto(access, photo))
-    .map((p) => ({
-      id: p.id,
-      title: p.title,
-      thumbnailUrl: p.thumbnailUrl,
-      thumbnailHash: p.thumbnailHash,
-      aspectRatio: p.aspectRatio,
-      width: p.width,
-      height: p.height,
-      dateTaken: p.dateTaken,
-      type: p.type,
-    }))
+  const personPhotos = getPersonPhotoIds(id)
+  const visiblePhotoIds = await discoverablePhotoIds(
+    event,
+    personPhotos.map((photo) => photo.id),
+  )
+  const photos = personPhotos
+    .filter((photo) => visiblePhotoIds.has(photo.id))
+    .map((photo) => toPublicPhoto(photo))
 
   if (photos.length === 0 && !actor.isAdmin) {
     throw createError({ statusCode: 404, message: 'Person not found' })

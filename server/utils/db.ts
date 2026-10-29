@@ -22,6 +22,7 @@ export function useDB() {
 
     // 启用WAL模式以提高并发性能
     sqliteInstance.pragma('journal_mode = WAL')
+    sqliteInstance.pragma('foreign_keys = ON')
     sqliteInstance.pragma('synchronous = NORMAL')
     sqliteInstance.pragma('cache_size = 1000')
     sqliteInstance.pragma('temp_store = MEMORY')
@@ -56,10 +57,10 @@ export type NewPipelineQueueItem = typeof schema.pipelineQueue.$inferInsert
 
 export type PhotoReaction = typeof schema.photoReactions.$inferSelect
 
-export type Album = typeof schema.albums.$inferSelect
-export type NewAlbum = typeof schema.albums.$inferInsert
-export type AlbumPhoto = typeof schema.albumPhotos.$inferSelect
-export type NewAlbumPhoto = typeof schema.albumPhotos.$inferInsert
+export type Album = typeof schema.collections.$inferSelect
+export type NewAlbum = typeof schema.collections.$inferInsert
+export type AlbumPhoto = typeof schema.collectionPhotos.$inferSelect
+export type NewAlbumPhoto = typeof schema.collectionPhotos.$inferInsert
 export type AlbumWithPhotos = Album & {
   photos: Photo[]
 }

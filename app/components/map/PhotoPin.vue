@@ -28,57 +28,22 @@ const marker = computed(() => props.clusterPoint.properties.marker!)
 const hoverOpen = ref(false)
 const previewOpen = ref(false)
 
-const parseExifNumber = (value: unknown): number | null => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null
-  }
-
-  if (typeof value !== 'string') {
-    return null
-  }
-
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return null
-  }
-
-  const fractionMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)$/)
-  if (fractionMatch) {
-    const numerator = Number(fractionMatch[1])
-    const denominator = Number(fractionMatch[2])
-    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
-      return null
-    }
-    return numerator / denominator
-  }
-
-  const numericMatch = trimmed.match(/-?\d+(?:\.\d+)?/)
-  if (!numericMatch) {
-    return null
-  }
-
-  const parsed = Number(numericMatch[0])
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-const focalLengthValue = computed(() => {
-  return parseExifNumber(
-    marker.value.exif?.FocalLengthIn35mmFormat ?? marker.value.exif?.FocalLength,
-  )
+const mapThumbnailSrc = computed(() => {
+  const base = marker.value.mapThumbnailUrl
+  if (!base) return marker.value.thumbnailUrl || ''
+  return `${base}${base.includes('?') ? '&' : '?'}size=256`
 })
 
-const shutterSecondsValue = computed(() => {
-  return parseExifNumber(marker.value.exif?.ExposureTime)
-})
+const focalLengthValue = computed(() => marker.value.focalLength ?? null)
+const shutterSecondsValue = computed(() => marker.value.shutterSeconds ?? null)
+const altitudeValue = computed(() => marker.value.altitude ?? null)
 
-const altitudeValue = computed(() => {
-  const altitude = parseExifNumber(marker.value.exif?.GPSAltitude)
-  if (altitude === null) {
-    return null
-  }
+const formattedDateTaken = computed(() => {
+  const value = marker.value.dateTaken
+  if (!value) return ''
 
-  const isBelowSeaLevel = marker.value.exif?.GPSAltitudeRef === 'Below Sea Level'
-  return isBelowSeaLevel ? -Math.abs(altitude) : altitude
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : value
 })
 
 type AnalysisBucket = 'low' | 'mid' | 'high' | null
@@ -301,16 +266,16 @@ const onClick = () => {
               class="absolute -inset-2 rounded-full border border-primary/40 dark:border-primary/50 animate-ping"
             />
             <div class="absolute inset-0 overflow-hidden rounded-full">
-              <ThumbImage
-                :src="marker.thumbnailUrl!"
-                :alt="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+              <ThumbHash
+                v-if="marker.thumbnailHash"
                 :thumbhash="marker.thumbnailHash"
-                :threshold="0.1"
-                root-margin="100px"
-                class="h-full w-full object-cover opacity-50"
+                class="absolute inset-0 size-full scale-110 opacity-70 blur-sm"
               />
+              <div v-else class="absolute inset-0 bg-neutral-300/70 dark:bg-neutral-700/70" />
               <div
-                :class="twMerge('absolute inset-0', analysisVisual.overlayClass)"
+                :class="
+                  twMerge('absolute inset-0', analysisVisual.overlayClass)
+                "
               />
             </div>
 
@@ -388,22 +353,31 @@ const onClick = () => {
                 <button
                   type="button"
                   class="relative block h-36 w-full cursor-zoom-in overflow-hidden"
-                  :aria-label="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+                  :aria-label="
+                    marker.title ||
+                    $t('map.photo.altFallback', { id: marker.id })
+                  "
                   @click.stop="previewOpen = true"
                 >
                   <ThumbImage
-                    :src="marker.thumbnailUrl!"
-                    :alt="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+                    :src="mapThumbnailSrc"
+                    :fallback-src="marker.thumbnailUrl"
+                    :alt="
+                      marker.title ||
+                      $t('map.photo.altFallback', { id: marker.id })
+                    "
                     :thumbhash="marker.thumbnailHash"
-                    :threshold="0.1"
-                    root-margin="200px"
+                    :lazy="false"
                     class="pointer-events-none h-full w-full object-cover"
                   />
                 </button>
                 <MapPhotoLightbox
                   v-model:open="previewOpen"
                   :src="marker.thumbnailUrl"
-                  :alt="marker.title || $t('map.photo.altFallback', { id: marker.id })"
+                  :alt="
+                    marker.title ||
+                    $t('map.photo.altFallback', { id: marker.id })
+                  "
                 />
                 <div class="relative px-3 py-2 space-y-1">
                   <!-- Header -->
@@ -414,7 +388,10 @@ const onClick = () => {
                     class="flex items-center gap-2 text-neutral-900 dark:text-white group/link"
                   >
                     <h3 class="flex-1 text-lg font-semibold truncate">
-                      {{ marker.title || $t('map.photo.altFallback', { id: marker.id }) }}
+                      {{
+                        marker.title ||
+                        $t('map.photo.altFallback', { id: marker.id })
+                      }}
                     </h3>
                     <Icon
                       name="tabler:external-link"
@@ -425,7 +402,7 @@ const onClick = () => {
                   <!-- Metadata -->
                   <div class="space-y-1">
                     <div
-                      v-if="marker.city || marker.exif?.DateTimeOriginal"
+                      v-if="marker.city || formattedDateTaken"
                       class="flex items-center gap-1 text-xs text-neutral-600 dark:text-muted font-medium mb-2"
                     >
                       <div v-if="marker.city">
@@ -433,10 +410,10 @@ const onClick = () => {
                           {{ marker.city }}
                         </span>
                       </div>
-                      <span v-if="marker.city">·</span>
-                      <div v-if="marker.exif?.DateTimeOriginal">
+                      <span v-if="marker.city && formattedDateTaken">·</span>
+                      <div v-if="formattedDateTaken">
                         <span class="truncate">
-                          {{ dayjs(marker.exif.DateTimeOriginal).format('ll') }}
+                          {{ formattedDateTaken }}
                         </span>
                       </div>
                     </div>

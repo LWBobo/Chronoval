@@ -191,6 +191,12 @@ export const MAP_SETTINGS_UI: Record<string, FieldUIConfig> = {
     visibleIf: { fieldKey: 'provider', value: 'protomaps' },
     help: 'settings.map.protomaps.file.help',
   },
+  'protomaps.timelineFile': {
+    type: 'input',
+    placeholder: 'timeline-lite.pmtiles',
+    visibleIf: { fieldKey: 'provider', value: 'protomaps' },
+    help: 'settings.map.protomaps.timelineFile.help',
+  },
 }
 
 export const LOCATION_SETTINGS_UI: Record<string, FieldUIConfig> = {

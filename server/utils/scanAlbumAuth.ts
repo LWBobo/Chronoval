@@ -1,34 +1,31 @@
-import { createHmac } from 'node:crypto'
-import { safeTokenEqual } from './albumAccess'
+import { createHash, createHmac } from 'node:crypto'
+import { normalizeAlbumPath } from './album-path'
+import { safeTokenEqual } from './token'
 
 /**
  * 扫描相簿（外部库转相簿）的访问密码鉴权。
  *
- * 密码从「扫描库」下沉到「相簿」级别（存于 scan_album_meta.password_hash，
+ * 密码存于文件夹集合（collections.password_hash，
  * 由后台相册的相簿编辑面板维护）。解锁令牌按 相簿 id + 相对路径 签发，
  * 因此不同子相簿可以各自带密码，互不干扰；密码变更后旧令牌自动失效。
  * - 管理员是否免密由调用方传入（系统开关 scanAlbum.adminBypass），默认不因管理员身份放行。
  * - 无密码时视为开放相簿（直接放行）。
  */
 
-const DEFAULT_SECRET = 'chronoval-scan-album-unlock'
-
 /** 解锁 Cookie 名：同一相簿可按不同相对路径分别解锁 */
-const cookieName = (libId: number, relPath: string): string => {
-  const slug =
-    (relPath || '')
-      .split('/')
-      .map((s) => s.replace(/[^a-zA-Z0-9-_]/g, '_'))
-      .filter(Boolean)
-      .join('_') || ''
-  return slug ? `scan_album_${libId}_${slug}` : `scan_album_${libId}`
+export const scanAlbumCookieName = (libId: number, relPath: string): string => {
+  const normalized = normalizeAlbumPath(relPath)
+  if (!normalized) return `scan_album_${libId}`
+  const pathHash = createHash('sha256').update(normalized).digest('hex')
+  return `scan_album_${libId}_${pathHash}`
 }
 
-/** 库级解锁 Cookie 名：会话内任一次正确解锁后，整个扫描库免密 */
-const libCookieName = (libId: number): string => `scan_album_lib_${libId}`
-
-const getSecret = (): string =>
-  process.env.SCAN_ALBUM_UNLOCK_SECRET || DEFAULT_SECRET
+const getSecret = (): string => {
+  const secret =
+    process.env.SCAN_ALBUM_UNLOCK_SECRET || process.env.NUXT_SESSION_PASSWORD
+  if (!secret) throw new Error('Scan album unlock secret is not configured')
+  return secret
+}
 
 /** 生成与当前密码哈希绑定的解锁令牌 */
 export const scanAlbumToken = (
@@ -48,7 +45,12 @@ export const scanAlbumToken = (
  */
 export const hasScanAlbumAccess = (
   event: any,
-  opts: { libId: number; relPath: string; passwordHash: string | null; sessionExempt?: boolean },
+  opts: {
+    libId: number
+    relPath: string
+    passwordHash: string | null
+    sessionExempt?: boolean
+  },
   allowAdmin: boolean,
 ): boolean => {
   if (allowAdmin) return true
@@ -57,7 +59,7 @@ export const hasScanAlbumAccess = (
   // 未设置密码 → 开放，直接放行
   if (!opts.passwordHash) return true
 
-  const scope = cookieName(opts.libId, opts.relPath)
+  const scope = scanAlbumCookieName(opts.libId, opts.relPath)
   const stored = getCookie(event, scope)
   if (!stored) return false
   const idx = stored.indexOf(':')
@@ -68,34 +70,12 @@ export const hasScanAlbumAccess = (
   return id === opts.libId && safeTokenEqual(token, expected)
 }
 
-/**
- * 是否已获得整个扫描库的会话访问权限（库级解锁 cookie）。
- * 只要用户在本次浏览器会话内任一次输对过密码（签发过库级 cookie），
- * 该库下所有相簿/子相簿均免密，无需逐相簿重复输入。
- * @param libPasswordHash 该库顶层（根相簿）生效的密码哈希；顶层开放时传 null
- */
-export const hasScanLibraryAccess = (
-  event: any,
-  libId: number,
-  libPasswordHash: string | null,
-): boolean => {
-  const scope = libCookieName(libId)
-  const stored = getCookie(event, scope)
-  if (!stored) return false
-  const idx = stored.indexOf(':')
-  if (idx === -1) return false
-  const id = Number(stored.slice(0, idx))
-  const token = stored.slice(idx + 1)
-  const expected = scanAlbumToken(scope, libPasswordHash)
-  return id === libId && safeTokenEqual(token, expected)
-}
-
 /** 签发解锁 Cookie（密码校验通过后调用） */
 export const authorizeScanAlbum = (
   event: any,
   opts: { libId: number; relPath: string; passwordHash: string | null },
 ): void => {
-  const scope = cookieName(opts.libId, opts.relPath)
+  const scope = scanAlbumCookieName(opts.libId, opts.relPath)
   setCookie(
     event,
     scope,
@@ -103,30 +83,9 @@ export const authorizeScanAlbum = (
     {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false, // 与登录 cookie 保持一致
+      secure: useSecureCookie(event),
       path: '/',
       // 不设 maxAge → 会话 Cookie：浏览器/会话关闭后即失效，下次访问需重新输入密码
-    },
-  )
-}
-
-/** 签发库级解锁 Cookie（任一次密码校验通过后调用）：会话内整库免密 */
-export const authorizeScanLibrary = (
-  event: any,
-  libId: number,
-  libPasswordHash: string | null,
-): void => {
-  const scope = libCookieName(libId)
-  setCookie(
-    event,
-    scope,
-    `${libId}:${scanAlbumToken(scope, libPasswordHash)}`,
-    {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: false, // 与登录 cookie 保持一致
-      path: '/',
-      // 不设 maxAge → 会话 Cookie：浏览器/会话关闭后即失效
     },
   )
 }
@@ -137,6 +96,40 @@ export const revokeScanAlbum = (
   libId: number,
   relPath?: string,
 ): void => {
-  deleteCookie(event, cookieName(libId, relPath || ''), { path: '/' })
-  deleteCookie(event, libCookieName(libId), { path: '/' })
+  deleteCookie(event, scanAlbumCookieName(libId, relPath || ''), { path: '/' })
+}
+
+/** 祖先令牌只能用于当前生效的密码，子目录单独设置密码后构成新的边界。 */
+export function hasInheritedScanAlbumAccess(
+  event: any,
+  opts: {
+    libId: number
+    relPath: string
+    passwordHash: string | null
+    passwordPath: string | null
+    sessionExempt?: boolean
+  },
+  allowAdmin: boolean,
+): boolean {
+  if (allowAdmin || opts.sessionExempt || !opts.passwordHash) return true
+  const target = normalizeAlbumPath(opts.relPath)
+  const origin = normalizeAlbumPath(opts.passwordPath ?? target)
+  if (origin && target !== origin && !target.startsWith(`${origin}/`))
+    return false
+  const parts = target.split('/').filter(Boolean)
+  const minimumDepth = origin.split('/').filter(Boolean).length
+  for (let depth = parts.length; depth >= minimumDepth; depth--) {
+    if (
+      hasScanAlbumAccess(
+        event,
+        {
+          ...opts,
+          relPath: parts.slice(0, depth).join('/'),
+        },
+        false,
+      )
+    )
+      return true
+  }
+  return false
 }

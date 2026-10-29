@@ -48,3 +48,13 @@ NUXT_PUBLIC_MAP_MAPBOX_STYLE=
 把 `20261018.pmtiles` 挂到容器内的 `/app/map/20261018.pmtiles`，然后在地图设置里选择 Protomaps。界面语言为简体中文时，地名使用 `zh-Hans`；繁体界面使用 `zh-Hant`。不需要 MapTiler 或 Mapbox 的 key。
 
 文件名可以在设置里改，但必须仍是 `/app/map` 目录下的 `.pmtiles` 文件。
+
+### 区域包（可选）
+
+全球 Planet 体积很大时，可用官方 CLI 裁切感兴趣区域，再挂载区域文件：
+
+```bash
+pmtiles extract planet.pmtiles region.pmtiles --bbox=minLon,minLat,maxLon,maxLat
+```
+
+把 `region.pmtiles` 放到 `/app/map`，在设置里把 `protomaps.file` 改为该文件名即可，无需改代码。Chronoval 会在同进程内对 `/map/pmtiles` 的 Range 做内存/磁盘缓存（见 `CHRONOVAL_PMTILES_CACHE_*`），不新增旁路服务。

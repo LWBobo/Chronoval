@@ -1,10 +1,12 @@
-import { createReadStream } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
 import { DEFAULT_PMTILES_FILE } from '~~/shared/map-pmtiles'
-import { mapPmtilesPath } from '~~/server/utils/map-pmtiles'
+import { readPmtilesArchiveMetadata } from '~~/server/utils/map-pmtiles'
+import {
+  resolvePmtilesRange,
+  streamPmtilesRange,
+  touchPmtilesCacheActivity,
+} from '~~/server/utils/pmtiles-range-cache'
 
-const PMTILES_MAGIC = 'PMTiles'
 // A missing Range on the first byte makes the pmtiles client retry
 // bytes=0-(size-1). Never answer that with the whole planet archive.
 const MAX_SLICE_BYTES = 32 * 1024 * 1024
@@ -13,51 +15,41 @@ const MAX_SLICE_BYTES = 32 * 1024 * 1024
  * Serve a local PMTiles archive with HTTP range requests.
  * MapLibre's pmtiles protocol reads the header and tiles by byte range;
  * the 129 GiB planet file must never be buffered or streamed in full.
+ *
+ * Small ranges go through an in-process MEM + optional DISK cache so
+ * timeline hops re-hit warm slices instead of re-reading the archive.
  */
 export default defineEventHandler(async (event) => {
   const queryName = getQuery(event).file
-  const configured = await settingsManager
-    .get<string>('map', 'protomaps.file', DEFAULT_PMTILES_FILE)
-    .catch(() => DEFAULT_PMTILES_FILE)
   const requested =
-    typeof queryName === 'string' && queryName.trim() ? queryName : configured
-  const filePath = mapPmtilesPath(requested)
+    typeof queryName === 'string' && queryName.trim()
+      ? queryName
+      : await settingsManager
+          .get<string>('map', 'protomaps.file', DEFAULT_PMTILES_FILE)
+          .catch(() => DEFAULT_PMTILES_FILE)
 
-  let fileStat: Awaited<ReturnType<typeof stat>>
+  let archive: Awaited<ReturnType<typeof readPmtilesArchiveMetadata>>
   try {
-    fileStat = await stat(filePath)
-  } catch {
+    archive = await readPmtilesArchiveMetadata(requested)
+  } catch (error) {
     throw createError({
-      statusCode: 404,
-      statusMessage: `Map archive not found: ${filePath}`,
-    })
-  }
-  if (!fileStat.isFile() || fileStat.size < PMTILES_MAGIC.length) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: `Map archive not found: ${filePath}`,
+      statusCode: error instanceof TypeError ? 415 : 404,
+      statusMessage:
+        error instanceof Error ? error.message : 'Map archive not found',
     })
   }
 
-  const header = Buffer.alloc(PMTILES_MAGIC.length)
-  const handle = await open(filePath, 'r')
-  try {
-    await handle.read(header, 0, header.length, 0)
-  } finally {
-    await handle.close()
-  }
-  if (header.toString() !== PMTILES_MAGIC) {
-    throw createError({
-      statusCode: 415,
-      statusMessage: 'File is not a PMTiles archive',
-    })
-  }
-
-  const size = fileStat.size
+  const { filePath, size, mtimeMs } = archive
+  touchPmtilesCacheActivity()
   setHeader(event, 'Accept-Ranges', 'bytes')
   setHeader(event, 'Content-Type', 'application/octet-stream')
-  setHeader(event, 'Cache-Control', 'public, max-age=3600')
-  setHeader(event, 'ETag', `"${fileStat.mtimeMs}-${size}"`)
+  // Nginx Proxy Manager respects this header and forwards small Range slices
+  // immediately instead of buffering them to disk before the browser sees them.
+  setHeader(event, 'X-Accel-Buffering', 'no')
+  // Filename is versioned (e.g. 20261018.pmtiles). Long cache lets the browser
+  // reuse range responses across timeline hops instead of re-hitting disk.
+  setHeader(event, 'Cache-Control', 'public, max-age=31536000, immutable')
+  setHeader(event, 'ETag', `"${mtimeMs}-${size}"`)
 
   const range = getRequestHeader(event, 'range')
   if (!range) {
@@ -100,5 +92,20 @@ export default defineEventHandler(async (event) => {
   setResponseStatus(event, 206)
   setHeader(event, 'Content-Range', `bytes ${start}-${end}/${size}`)
   setHeader(event, 'Content-Length', String(end - start + 1))
-  return sendStream(event, createReadStream(filePath, { start, end }))
+
+  const cached = await resolvePmtilesRange({
+    fileName: requested,
+    filePath,
+    mtimeMs,
+    size,
+    start,
+    end,
+  })
+  if (cached) {
+    setHeader(event, 'X-PMTiles-Cache', cached.cache)
+    return cached.body
+  }
+
+  setHeader(event, 'X-PMTiles-Cache', 'BYPASS')
+  return sendStream(event, streamPmtilesRange(filePath, start, end))
 })

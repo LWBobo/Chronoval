@@ -12,17 +12,27 @@ export default eventHandler(async (event) => {
     z.object({ code: z.string().min(1).max(8) }).parse,
   )
 
+  assertRateLimit(event, {
+    namespace: 'login-2fa',
+    limit: 10,
+    windowMs: 10 * 60 * 1000,
+  })
+
   const token = getCookie(event, totpConstants.CHALLENGE_COOKIE)
   if (!token) {
     throw _invalidChallengeOrCode
   }
 
-  const userId = verifyChallenge(token)
-  if (userId === null) {
+  const challenge = verifyChallenge(token)
+  if (!challenge) {
     throw _invalidChallengeOrCode
   }
 
-  const user = db.select().from(tables.users).where(eq(tables.users.id, userId)).get()
+  const user = db
+    .select()
+    .from(tables.users)
+    .where(eq(tables.users.id, challenge.userId))
+    .get()
   if (!user || !user.totpEnabled || !user.totpSecret) {
     throw _invalidChallengeOrCode
   }
@@ -37,6 +47,10 @@ export default eventHandler(async (event) => {
     throw _invalidChallengeOrCode
   }
 
+  if (!consumeChallenge(challenge)) {
+    throw _invalidChallengeOrCode
+  }
+
   // 两步验证通过：把本条挑战记录转为成功登入
   markChallengeAsSucceeded(event, user.id, user.email)
 
@@ -45,7 +59,7 @@ export default eventHandler(async (event) => {
     { user: toSessionUser(user) },
     {
       cookie: {
-        secure: false,
+        secure: useSecureCookie(event),
       },
     },
   )
@@ -53,5 +67,6 @@ export default eventHandler(async (event) => {
   // 挑战一次性：签发正式会话后立即清除挑战 Cookie
   deleteCookie(event, totpConstants.CHALLENGE_COOKIE, { path: '/' })
 
-  return setResponseStatus(event, 201)
+  setResponseStatus(event, 201)
+  return { authenticated: true }
 })

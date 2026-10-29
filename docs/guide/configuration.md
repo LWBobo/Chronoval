@@ -52,6 +52,9 @@ Whether using Docker or Docker Compose (.env) deployment, configuration is done 
 | CHRONOVAL_ML_URL                         | Machine-learning sidecar base URL                               | `http://127.0.0.1:3003`               | No                                                   |
 | ML_NIGHTLY_INTERVAL_MS                   | How often to queue a face-recognition sweep                     | `86400000` (24h)                      | No                                                   |
 | ML_NIGHTLY_INITIAL_DELAY_MS              | Delay before the first recognition sweep                        | `300000` (5 min)                      | No                                                   |
+| CHRONOVAL_PMTILES_CACHE_MEM_MB           | In-process `/map/pmtiles` Range memory LRU cap (MB)             | `256`                                 | No                                                   |
+| CHRONOVAL_PMTILES_CACHE_DISK_MB          | Range disk cache cap (MB; `0` disables)                         | `2048`                                | No                                                   |
+| CHRONOVAL_PMTILES_CACHE_IDLE_MS          | Idle time before clearing MEM and wiping disk cache (ms)        | `600000` (10 min)                     | No                                                   |
 
 Smart search, people, and OCR are documented in [Machine learning](/guide/ml).
 

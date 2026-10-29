@@ -41,6 +41,14 @@ const normalImageCache: LRUCache<string, ImageLoaderCacheResult> = new LRUCache<
   }
 })
 
+let imageCacheEpoch = 0
+
+/** 身份变化时清理 Blob，并阻止旧请求完成后重新写回缓存。 */
+export function clearImageLoaderCache() {
+  imageCacheEpoch++
+  normalImageCache.clear()
+}
+
 export class ImageLoaderManager {
   private lastXHR: XMLHttpRequest | null = null
   private timer: NodeJS.Timeout | null = null
@@ -65,6 +73,7 @@ export class ImageLoaderManager {
     callbacks: ImageLoaderCallbacks = {},
   ): Promise<ImageLoaderResult> {
     const { onProgress, onError, onUpdateLoadingState } = callbacks
+    const epoch = imageCacheEpoch
 
     // 命中内存缓存则立即返回，跳过网络下载与人为延迟，
     // 让相邻图片切换（渐进式预解码已预取）可以秒级起点解码。
@@ -90,13 +99,12 @@ export class ImageLoaderManager {
         if (xhr.status === 200) {
           try {
             const blob = xhr.response as Blob
-            if (!(await this.isValidImageBlob(blob))) {
-              onError?.()
-              onUpdateLoadingState?.({
-                isVisible: false,
-              })
-              return
-            }
+            if (epoch !== imageCacheEpoch)
+              throw new Error('Image access context changed')
+            if (!(await this.isValidImageBlob(blob)))
+              throw new Error('Invalid image data')
+            if (epoch !== imageCacheEpoch)
+              throw new Error('Image access context changed')
 
             const processResult = await this.processNormalImage(
               blob,
@@ -182,6 +190,7 @@ export class ImageLoaderManager {
    */
   async prefetch(src: string): Promise<boolean> {
     if (!src || normalImageCache.get(src)) return true
+    const epoch = imageCacheEpoch
 
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest()
@@ -190,7 +199,10 @@ export class ImageLoaderManager {
       xhr.onload = async () => {
         if (xhr.status === 200) {
           const blob = xhr.response as Blob
-          if (await this.isValidImageBlob(blob)) {
+          if (
+            (await this.isValidImageBlob(blob)) &&
+            epoch === imageCacheEpoch
+          ) {
             const url = URL.createObjectURL(blob)
             normalImageCache.set(src, {
               blobSrc: url,

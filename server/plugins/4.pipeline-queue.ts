@@ -14,6 +14,10 @@ export default defineNitroPlugin(async (_nitroApp) => {
       intervalOffset: 300,
       enableLoadBalancing: true,
       statsReportInterval: 60000 * 10,
+      completedRetentionDays: Number(
+        process.env.PIPELINE_COMPLETED_RETENTION_DAYS || 30,
+      ),
+      maintenanceIntervalMs: 24 * 60 * 60 * 1000,
     },
     _logger,
   )

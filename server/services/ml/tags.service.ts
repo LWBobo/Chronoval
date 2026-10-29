@@ -232,17 +232,15 @@ export function updateTag(tagId: number, input: TagInput): TagRecord {
       nameKey,
       prompt,
       enabled,
+      ...(promptChanged
+        ? { vectorModel: null, vectorPrompt: null, embedding: null, dim: null }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(tables.mlTags.id, tagId))
     .run()
   replaceAliases(tagId, aliases)
 
-  if (promptChanged) {
-    db.delete(tables.mlTagVectors)
-      .where(eq(tables.mlTagVectors.tagId, tagId))
-      .run()
-  }
   if (!enabled) {
     db.delete(tables.photoMlTags)
       .where(
@@ -278,9 +276,6 @@ export function deleteTag(tagId: number) {
   db.delete(tables.photoMlTags)
     .where(eq(tables.photoMlTags.tagId, tagId))
     .run()
-  db.delete(tables.mlTagVectors)
-    .where(eq(tables.mlTagVectors.tagId, tagId))
-    .run()
   db.delete(tables.mlTagAliases)
     .where(eq(tables.mlTagAliases.tagId, tagId))
     .run()
@@ -302,41 +297,29 @@ async function readyTagVectors(model: string): Promise<ReadyVector[]> {
   const ready: ReadyVector[] = []
 
   for (const tag of tags) {
-    const cached = db
-      .select()
-      .from(tables.mlTagVectors)
-      .where(eq(tables.mlTagVectors.tagId, tag.id))
-      .get()
     if (
-      cached &&
-      cached.model === model &&
-      cached.prompt === tag.prompt &&
-      cached.dim > 0
+      tag.embedding &&
+      tag.vectorModel === model &&
+      tag.vectorPrompt === tag.prompt &&
+      (tag.dim ?? 0) > 0
     ) {
-      ready.push({ tagId: tag.id, vec: bufferToFloat32(cached.embedding as Buffer) })
+      ready.push({
+        tagId: tag.id,
+        vec: bufferToFloat32(tag.embedding as Buffer),
+      })
       continue
     }
 
     const encoded = await encodeText(tag.prompt, model)
-    db.insert(tables.mlTagVectors)
-      .values({
-        tagId: tag.id,
-        model: encoded.model || model,
-        prompt: tag.prompt,
+    db.update(tables.mlTags)
+      .set({
+        vectorModel: encoded.model || model,
+        vectorPrompt: tag.prompt,
         embedding: float32ToBuffer(encoded.embedding),
         dim: encoded.dim,
         updatedAt: new Date(),
       })
-      .onConflictDoUpdate({
-        target: tables.mlTagVectors.tagId,
-        set: {
-          model: encoded.model || model,
-          prompt: tag.prompt,
-          embedding: float32ToBuffer(encoded.embedding),
-          dim: encoded.dim,
-          updatedAt: new Date(),
-        },
-      })
+      .where(eq(tables.mlTags.id, tag.id))
       .run()
     ready.push({
       tagId: tag.id,

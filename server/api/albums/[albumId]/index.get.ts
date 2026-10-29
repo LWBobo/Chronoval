@@ -1,17 +1,21 @@
 import { and, asc, eq, getTableColumns, isNull } from 'drizzle-orm'
 import z from 'zod'
 import { hasAlbumAccess } from '~~/server/utils/manualAlbumAuth'
-import { isPasswordExemptForUser, parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
-import { isAlbumAdminBypass, redactAlbumSecrets } from '~~/server/utils/albumAccess'
+import {
+  isPasswordExemptForUser,
+  parseExemptUsers,
+} from '~~/server/utils/albumPasswordExempt'
+import {
+  isAlbumAdminBypass,
+  redactAlbumSecrets,
+} from '~~/server/utils/albumAccess'
 import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { getDisabledScanMountSet } from '~~/server/services/scan-library/manager'
 import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
-import {
-  albumOpenToActor,
-  ensureAlbumVisibilityColumn,
-  normalizeAlbumVisibility,
-} from '~~/server/utils/albumVisibility'
+import { albumOpenToActor } from '~~/server/utils/albumVisibility'
+import { getManualAlbumByPublicKey } from '~~/server/services/collections/manual-album'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
+import { discoverablePhotoIds } from '~~/server/utils/photo-access'
 
 export default eventHandler(async (event) => {
   const { listMusic, serializeMusic } = await import('~~/server/services/music')
@@ -39,22 +43,8 @@ export default eventHandler(async (event) => {
     }).parse,
   )
 
-  ensureAlbumVisibilityColumn()
   const db = useDB()
-
-  // 纯数字 → 按 id；否则按 uid
-  const albumIdNum = /^\d+$/.test(albumId) ? parseInt(albumId, 10) : null
-  const album = albumIdNum != null
-    ? db
-        .select()
-        .from(tables.albums)
-        .where(eq(tables.albums.id, albumIdNum))
-        .get()
-    : db
-        .select()
-        .from(tables.albums)
-        .where(eq(tables.albums.uid, albumId))
-        .get()
+  const album = getManualAlbumByPublicKey(albumId)
 
   if (!album) {
     throw createError({
@@ -66,17 +56,16 @@ export default eventHandler(async (event) => {
   // 整套相簿公开逻辑以整数 id 为内部主键，统一定位内部 id
   const albumPk = album.id
 
-  // 公开所有人可见；仅登录需要账号；仅管理员对普通账号也是 404。
-  // 仅登录且设了密码时，访客仍可打开密码页。仅管理员即使有密码也不对普通账号开放。
+  // 可见级别与相簿密码是两个独立条件：login/admin 不得由输入相簿密码替代。
   const actor = await getActor(event)
-  const visibility = normalizeAlbumVisibility(album)
-  if (!(query.manage === '1' && actor.isAdmin) && !albumOpenToActor(album, actor)) {
-    if (visibility === 'admin' || !album.passwordHash) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: 'Album not found',
-      })
-    }
+  if (
+    !(query.manage === '1' && actor.isAdmin) &&
+    !albumOpenToActor(album, actor)
+  ) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: 'Album not found',
+    })
   }
 
   // 密码访问权判定（与扫描相簿一致）：只有显式打开「管理员免密」开关才放行管理员，
@@ -87,11 +76,18 @@ export default eventHandler(async (event) => {
   const adminBypass = await isAlbumAdminBypass(event, actor)
   // 密码免密范围：登录用户在相簿配置的免密范围内（所有登录用户/指定用户）则免密
   const passwordExempt = isPasswordExemptForUser(album, actor.user)
-  const authorized = manageMode || passwordExempt || hasAlbumAccess(
-    event,
-    { albumId: albumPk, passwordHash: album.passwordHash, sessionExempt: passwordExempt },
-    Boolean(adminBypass),
-  )
+  const authorized =
+    manageMode ||
+    passwordExempt ||
+    hasAlbumAccess(
+      event,
+      {
+        albumId: albumPk,
+        passwordHash: album.passwordHash,
+        sessionExempt: passwordExempt,
+      },
+      Boolean(adminBypass),
+    )
 
   const passwordProtected = Boolean(album.passwordHash)
 
@@ -104,7 +100,6 @@ export default eventHandler(async (event) => {
     ? {
         ...revealed,
         uid,
-        password: album.password ?? undefined,
         passwordExemptMode: album.passwordExemptMode ?? undefined,
         passwordExemptUsers: parseExemptUsers(album.passwordExemptUsers),
       }
@@ -120,8 +115,10 @@ export default eventHandler(async (event) => {
   if (passwordProtected && !authorized) {
     return {
       ...safeAlbum,
+      coverPhotoId: null,
+      bgmMusicId: null,
       randomQuotesPool,
-      bgm: resolveBgm((album as any).bgmMusicId),
+      bgm: null,
       passwordProtected: true,
       authorized: false,
       photos: [],
@@ -136,16 +133,16 @@ export default eventHandler(async (event) => {
     })
     .from(tables.photos)
     .innerJoin(
-      tables.albumPhotos,
-      eq(tables.photos.id, tables.albumPhotos.photoId),
+      tables.collectionPhotos,
+      eq(tables.photos.id, tables.collectionPhotos.photoId),
     )
     .where(
       and(
-        eq(tables.albumPhotos.albumId, albumPk),
+        eq(tables.collectionPhotos.collectionId, albumPk),
         isNull(tables.photos.deletedAt),
       ),
     )
-    .orderBy(asc(tables.albumPhotos.position))
+    .orderBy(asc(tables.collectionPhotos.position))
     .all()
 
   // 公开/编辑之外的普通访问：剔除「已禁用扫描库」的照片。
@@ -178,12 +175,22 @@ export default eventHandler(async (event) => {
 
   // 兜底去重：防御历史脏数据导致的重复行（正常由唯一索引保证唯一）
   const seen = new Set<string>()
-  const blockedByPerson = manageMode ? new Set<string>() : blockedPhotoIdsForActor(actor)
-  const uniquePhotos = photos.filter((p) => {
+  const blockedByPerson = manageMode
+    ? new Set<string>()
+    : blockedPhotoIdsForActor(actor)
+  let uniquePhotos = photos.filter((p) => {
     if (seen.has(p.id) || blockedByPerson.has(p.id)) return false
     seen.add(p.id)
     return true
   })
+
+  if (!manageMode && uniquePhotos.length > 0) {
+    const visibleIds = await discoverablePhotoIds(
+      event,
+      uniquePhotos.map((photo) => photo.id),
+    )
+    uniquePhotos = uniquePhotos.filter((photo) => visibleIds.has(photo.id))
+  }
 
   return {
     ...safeAlbum,
@@ -191,6 +198,11 @@ export default eventHandler(async (event) => {
     bgm: resolveBgm((album as any).bgmMusicId),
     passwordProtected,
     authorized,
-    photos: uniquePhotos,
+    coverPhotoId: uniquePhotos.some((photo) => photo.id === album.coverPhotoId)
+      ? album.coverPhotoId
+      : (uniquePhotos.find((photo) => photo.type !== 'video')?.id ?? null),
+    photos: manageMode
+      ? uniquePhotos
+      : uniquePhotos.map((photo) => toPublicPhoto(photo)),
   }
 })

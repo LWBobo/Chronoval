@@ -31,7 +31,13 @@ export default eventHandler(async (event) => {
   // 和已禁用的扫描库。登录可见的相簿在登录后进入瀑布流，密码相簿始终不进入。
   // 后台管理（管理员且非 gallery=1）保留全量。过滤必须进 SQL，避免分页缺行。
   if (!(isAdmin && !galleryOnly)) {
-    where.push(homepageGalleryVisibilitySql(loggedIn, viewerFromActor(actor)))
+    where.push(
+      homepageGalleryVisibilitySql(
+        loggedIn,
+        viewerFromActor(actor),
+        actor.user?.id ?? null,
+      ),
+    )
     const hiddenScanMounts = getGalleryHiddenScanMountSet()
     if (hiddenScanMounts.size > 0) {
       // library_mount 可能为 NULL（上传照片）：NOT IN 会把 NULL 行排除掉，
@@ -60,7 +66,7 @@ export default eventHandler(async (event) => {
   const rows = stmt.all()
   const mlTags = appliedTagNamesForPhotos(rows.map((row) => row.id))
   return rows.map((row) => ({
-    ...row,
+    ...(isAdmin ? row : toPublicPhoto(row)),
     mlTags: mlTags.get(row.id) || [],
   }))
 })

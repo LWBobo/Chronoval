@@ -98,9 +98,8 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       VERSION: pkg.version,
-      // 站点规范地址与允许主机白名单：从设置（DB）读取后在 server 插件中覆盖，客户端用于分享/OG 地址
+      // 站点规范地址供客户端生成分享/OG 地址；Host 白名单只在服务端读取。
       siteUrl: '',
-      allowedHosts: '',
       mapbox: {
         accessToken: '',
       },
@@ -111,7 +110,7 @@ export default defineNuxtConfig({
         avatarUrl: '',
       },
       map: {
-        provider: 'maplibre' as 'mapbox' | 'maplibre' | 'protomaps',
+        provider: 'protomaps' as 'mapbox' | 'maplibre' | 'protomaps',
         mapbox: {
           style: '',
         },
@@ -267,15 +266,23 @@ export default defineNuxtConfig({
             }
 
             if (
-              id.includes('/mapbox-gl/') ||
               id.includes('/maplibre-gl/') ||
               id.includes('/@indoorequal/vue-maplibre-gl/') ||
-              id.includes('/nuxt-mapbox/') ||
-              id.includes('/nuxt-maplibre/') ||
+              id.includes('/nuxt-maplibre/')
+            ) {
+              return 'vendor-maplibre'
+            }
+            if (
+              id.includes('/mapbox-gl/') ||
+              id.includes('/nuxt-mapbox/')
+            ) {
+              return 'vendor-mapbox'
+            }
+            if (
               id.includes('/pmtiles/') ||
               id.includes('/@protomaps/basemaps/')
             ) {
-              return 'vendor-map'
+              return 'vendor-pmtiles'
             }
           },
         },

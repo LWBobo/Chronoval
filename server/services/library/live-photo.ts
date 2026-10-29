@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { NeededExif } from '~~/shared/types/photo'
 import { locateEmbeddedMotionVideo } from '../video/motion-photo'
+import { libraryMediaPath } from '../../utils/media-reference'
 
 const STILL_EXTS = ['.jpg', '.jpeg', '.heic', '.heif', '.JPG', '.JPEG', '.HEIC', '.HEIF']
 const VIDEO_EXTS = ['.mov', '.MOV']
@@ -36,10 +37,7 @@ export const findSiblingLiveVideo = (absImage: string) =>
 export const findSiblingLiveStill = (absVideo: string) =>
   siblingPath(absVideo, STILL_EXTS)
 
-export const libraryFileUrl = (mountName: string, rel: string) => {
-  const relUrl = encodeURIComponent(rel).replace(/%2F/g, '/')
-  return `/library/${mountName}/${relUrl}`
-}
+export const libraryFileUrl = libraryMediaPath
 
 /**
  * 识别一张扫描库静图是不是动态照片。

@@ -122,7 +122,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: process.env.NUXT_ALLOWED_HOSTS || '',
     label: 'settings.app.allowedHosts.label',
     description: 'settings.app.allowedHosts.description',
-    isPublic: true,
   },
   // 回收站保留策略：移入回收站的照片在「多少天」后自动彻底删除；never=永不自动删除
   {
@@ -236,7 +235,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: false,
     label: 'settings.system.scanAlbum.adminBypass.label',
     description: 'settings.system.scanAlbum.adminBypass.description',
-    isPublic: true,
   },
   // 「随机照片轮经典语录」内置语录库（古诗/现代），可在 设置-系统 中编辑；相簿选择标签时轮盘使用对应库
   {
@@ -289,7 +287,9 @@ export const DEFAULT_SETTINGS = [
     namespace: 'map',
     key: 'provider',
     type: 'string',
-    defaultValue: 'maplibre',
+    // Protomaps + local PMTiles / vendored glyphs works fully offline;
+    // maplibre (MapTiler) and mapbox need outbound internet.
+    defaultValue: 'protomaps',
     enum: ['mapbox', 'maplibre', 'protomaps'],
     label: 'settings.map.provider.label',
     description: 'settings.map.provider.description',
@@ -340,6 +340,15 @@ export const DEFAULT_SETTINGS = [
     description: 'settings.map.protomaps.file.description',
     isPublic: true,
   },
+  {
+    namespace: 'map',
+    key: 'protomaps.timelineFile',
+    type: 'string',
+    defaultValue: '',
+    label: 'settings.map.protomaps.timelineFile.label',
+    description: 'settings.map.protomaps.timelineFile.description',
+    isPublic: true,
+  },
   // NAMESPACE: location
   {
     namespace: 'location',
@@ -367,7 +376,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: '',
     label: 'settings.location.nominatim.baseUrl.label',
     description: 'settings.location.nominatim.baseUrl.description',
-    isPublic: true,
   },
   // NAMESPACE: storage
   {
@@ -414,7 +422,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: '',
     label: 'settings.ml.url.label',
     description: 'settings.ml.url.description',
-    isPublic: true,
   },
   {
     namespace: 'ml',
@@ -432,7 +439,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: 'fnos/img2vec-large-1.0.0',
     label: 'settings.ml.clip.model.label',
     description: 'settings.ml.clip.model.description',
-    isPublic: true,
   },
   {
     namespace: 'ml',
@@ -468,7 +474,6 @@ export const DEFAULT_SETTINGS = [
     defaultValue: 'buffalo_l',
     label: 'settings.ml.face.model.label',
     description: 'settings.ml.face.model.description',
-    isPublic: true,
   },
   {
     namespace: 'ml',

@@ -1,3 +1,5 @@
+import { decodeMediaPath } from '../../utils/media-http'
+import { resolveInsideRoot } from '../../utils/safe-path'
 import path from 'node:path'
 import { promises as fs, createReadStream } from 'node:fs'
 import { getLibraryMounts } from '~~/server/services/scan-library/manager'
@@ -61,19 +63,9 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Not Found' })
   }
 
-  const decodedRel = decodeURIComponent(relRaw)
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/^\/+/, '')
-
-  if (decodedRel.includes('..')) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid path' })
-  }
-
-  const absolute = path.resolve(mount.root, decodedRel)
-  if (!absolute.startsWith(path.resolve(mount.root) + path.sep)) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid path' })
-  }
+  const decodedRel = decodeMediaPath(relRaw)
+  const absolute = resolveInsideRoot(mount.root, decodedRel)
+  await requireLibraryMediaAccess(event, mountName, decodedRel)
 
   let stat
   try {
@@ -89,7 +81,8 @@ export default eventHandler(async (event) => {
   setHeader(event, 'ETag', etag)
   setHeader(event, 'Last-Modified', stat.mtime.toUTCString())
   // 原文件只读映射，可长缓存
-  setHeader(event, 'Cache-Control', 'public, max-age=31536000, immutable')
+  setHeader(event, 'Cache-Control', 'private, no-cache')
+  setHeader(event, 'Vary', 'Cookie')
   setHeader(event, 'Content-Type', guessContentType(absolute))
   setHeader(event, 'Accept-Ranges', 'bytes')
 
@@ -114,7 +107,7 @@ export default eventHandler(async (event) => {
       const preview = extractEmbeddedJpegPreview(rawBuffer)
       if (preview) {
         setHeader(event, 'Content-Type', 'image/jpeg')
-        setHeader(event, 'Cache-Control', 'public, max-age=31536000, immutable')
+        setHeader(event, 'Cache-Control', 'private, no-cache')
         event.node.res.setHeader('Content-Length', String(preview.length))
         return preview
       }

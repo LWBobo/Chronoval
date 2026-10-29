@@ -21,6 +21,17 @@
 /* 登录页品牌 logo 专用字体：Carter One（OFL 许可，手写感圆润标题体，仅 wordmark 使用，全量离线打包） */
 @import '@fontsource/carter-one/400.css';
 
+/* 相簿页装饰手写体：Pacifico（OFL），自托管于 public/fonts，避免 @nuxt/fonts 联网 */
+@font-face {
+  font-family: 'Pacifico';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src:
+    url('/fonts/pacifico/latin-400-normal.woff2') format('woff2'),
+    url('/fonts/pacifico/latin-400-normal.woff') format('woff');
+}
+
 :root {
   /* New text-autospace property */
   /* see docs: https://developer.mozilla.org/en-US/docs/Web/CSS/text-autospace */

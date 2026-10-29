@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { and } from 'drizzle-orm'
 
 export default eventHandler(async (event) => {
 
@@ -17,8 +18,13 @@ export default eventHandler(async (event) => {
   // 检查相簌是否存在
   const album = await db
     .select()
-    .from(tables.albums)
-    .where(eq(tables.albums.id, albumId))
+    .from(tables.collections)
+    .where(
+      and(
+        eq(tables.collections.id, albumId),
+        eq(tables.collections.kind, 'manual'),
+      ),
+    )
     .get()
 
   if (!album) {
@@ -31,12 +37,19 @@ export default eventHandler(async (event) => {
   // 使用事务删除相簌及其关联的照片关系
   db.transaction((tx) => {
     // 删除相簌-照片关系
-    tx.delete(tables.albumPhotos)
-      .where(eq(tables.albumPhotos.albumId, albumId))
+    tx.delete(tables.collectionPhotos)
+      .where(eq(tables.collectionPhotos.collectionId, albumId))
       .run()
 
     // 删除相簌
-    tx.delete(tables.albums).where(eq(tables.albums.id, albumId)).run()
+    tx.delete(tables.collections)
+      .where(
+        and(
+          eq(tables.collections.id, albumId),
+          eq(tables.collections.kind, 'manual'),
+        ),
+      )
+      .run()
   })
 
   return { success: true }

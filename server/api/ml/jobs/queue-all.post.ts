@@ -1,4 +1,4 @@
-import { eq, isNull } from 'drizzle-orm'
+import { eq, isNotNull, isNull } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   queueRecognitionSweep,
@@ -81,13 +81,13 @@ export default eventHandler(async (event) => {
   }
 
   const idsMissingFaces = (): string[] => {
-    // photo_face_scans is written even when detection finds 0 faces.
     const have = new Set(
       db
-        .select({ id: tables.photoFaceScans.photoId })
-        .from(tables.photoFaceScans)
+        .select({ id: tables.photos.id })
+        .from(tables.photos)
+        .where(isNotNull(tables.photos.faceScannedAt))
         .all()
-        .map((r) => r.id),
+        .map((row) => row.id),
     )
     return allIds.filter((id) => !have.has(id))
   }
