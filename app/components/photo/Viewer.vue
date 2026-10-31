@@ -15,6 +15,8 @@ import ReactionPicker from './ReactionPicker.vue'
 import ReactionConfetti from './ReactionConfetti.vue'
 import { REACTION_ICON_MAP } from './reaction-definitions'
 import type { LoadingIndicatorRef } from './LoadingIndicator.vue'
+import { useLivePhotoSource } from '~/composables/useLivePhotoSource'
+import { canPrefetchLivePhoto } from '~/composables/useLivePhotoProcessor'
 import { ImageLoaderManager } from '~/libs/image-loader-manager'
 
 interface Props {
@@ -85,17 +87,22 @@ const isLivePhotoPlaying = ref(false)
 const isLivePhotoTouching = ref(false)
 const isLivePhotoMuted = ref(true)
 const touchCount = ref(0)
-const livePhotoVideoBlob = ref<Blob | null>(null)
-const livePhotoVideoBlobUrl = ref<string | null>(null)
 const livePhotoVideoRef = useDomRef()
 const longPressTimer = ref<NodeJS.Timeout | null>(null)
-
-// Import LivePhoto processor
-const { convertMovToMp4, getProcessingState } = useLivePhotoProcessor()
 
 // Computed
 const currentPhoto = computed(() => props.photos[props.currentIndex])
 const isMobile = useMediaQuery('(max-width: 768px)')
+const {
+  src: livePhotoVideoSrc,
+  processingState: livePhotoProcessingState,
+  load: loadLivePhoto,
+  onError: handleLivePhotoError,
+} = useLivePhotoSource(currentPhoto, () => props.isOpen)
+watch([currentTextureReady, () => props.isOpen], () => {
+  if (props.isOpen && currentTextureReady.value && canPrefetchLivePhoto())
+    void loadLivePhoto(true)
+})
 
 // 桌面端底部缩略图导航栏高度（lg：48px 缩略图 + 12px×2 内边距 + 1px 顶边框 = 73px）。
 // 非隐藏状态给图片舞台预留该底部空间，让主图显示区域在底栏上方收口，
@@ -107,8 +114,7 @@ const THUMBNAIL_BAR_HEIGHT = '73px'
 // 移动端仅「放大」收起底栏；展开信息卡片时底栏保持原样，由卡片自身更高层级(z-30)覆盖。
 const isBottomNavHidden = computed(
   () =>
-    isImageZoomed.value ||
-    (!isMobile.value && isDesktopInspectorVisible.value),
+    isImageZoomed.value || (!isMobile.value && isDesktopInspectorVisible.value),
 )
 const thumbBarBottomPad = computed(() =>
   isBottomNavHidden.value ? '0px' : THUMBNAIL_BAR_HEIGHT,
@@ -139,13 +145,6 @@ const prefetchNearby = () => {
 watch(() => props.currentIndex, prefetchNearby)
 onMounted(prefetchNearby)
 
-// LivePhoto processing state
-const livePhotoProcessingState = computed(() => {
-  return currentPhoto.value
-    ? getProcessingState(currentPhoto.value.id)
-    : ref(null)
-})
-
 // 当 PhotoViewer 关闭时重置状态
 watch(
   () => props.isOpen,
@@ -174,11 +173,6 @@ watch(
         clearTimeout(longPressTimer.value)
         longPressTimer.value = null
       }
-      if (livePhotoVideoBlobUrl.value) {
-        URL.revokeObjectURL(livePhotoVideoBlobUrl.value)
-        livePhotoVideoBlobUrl.value = null
-      }
-      livePhotoVideoBlob.value = null
 
       if (zoomLevelTimer.value) {
         clearTimeout(zoomLevelTimer.value)
@@ -188,10 +182,6 @@ watch(
       document.body.style.overflow = ''
     } else {
       document.body.style.overflow = 'hidden'
-      // Process current LivePhoto when viewer opens
-      nextTick(() => {
-        processCurrentLivePhoto()
-      })
     }
   },
   { immediate: true },
@@ -222,11 +212,6 @@ watch(
       clearTimeout(longPressTimer.value)
       longPressTimer.value = null
     }
-
-    // Process new current LivePhoto
-    nextTick(() => {
-      processCurrentLivePhoto()
-    })
   },
 )
 
@@ -314,40 +299,38 @@ const handleTextureReady = () => {
 }
 
 // LivePhoto processing and playback functions
-const processCurrentLivePhoto = async () => {
-  const photo = currentPhoto.value
-  if (!photo || !photo.isLivePhoto || !photo.livePhotoVideoUrl) return
-
+const playLivePhotoVideo = async () => {
+  const id = currentPhoto.value?.id
+  const url = await loadLivePhoto()
+  await nextTick()
+  if (
+    !url ||
+    !props.isOpen ||
+    currentPhoto.value?.id !== id ||
+    !(isLivePhotoHovering.value || isLivePhotoTouching.value)
+  )
+    return
+  const element = livePhotoVideoRef.value
+  if (!element) return
   try {
-    const blob = await convertMovToMp4(photo.livePhotoVideoUrl, photo.id)
-    if (blob) {
-      livePhotoVideoBlob.value = blob
-      // Clean up previous blob URL
-      if (livePhotoVideoBlobUrl.value) {
-        URL.revokeObjectURL(livePhotoVideoBlobUrl.value)
-      }
-      livePhotoVideoBlobUrl.value = URL.createObjectURL(blob)
+    element.currentTime = 0
+    await element.play()
+    if (
+      url !== livePhotoVideoSrc.value ||
+      !(isLivePhotoHovering.value || isLivePhotoTouching.value)
+    ) {
+      element.pause()
+      return
     }
-  } catch (error) {
-    console.error('Failed to process LivePhoto in viewer:', error)
+    isLivePhotoPlaying.value = true
+  } catch {
+    isLivePhotoPlaying.value = false
   }
 }
-
-const playLivePhotoVideo = () => {
-  if (!livePhotoVideoRef.value || !livePhotoVideoBlobUrl.value) return
-
-  livePhotoVideoRef.value.currentTime = 0
-  isLivePhotoPlaying.value = true
-
-  // Provide haptic feedback on mobile when starting playback
-  if (isMobile.value && 'vibrate' in navigator) {
-    navigator.vibrate(50) // Short vibration for start
-  }
-
-  livePhotoVideoRef.value?.play().catch((error: any) => {
-    console.warn('Failed to play LivePhoto video in viewer:', error)
-    isLivePhotoPlaying.value = false
-  })
+const handleLiveVideoPlaying = () => {
+  if (props.isOpen && (isLivePhotoHovering.value || isLivePhotoTouching.value))
+    isLivePhotoPlaying.value = true
+  else livePhotoVideoRef.value?.pause()
 }
 
 const stopLivePhotoVideo = () => {
@@ -355,7 +338,11 @@ const stopLivePhotoVideo = () => {
 
   if (livePhotoVideoRef.value && !livePhotoVideoRef.value.paused) {
     livePhotoVideoRef.value?.pause()
-    livePhotoVideoRef.value.currentTime = 0
+    try {
+      livePhotoVideoRef.value.currentTime = 0
+    } catch {
+      /* metadata not ready */
+    }
 
     // Provide haptic feedback on mobile when manually stopping playback
     if (isMobile.value && wasPlaying && 'vibrate' in navigator) {
@@ -367,13 +354,13 @@ const stopLivePhotoVideo = () => {
 
 const handleLivePhotoMouseEnter = () => {
   if (
-    !isMobile.value &&
-    currentPhoto.value?.isLivePhoto &&
-    livePhotoVideoBlobUrl.value
-  ) {
-    isLivePhotoHovering.value = true
-    playLivePhotoVideo()
-  }
+    isMobile.value ||
+    !currentPhoto.value?.isLivePhoto ||
+    !currentPhoto.value.livePhotoVideoUrl
+  )
+    return
+  isLivePhotoHovering.value = true
+  playLivePhotoVideo()
 }
 
 const handleLivePhotoMouseLeave = () => {
@@ -387,7 +374,7 @@ const handleLivePhotoTouchStart = (event: TouchEvent) => {
   if (
     isMobile.value &&
     currentPhoto.value?.isLivePhoto &&
-    livePhotoVideoBlobUrl.value
+    currentPhoto.value.livePhotoVideoUrl
   ) {
     touchCount.value = event.touches.length
 
@@ -466,7 +453,11 @@ const handleLivePhotoVideoEnded = () => {
 
   // Video ended naturally, keep it visible but reset to beginning
   if (livePhotoVideoRef.value) {
-    livePhotoVideoRef.value.currentTime = 0
+    try {
+      livePhotoVideoRef.value.currentTime = 0
+    } catch {
+      /* metadata not ready */
+    }
   }
 }
 
@@ -541,7 +532,8 @@ const handleReactionSelect = async (reactionId: string, iconName: string) => {
       toast.add({
         icon: 'tabler:alert-circle',
         title: $t('viewer.reaction.error.title'),
-        description: error instanceof Error ? error.message : $t('common.unknownError'),
+        description:
+          error instanceof Error ? error.message : $t('common.unknownError'),
         color: 'warning',
       })
     }
@@ -591,12 +583,6 @@ onUnmounted(() => {
   if (longPressTimer.value) {
     clearTimeout(longPressTimer.value)
     longPressTimer.value = null
-  }
-
-  // Clean up LivePhoto blob URL
-  if (livePhotoVideoBlobUrl.value) {
-    URL.revokeObjectURL(livePhotoVideoBlobUrl.value)
-    livePhotoVideoBlobUrl.value = null
   }
 })
 
@@ -770,7 +756,9 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
         <div class="relative h-full w-full">
           <!-- 图片显示区域 -->
           <div class="z-10 flex h-full min-h-0 min-w-0 flex-1 flex-col">
-            <div class="group/photo-viewer relative flex min-h-0 min-w-0 flex-1">
+            <div
+              class="group/photo-viewer relative flex min-h-0 min-w-0 flex-1"
+            >
               <!-- 顶部工具栏（afilmory 布局：左侧标题/信息按钮，右侧操作按钮） -->
               <motion.div
                 :initial="false"
@@ -792,7 +780,10 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                     :class="showExifPanel ? 'bg-black/50' : ''"
                     @click="showExifPanel = !showExifPanel"
                   >
-                    <Icon name="tabler:info-circle" class="size-5" />
+                    <Icon
+                      name="tabler:info-circle"
+                      class="size-5"
+                    />
                   </button>
 
                   <!-- 照片标题：不再在左上角显示（避免放大图被标题胶囊遮挡/显示文件名字） -->
@@ -803,7 +794,7 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                     :class="isMobile ? 'cursor-default' : 'cursor-pointer'"
                     :photo="currentPhoto"
                     :is-video-playing="isLivePhotoPlaying"
-                    :processing-state="livePhotoProcessingState?.value || null"
+                    :processing-state="livePhotoProcessingState"
                     @mouseenter="handleLivePhotoMouseEnter"
                     @mouseleave="handleLivePhotoMouseLeave"
                   />
@@ -850,358 +841,381 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                 <!-- 主图区域：图像加载仅保留 ProgressiveImage 自身「构建纹理」从模糊到清晰，
                      不再叠加外层缩略图兜底层，避免双重模糊 -->
 
-              <!-- Swiper 容器 -->
-              <Swiper
-                :modules="swiperModules"
-                :space-between="0"
-                :slides-per-view="1"
-                :initial-slide="currentIndex"
-                :virtual="true"
-                :keyboard="{
-                  enabled: true,
-                  onlyInViewport: true,
-                }"
-                class="h-full w-full"
-                :style="{ touchAction: isMobile ? 'pan-x' : 'pan-y' }"
-                @swiper="handleSwiperInit"
-                @slide-change="handleSlideChange"
-              >
-                <SwiperSlide
-                  v-for="(photo, index) in photos"
-                  :key="photo.id"
-                  :virtual-index="index"
-                  class="flex items-center justify-center"
+                <!-- Swiper 容器 -->
+                <Swiper
+                  :modules="swiperModules"
+                  :space-between="0"
+                  :slides-per-view="1"
+                  :initial-slide="currentIndex"
+                  :virtual="true"
+                  :keyboard="{
+                    enabled: true,
+                    onlyInViewport: true,
+                  }"
+                  class="h-full w-full"
+                  :style="{ touchAction: isMobile ? 'pan-x' : 'pan-y' }"
+                  @swiper="handleSwiperInit"
+                  @slide-change="handleSlideChange"
                 >
-                  <motion.div
-                    :initial="{ opacity: 0.5, scale: 0.95 }"
-                    :animate="{ opacity: 1, scale: 1 }"
-                    :exit="{ opacity: 0, scale: 0.95 }"
-                    :transition="SPRING_SMOOTH"
-                    class="relative flex h-full w-full items-center justify-center"
-                    style="
-                      user-select: none;
-                      -webkit-user-select: none;
-                      -webkit-touch-callout: none;
-                      -webkit-tap-highlight-color: transparent;
-                    "
-                    @touchstart="handleLivePhotoTouchStart"
-                    @touchmove="handleLivePhotoTouchMove"
-                    @touchend="handleLivePhotoTouchEnd"
-                    @touchcancel="handleLivePhotoTouchEnd"
-                    @contextmenu.prevent=""
+                  <SwiperSlide
+                    v-for="(photo, index) in photos"
+                    :key="photo.id"
+                    :virtual-index="index"
+                    class="flex items-center justify-center"
                   >
-                    <!-- 视频媒体（本地库视频） -->
-                    <video
-                      v-if="photo.type === 'video'"
-                      :src="photo.originalUrl!"
-                      class="h-full w-full object-contain transition-opacity duration-400"
-                      :poster="photo.thumbnailUrl || undefined"
-                      controls
-                      playsinline
-                      preload="metadata"
-                    ></video>
-
-                    <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
-                    <img
-                      v-else-if="isGifPhoto(photo)"
-                      :src="photo.originalUrl!"
-                      :alt="photo.title || ''"
-                      draggable="false"
-                      class="h-full w-full select-none object-contain transition-opacity duration-400"
-                      @load="index === currentIndex && handleImageLoaded()"
-                    />
-
-                    <!-- Main Image -->
-                    <ProgressiveImage
-                      v-else
-                      class="h-full w-full object-contain transition-opacity duration-400"
-                      :class="{
-                        'opacity-0':
-                          isLivePhotoPlaying && currentPhoto?.isLivePhoto,
-                      }"
-                      :refit-key="imageRefitKey"
-                      :loading-indicator-ref="loadingIndicatorRef || null"
-                      :is-current-image="index === currentIndex"
-                      :src="photo.originalUrl!"
-                      :thumbnail-src="photo.thumbnailUrl!"
-                      :thumbhash="photo.thumbnailHash"
-                      :show-thumb-placeholder="isMobile"
-                      :alt="photo.title || ''"
-                      :width="
-                        index === currentIndex
-                          ? (currentPhoto?.width ?? undefined)
-                          : undefined
+                    <motion.div
+                      :initial="{ opacity: 0.5, scale: 0.95 }"
+                      :animate="{ opacity: 1, scale: 1 }"
+                      :exit="{ opacity: 0, scale: 0.95 }"
+                      :transition="SPRING_SMOOTH"
+                      class="relative flex h-full w-full items-center justify-center"
+                      style="
+                        user-select: none;
+                        -webkit-user-select: none;
+                        -webkit-touch-callout: none;
+                        -webkit-tap-highlight-color: transparent;
                       "
-                      :height="
-                        index === currentIndex
-                          ? (currentPhoto?.height ?? undefined)
-                          : undefined
-                      "
-                      :enable-pan="
-                        index === currentIndex
-                          ? !isMobile || isImageZoomed
-                          : true
-                      "
-                      :enable-zoom="true"
-                      :on-zoom-change="
-                        index === currentIndex ? handleZoomChange : undefined
-                      "
-                      :on-blob-src-change="
-                        index === currentIndex ? handleBlobSrcChange : undefined
-                      "
-                      :on-image-loaded="
-                        index === currentIndex ? handleImageLoaded : undefined
-                      "
-                      :on-texture-ready="
-                        index === currentIndex
-                          ? handleTextureReady
-                          : undefined
-                      "
-                      :is-live-photo="photo.isLivePhoto === 1"
-                      :live-photo-video-url="
-                        photo.livePhotoVideoUrl || undefined
-                      "
-                    />
-
-                    <!-- LivePhoto Video -->
-                    <motion.video
-                      v-if="
-                        photo.isLivePhoto &&
-                        index === currentIndex &&
-                        livePhotoVideoBlobUrl
-                      "
-                      :ref="
-                        (el) => {
-                          if (index === currentIndex) livePhotoVideoRef = el
-                        }
-                      "
-                      :src="livePhotoVideoBlobUrl"
-                      class="absolute inset-0 w-full h-full object-contain pointer-events-none select-none touch-none"
-                      :muted="isLivePhotoMuted"
-                      playsinline
-                      preload="metadata"
-                      :initial="{ opacity: 0 }"
-                      :animate="{
-                        opacity: isLivePhotoPlaying ? 1 : 0,
-                      }"
-                      :transition="{
-                        duration: 0.4,
-                        ease: [0.25, 0.1, 0.25, 1],
-                        delay: isLivePhotoPlaying ? 0.1 : 0,
-                      }"
-                      @ended="handleLivePhotoVideoEnded"
+                      @touchstart="handleLivePhotoTouchStart"
+                      @touchmove="handleLivePhotoTouchMove"
+                      @touchend="handleLivePhotoTouchEnd"
+                      @touchcancel="handleLivePhotoTouchEnd"
                       @contextmenu.prevent=""
-                    />
-
-                    <PhotoFaceLayer
-                      v-if="index === currentIndex && photo.type !== 'video'"
-                      :photo-id="photo.id"
-                      :image-width="photo.width"
-                      :image-height="photo.height"
-                      :hidden="isImageZoomed || isLivePhotoPlaying"
-                    />
-
-                    <!-- 缩放倍率提示 -->
-                    <AnimatePresence>
-                      <motion.div
-                        v-if="showZoomLevel && zoomLevel > 0"
-                        :initial="{ opacity: 0, y: 10 }"
-                        :animate="{ opacity: 1, y: 0 }"
-                        :exit="{ opacity: 0, y: 10 }"
-                        :transition="{ duration: 0.2 }"
-                        class="absolute bottom-4 left-4 z-20 bg-black/40 backdrop-blur-3xl rounded-xl border border-white/10 px-4 py-2 shadow-2xl"
-                      >
-                        <span class="text-white font-medium"
-                          >{{ Number(zoomLevel).toFixed(1) }}x</span
-                        >
-                      </motion.div>
-                    </AnimatePresence>
-
-                    <!-- 操作提示 -->
-                    <AnimatePresence>
-                      <motion.div
-                        v-if="!isImageZoomed && !isLivePhotoPlaying"
-                        :initial="{ opacity: 0, scale: 0.95 }"
-                        :animate="{ opacity: 0.6, scale: 1 }"
-                        :exit="{ opacity: 0, scale: 0.95 }"
-                        :transition="{ duration: 0.2 }"
-                        class="absolute bottom-6 left-1/2 z-20 -translate-x-1/2 bg-black/50 rounded-lg border border-white/10 px-2 py-1 shadow-2xl text-white text-xs font-bold"
-                      >
-                        <span v-if="currentPhoto?.isLivePhoto && isMobile">
-                          {{ $t('viewer.hint.livePhoto.mobile') }}
-                        </span>
-                        <span
-                          v-else-if="currentPhoto?.isLivePhoto && !isMobile"
-                        >
-                          {{ $t('viewer.hint.livePhoto.desktop') }}
-                        </span>
-                        <span v-else>
-                          {{
-                            isMobile
-                              ? $t('viewer.hint.mobile')
-                              : $t('viewer.hint.desktop')
-                          }}
-                        </span>
-                      </motion.div>
-                    </AnimatePresence>
-
-                    <!-- 表态按钮 -->
-                    <AnimatePresence>
-                      <motion.div
-                        v-if="
-                          !isImageZoomed &&
-                          !isLivePhotoPlaying &&
-                          currentTextureReady
-                        "
-                        :initial="{ opacity: 0, scale: 0.8, y: 20 }"
-                        :animate="{ opacity: 1, scale: 1, y: 0 }"
-                        :exit="{ opacity: 0, scale: 0.8, y: 20 }"
-                        :transition="{
-                          type: 'spring',
-                          stiffness: 300,
-                          damping: 20,
-                          delay: 0.1,
-                        }"
-                        class="absolute bottom-4 right-4 z-20"
-                      >
-                        <div class="relative">
-                          <!-- 表态选择器 -->
-                          <ReactionPicker
-                            :is-open="showReactionPicker"
-                            :trigger-el="reactionButtonRef"
-                            :selected-reaction="selectedReaction"
-                            :reaction-counts="reactionCounts"
-                            @select="handleReactionSelect"
-                            @close="showReactionPicker = false"
-                          />
-
-                          <!-- 礼花效果 -->
-                          <ReactionConfetti
-                            v-if="confettiIcon"
-                            :icon-name="confettiIcon"
-                            :trigger-count="confettiTriggerCount"
-                          />
-
-                          <!-- 表态按钮 -->
-                          <motion.button
-                            ref="reactionButtonRef"
-                            type="button"
-                            :initial="{ scale: 0.8, opacity: 0 }"
-                            :animate="{
-                              scale: showReactionPicker ? 0.92 : 1,
-                              opacity: 1,
-                              transition: showReactionPicker
-                                ? { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }
-                                : {
-                                    type: 'spring',
-                                    stiffness: 300,
-                                    damping: 25,
-                                    mass: 0.8,
-                                  },
-                            }"
-                            :while-hover="{
-                              scale: showReactionPicker ? 0.95 : 1.05,
-                            }"
-                            :while-tap="{ scale: 0.88 }"
-                            :class="[
-                              'pointer-events-auto flex items-center justify-center gap-2 cursor-pointer',
-                              'px-4 h-11 rounded-full',
-                              'backdrop-blur-xl border shadow-lg',
-                              'transition-all duration-200',
-                              selectedReaction
-                                ? 'bg-blue-500/90 border-blue-400/50 text-white shadow-blue-500/30'
-                                : 'bg-white/90 dark:bg-neutral-800/90 border-neutral-200/50 dark:border-white/10 text-neutral-700 dark:text-white/80 shadow-black/10 dark:shadow-black/30',
-                              'hover:shadow-xl',
-                            ]"
-                            @pointerdown="handleReactionButtonPointerDown"
-                            @click="toggleReactionPicker"
-                          >
-                            <Icon
-                              v-if="selectedReaction && currentReactionIcon"
-                              :name="currentReactionIcon"
-                              class="text-xl leading-none select-none"
-                            />
-                            <Icon
-                              v-else
-                              name="tabler:mood-smile"
-                              class="text-xl"
-                            />
-                            <div class="flex flex-col items-start gap-0.5">
-                              <span class="text-sm font-medium leading-none">
-                                {{
-                                  selectedReaction
-                                    ? $t('viewer.reaction.change')
-                                    : $t('viewer.reaction.add')
-                                }}
-                              </span>
-                              <span
-                                v-if="totalReactions > 0"
-                                class="text-[10px] leading-none opacity-70"
-                              >
-                                {{
-                                  $t(
-                                    'viewer.reaction.count',
-                                    { count: totalReactions },
-                                    totalReactions,
-                                  )
-                                }}
-                              </span>
-                            </div>
-                          </motion.button>
-                        </div>
-                      </motion.div>
-                    </AnimatePresence>
-
-                    <!-- 分享 / 关闭：与 afilmory 同步，悬浮在照片内部右上角（在图片舞台内、
-                         随舞台收缩/展开 自适应移动，不开在信息侧栏上） -->
-                    <div
-                      v-if="index === currentIndex && !isImageZoomed"
-                      class="absolute top-4 right-4 z-30 flex items-center gap-2 pointer-events-auto"
                     >
-                      <!-- 展开/收起信息面板 - 桌面端（右上角） -->
-                      <button
-                        v-if="!isMobile"
-                        type="button"
-                        :aria-label="
-                          isDesktopInspectorVisible ? 'collapse info' : 'expand info'
-                        "
-                        class="flex size-8 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm duration-200 hover:bg-black/50"
-                        @click="isDesktopInspectorVisible = !isDesktopInspectorVisible"
-                      >
-                        <Icon
-                          :name="
-                            isDesktopInspectorVisible
-                              ? 'tabler:layout-sidebar-right-collapse'
-                              : 'tabler:layout-sidebar-right-expand'
-                          "
-                          class="size-4.5"
-                        />
-                      </button>
+                      <!-- 视频媒体（本地库视频） -->
+                      <video
+                        v-if="photo.type === 'video'"
+                        :src="photo.originalUrl!"
+                        class="h-full w-full object-contain transition-opacity duration-400"
+                        :poster="photo.thumbnailUrl || undefined"
+                        controls
+                        playsinline
+                        preload="metadata"
+                      ></video>
 
-                      <button
-                        type="button"
-                        aria-label="share photo"
-                        :title="$t('viewer.share')"
-                        class="flex items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
-                        :class="isMobile ? 'size-9' : 'size-8'"
-                        @click="showShareModal = true"
+                      <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
+                      <img
+                        v-else-if="isGifPhoto(photo)"
+                        :src="photo.originalUrl!"
+                        :alt="photo.title || ''"
+                        draggable="false"
+                        class="h-full w-full select-none object-contain transition-opacity duration-400"
+                        @load="index === currentIndex && handleImageLoaded()"
+                      />
+
+                      <!-- Main Image -->
+                      <ProgressiveImage
+                        v-else
+                        class="h-full w-full object-contain transition-opacity duration-400"
+                        :class="{
+                          'opacity-0':
+                            isLivePhotoPlaying && currentPhoto?.isLivePhoto,
+                        }"
+                        :refit-key="imageRefitKey"
+                        :loading-indicator-ref="loadingIndicatorRef || null"
+                        :is-current-image="index === currentIndex"
+                        :src="photo.originalUrl!"
+                        :thumbnail-src="photo.thumbnailUrl!"
+                        :thumbhash="photo.thumbnailHash"
+                        :show-thumb-placeholder="isMobile"
+                        :alt="photo.title || ''"
+                        :width="
+                          index === currentIndex
+                            ? (currentPhoto?.width ?? undefined)
+                            : undefined
+                        "
+                        :height="
+                          index === currentIndex
+                            ? (currentPhoto?.height ?? undefined)
+                            : undefined
+                        "
+                        :enable-pan="
+                          index === currentIndex
+                            ? !isMobile || isImageZoomed
+                            : true
+                        "
+                        :enable-zoom="true"
+                        :on-zoom-change="
+                          index === currentIndex ? handleZoomChange : undefined
+                        "
+                        :on-blob-src-change="
+                          index === currentIndex
+                            ? handleBlobSrcChange
+                            : undefined
+                        "
+                        :on-image-loaded="
+                          index === currentIndex ? handleImageLoaded : undefined
+                        "
+                        :on-texture-ready="
+                          index === currentIndex
+                            ? handleTextureReady
+                            : undefined
+                        "
+                        :is-live-photo="photo.isLivePhoto === 1"
+                        :live-photo-video-url="
+                          photo.livePhotoVideoUrl || undefined
+                        "
+                      />
+
+                      <!-- LivePhoto Video -->
+                      <motion.video
+                        v-if="
+                          photo.isLivePhoto &&
+                          index === currentIndex &&
+                          livePhotoVideoSrc
+                        "
+                        :ref="
+                          (el) => {
+                            if (index === currentIndex) livePhotoVideoRef = el
+                          }
+                        "
+                        :src="livePhotoVideoSrc || undefined"
+                        class="absolute inset-0 w-full h-full object-contain pointer-events-none select-none touch-none"
+                        :muted="isLivePhotoMuted"
+                        playsinline
+                        preload="metadata"
+                        :initial="{ opacity: 0 }"
+                        :animate="{
+                          opacity: isLivePhotoPlaying ? 1 : 0,
+                        }"
+                        :transition="{
+                          duration: 0.4,
+                          ease: [0.25, 0.1, 0.25, 1],
+                          delay: isLivePhotoPlaying ? 0.1 : 0,
+                        }"
+                        @playing="handleLiveVideoPlaying"
+                        @error="
+                          (event) => {
+                            isLivePhotoPlaying = false
+                            handleLivePhotoError(event)
+                          }
+                        "
+                        @ended="handleLivePhotoVideoEnded"
+                        @contextmenu.prevent=""
+                      />
+
+                      <PhotoFaceLayer
+                        v-if="index === currentIndex && photo.type !== 'video'"
+                        :photo-id="photo.id"
+                        :image-width="photo.width"
+                        :image-height="photo.height"
+                        :hidden="isImageZoomed || isLivePhotoPlaying"
+                      />
+
+                      <!-- 缩放倍率提示 -->
+                      <AnimatePresence>
+                        <motion.div
+                          v-if="showZoomLevel && zoomLevel > 0"
+                          :initial="{ opacity: 0, y: 10 }"
+                          :animate="{ opacity: 1, y: 0 }"
+                          :exit="{ opacity: 0, y: 10 }"
+                          :transition="{ duration: 0.2 }"
+                          class="absolute bottom-4 left-4 z-20 bg-black/40 backdrop-blur-3xl rounded-xl border border-white/10 px-4 py-2 shadow-2xl"
+                        >
+                          <span class="text-white font-medium"
+                            >{{ Number(zoomLevel).toFixed(1) }}x</span
+                          >
+                        </motion.div>
+                      </AnimatePresence>
+
+                      <!-- 操作提示 -->
+                      <AnimatePresence>
+                        <motion.div
+                          v-if="!isImageZoomed && !isLivePhotoPlaying"
+                          :initial="{ opacity: 0, scale: 0.95 }"
+                          :animate="{ opacity: 0.6, scale: 1 }"
+                          :exit="{ opacity: 0, scale: 0.95 }"
+                          :transition="{ duration: 0.2 }"
+                          class="absolute bottom-6 left-1/2 z-20 -translate-x-1/2 bg-black/50 rounded-lg border border-white/10 px-2 py-1 shadow-2xl text-white text-xs font-bold"
+                        >
+                          <span v-if="currentPhoto?.isLivePhoto && isMobile">
+                            {{ $t('viewer.hint.livePhoto.mobile') }}
+                          </span>
+                          <span
+                            v-else-if="currentPhoto?.isLivePhoto && !isMobile"
+                          >
+                            {{ $t('viewer.hint.livePhoto.desktop') }}
+                          </span>
+                          <span v-else>
+                            {{
+                              isMobile
+                                ? $t('viewer.hint.mobile')
+                                : $t('viewer.hint.desktop')
+                            }}
+                          </span>
+                        </motion.div>
+                      </AnimatePresence>
+
+                      <!-- 表态按钮 -->
+                      <AnimatePresence>
+                        <motion.div
+                          v-if="
+                            !isImageZoomed &&
+                            !isLivePhotoPlaying &&
+                            currentTextureReady
+                          "
+                          :initial="{ opacity: 0, scale: 0.8, y: 20 }"
+                          :animate="{ opacity: 1, scale: 1, y: 0 }"
+                          :exit="{ opacity: 0, scale: 0.8, y: 20 }"
+                          :transition="{
+                            type: 'spring',
+                            stiffness: 300,
+                            damping: 20,
+                            delay: 0.1,
+                          }"
+                          class="absolute bottom-4 right-4 z-20"
+                        >
+                          <div class="relative">
+                            <!-- 表态选择器 -->
+                            <ReactionPicker
+                              :is-open="showReactionPicker"
+                              :trigger-el="reactionButtonRef"
+                              :selected-reaction="selectedReaction"
+                              :reaction-counts="reactionCounts"
+                              @select="handleReactionSelect"
+                              @close="showReactionPicker = false"
+                            />
+
+                            <!-- 礼花效果 -->
+                            <ReactionConfetti
+                              v-if="confettiIcon"
+                              :icon-name="confettiIcon"
+                              :trigger-count="confettiTriggerCount"
+                            />
+
+                            <!-- 表态按钮 -->
+                            <motion.button
+                              ref="reactionButtonRef"
+                              type="button"
+                              :initial="{ scale: 0.8, opacity: 0 }"
+                              :animate="{
+                                scale: showReactionPicker ? 0.92 : 1,
+                                opacity: 1,
+                                transition: showReactionPicker
+                                  ? {
+                                      duration: 0.2,
+                                      ease: [0.25, 0.1, 0.25, 1],
+                                    }
+                                  : {
+                                      type: 'spring',
+                                      stiffness: 300,
+                                      damping: 25,
+                                      mass: 0.8,
+                                    },
+                              }"
+                              :while-hover="{
+                                scale: showReactionPicker ? 0.95 : 1.05,
+                              }"
+                              :while-tap="{ scale: 0.88 }"
+                              :class="[
+                                'pointer-events-auto flex items-center justify-center gap-2 cursor-pointer',
+                                'px-4 h-11 rounded-full',
+                                'backdrop-blur-xl border shadow-lg',
+                                'transition-all duration-200',
+                                selectedReaction
+                                  ? 'bg-blue-500/90 border-blue-400/50 text-white shadow-blue-500/30'
+                                  : 'bg-white/90 dark:bg-neutral-800/90 border-neutral-200/50 dark:border-white/10 text-neutral-700 dark:text-white/80 shadow-black/10 dark:shadow-black/30',
+                                'hover:shadow-xl',
+                              ]"
+                              @pointerdown="handleReactionButtonPointerDown"
+                              @click="toggleReactionPicker"
+                            >
+                              <Icon
+                                v-if="selectedReaction && currentReactionIcon"
+                                :name="currentReactionIcon"
+                                class="text-xl leading-none select-none"
+                              />
+                              <Icon
+                                v-else
+                                name="tabler:mood-smile"
+                                class="text-xl"
+                              />
+                              <div class="flex flex-col items-start gap-0.5">
+                                <span class="text-sm font-medium leading-none">
+                                  {{
+                                    selectedReaction
+                                      ? $t('viewer.reaction.change')
+                                      : $t('viewer.reaction.add')
+                                  }}
+                                </span>
+                                <span
+                                  v-if="totalReactions > 0"
+                                  class="text-[10px] leading-none opacity-70"
+                                >
+                                  {{
+                                    $t(
+                                      'viewer.reaction.count',
+                                      { count: totalReactions },
+                                      totalReactions,
+                                    )
+                                  }}
+                                </span>
+                              </div>
+                            </motion.button>
+                          </div>
+                        </motion.div>
+                      </AnimatePresence>
+
+                      <!-- 分享 / 关闭：与 afilmory 同步，悬浮在照片内部右上角（在图片舞台内、
+                         随舞台收缩/展开 自适应移动，不开在信息侧栏上） -->
+                      <div
+                        v-if="index === currentIndex && !isImageZoomed"
+                        class="absolute top-4 right-4 z-30 flex items-center gap-2 pointer-events-auto"
                       >
-                        <Icon name="tabler:share-3" class="size-4.5" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="close"
-                        :title="$t('viewer.close')"
-                        class="flex items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
-                        :class="isMobile ? 'size-9' : 'size-8'"
-                        @click="emit('close')"
-                      >
-                        <Icon name="tabler:x" class="size-4.5" />
-                      </button>
-                    </div>
-                  </motion.div>
-                </SwiperSlide>
-              </Swiper>
+                        <!-- 展开/收起信息面板 - 桌面端（右上角） -->
+                        <button
+                          v-if="!isMobile"
+                          type="button"
+                          :aria-label="
+                            isDesktopInspectorVisible
+                              ? 'collapse info'
+                              : 'expand info'
+                          "
+                          class="flex size-8 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm duration-200 hover:bg-black/50"
+                          @click="
+                            isDesktopInspectorVisible =
+                              !isDesktopInspectorVisible
+                          "
+                        >
+                          <Icon
+                            :name="
+                              isDesktopInspectorVisible
+                                ? 'tabler:layout-sidebar-right-collapse'
+                                : 'tabler:layout-sidebar-right-expand'
+                            "
+                            class="size-4.5"
+                          />
+                        </button>
+
+                        <button
+                          type="button"
+                          aria-label="share photo"
+                          :title="$t('viewer.share')"
+                          class="flex items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
+                          :class="isMobile ? 'size-9' : 'size-8'"
+                          @click="showShareModal = true"
+                        >
+                          <Icon
+                            name="tabler:share-3"
+                            class="size-4.5"
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="close"
+                          :title="$t('viewer.close')"
+                          class="flex items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition-colors hover:bg-black/50"
+                          :class="isMobile ? 'size-9' : 'size-8'"
+                          @click="emit('close')"
+                        >
+                          <Icon
+                            name="tabler:x"
+                            class="size-4.5"
+                          />
+                        </button>
+                      </div>
+                    </motion.div>
+                  </SwiperSlide>
+                </Swiper>
 
                 <!-- 自定义导航按钮 (桌面端) -->
                 <template v-if="!isMobile">
@@ -1234,8 +1248,8 @@ onUnmounted(() => window.removeEventListener('resize', handleWindowResizeRefit))
                     />
                   </button>
                 </template>
-                </div>
               </div>
+            </div>
 
             <!-- 缩略图导航：绝对定位悬浮于底部，放大时隐藏且不改变图片舞台布局（消除“被拉一下”的跳变）。
              保留组件自带的上滑/下滑动画；外层 pointer-events-none，仅缩略图本体可点击 -->

@@ -372,6 +372,24 @@ export default defineNuxtConfig({
   icon: {
     clientBundle: {
       scan: true,
+      // 动态 :name（composables / 定义表）scan 扫不到；fallbackToApi=false 时必须显式打进包。
+      icons: [
+        'fluent-emoji-flat:thumbs-up',
+        'fluent-emoji-flat:red-heart',
+        'fluent-emoji-flat:smiling-face-with-heart-eyes',
+        'fluent-emoji-flat:face-with-tears-of-joy',
+        'fluent-emoji-flat:face-with-open-mouth',
+        'fluent-emoji-flat:crying-face',
+        'fluent-emoji-flat:fire',
+        'fluent-emoji-flat:sparkles',
+        // usePhotoSort.ts
+        'tabler:sort-descending',
+        'tabler:sort-ascending',
+        'tabler:sort-ascending-small-big',
+        'tabler:sort-descending-small-big',
+        'tabler:sort-ascending-letters',
+        'tabler:sort-descending-letters',
+      ],
     },
     // 只使用本地已安装的 iconify 集合（@iconify-json/*），绝不回退到 Iconify API 联网拉取
     fallbackToApi: false,

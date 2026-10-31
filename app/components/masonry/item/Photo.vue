@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { motion, useDomRef } from 'motion-v'
+import { useLivePhotoSource } from '~/composables/useLivePhotoSource'
+import { canPrefetchLivePhoto } from '~/composables/useLivePhotoProcessor'
 import { isPanorama } from '~/utils/panorama'
 
 interface Props {
@@ -39,11 +41,6 @@ const containerWidth = ref(0)
 
 const isHovering = ref(false)
 const isVideoPlaying = ref(false)
-const isVideoLoaded = ref(false)
-const videoBlob = ref<Blob | null>(null)
-const videoBlobUrl = ref<string | null>(null)
-const { convertMovToMp4, scheduleBackgroundLivePhoto, getProcessingState } =
-  useLivePhotoProcessor()
 const livePhotoQueued = ref(false)
 
 const isTouching = ref(false)
@@ -62,7 +59,18 @@ const cardRadius = computed(() => {
 
 const intersectionObserverRef = ref<IntersectionObserver | null>(null)
 
-const processingState = getProcessingState(props.photo.id)
+const {
+  src: liveVideoSrc,
+  processingState,
+  load: loadLivePhoto,
+  onError: handleLivePhotoError,
+} = useLivePhotoSource(
+  () => props.photo,
+  () => isVisible.value || isHovering.value || isTouching.value,
+)
+const hasLivePhoto = computed(() =>
+  Boolean(props.photo.isLivePhoto && props.photo.livePhotoVideoUrl),
+)
 
 const aspectRatio = computed(() => {
   // Priority 1: Use aspectRatio from photo data if available (width/height)
@@ -102,7 +110,10 @@ const exifItems = computed<{ icon: string; text: string }[]>(() => {
     items.push({ icon: 'tabler:aperture', text: `f/${exif.FNumber}` })
   }
   if (exif?.ExposureTime) {
-    items.push({ icon: 'carbon:time', text: formatExposureTime(exif.ExposureTime) })
+    items.push({
+      icon: 'carbon:time',
+      text: formatExposureTime(exif.ExposureTime),
+    })
   }
   if (exif?.ISO) {
     items.push({ icon: 'carbon:iso-outline', text: `ISO ${exif.ISO}` })
@@ -155,14 +166,12 @@ const shouldShowInfoOverlay = computed(() => {
 
   // On desktop, show overlay when hovering but not playing video
   if (!isHovering.value) return true
-  if (isVideoPlaying.value) return false
-  return isVideoLoaded.value
+  return !isVideoPlaying.value
 })
 
 // Methods
 const handleImageLoad = () => {
   isLoading.value = false
-  queueLivePhotoAfterStill()
 }
 
 const handleImageError = () => {
@@ -170,26 +179,59 @@ const handleImageError = () => {
   console.warn(`Failed to load image: ${props.photo.thumbnailUrl}`)
 }
 
-// LivePhoto video handling - 优化的交互逻辑
+// 恢复旧版：下载完成后只把本地 Blob URL 挂到 video。
+const ensureLiveVideoMounted = async () => {
+  if (!hasLivePhoto.value || !(await loadLivePhoto())) return false
+  await nextTick()
+  return Boolean(videoRef.value)
+}
+
+const queueLivePhotoAfterStill = () => {
+  if (
+    livePhotoQueued.value ||
+    isLoading.value ||
+    !isVisible.value ||
+    !hasLivePhoto.value ||
+    !canPrefetchLivePhoto()
+  )
+    return
+  livePhotoQueued.value = true
+  const run = () => {
+    if (!isVisible.value) {
+      livePhotoQueued.value = false
+      return
+    }
+    void loadLivePhoto(true)
+  }
+  if (typeof requestIdleCallback === 'function')
+    requestIdleCallback(run, { timeout: 2000 })
+  else setTimeout(run, 400)
+}
+watch([isVisible, isLoading], () => {
+  if (!isVisible.value) {
+    livePhotoQueued.value = false
+    isVideoPlaying.value = false
+  } else queueLivePhotoAfterStill()
+})
+watch(
+  () => props.photo.id,
+  () => {
+    livePhotoQueued.value = false
+    isVideoPlaying.value = false
+  },
+)
+
 const handleMouseEnter = async () => {
-  // Skip mouse events on mobile devices
   if (isMobile.value) return
 
   isHovering.value = true
+  if (!hasLivePhoto.value) return
 
-  if (!props.photo.isLivePhoto || !props.photo.livePhotoVideoUrl) return
-
-  // 如果视频已准备好，立即播放
-  if (videoBlob.value && videoBlobUrl.value && isVideoLoaded.value) {
-    playLivePhotoVideo()
-  } else if (!processingState.value?.isProcessing) {
-    // 如果视频还未处理，立即开始处理
-    processLivePhotoWhenVisible()
-  }
+  if (!(await ensureLiveVideoMounted()) || !isHovering.value) return
+  void playLivePhotoVideo()
 }
 
 const handleMouseLeave = () => {
-  // Skip mouse events on mobile devices
   if (isMobile.value) return
 
   isHovering.value = false
@@ -198,77 +240,42 @@ const handleMouseLeave = () => {
     videoRef.value.currentTime = 0
   }
 
-  // Use a slight delay for smoother transition when mouse leaves
   setTimeout(() => {
     if (!isHovering.value && !isTouching.value) {
-      // Also check touching state
       isVideoPlaying.value = false
     }
   }, 150)
 }
 
-const playLivePhotoVideo = () => {
-  if (!videoRef.value || !videoBlobUrl.value) return
-
-  // 预加载视频以确保流畅播放
-  if (videoRef.value.readyState < 2) {
-    videoRef.value.load()
-  }
-
-  // 确保视频从头开始播放
-  videoRef.value.currentTime = 0
-
-  // 添加播放前的准备动画
-  isVideoPlaying.value = true
-
-  // Provide haptic feedback on mobile when starting playback
-  if (isMobile.value && 'vibrate' in navigator) {
-    navigator.vibrate(50) // Short vibration for start
-  }
-
-  // 延迟播放以确保动画状态已设置
-  nextTick(() => {
-    if (!videoRef.value || !isVideoPlaying.value) return
-
-    // 设置视频播放属性
-    videoRef.value.muted = true // 确保静音播放
-    videoRef.value.playsInline = true
-
-    // 立即尝试播放，使用更好的错误处理
-    const playPromise = videoRef.value.play()
-
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          // 播放成功，确保状态正确
-          if (videoRef.value && !videoRef.value.paused) {
-            // 视频播放成功，状态已正确设置
-          }
-        })
-        .catch((error: any) => {
-          console.warn('Failed to play LivePhoto video:', error)
-          isVideoPlaying.value = false
-
-          // 如果是因为用户交互策略导致的失败，尝试重新加载
-          if (error.name === 'NotAllowedError') {
-            console.log('Video play blocked by browser policy, retrying...')
-            if (videoRef.value) {
-              videoRef.value.load()
-              setTimeout(() => {
-                if (videoRef.value && isVideoPlaying.value) {
-                  const retryPromise = videoRef.value.play()
-                  if (retryPromise !== undefined) {
-                    retryPromise.catch(() => {
-                      isVideoPlaying.value = false
-                    })
-                  }
-                }
-              }, 100)
-            }
-          }
-        })
+const playLivePhotoVideo = async () => {
+  if (
+    !videoRef.value ||
+    !liveVideoSrc.value ||
+    !(isHovering.value || isTouching.value)
+  )
+    return
+  const element = videoRef.value
+  const source = liveVideoSrc.value
+  element.muted = true
+  element.playsInline = true
+  try {
+    element.currentTime = 0
+    await element.play()
+    if (
+      source !== liveVideoSrc.value ||
+      !(isHovering.value || isTouching.value)
+    ) {
+      element.pause()
+      return
     }
-  })
+    isVideoPlaying.value = true
+  } catch {
+    isVideoPlaying.value = false
+  }
+}
+const handleLiveVideoPlaying = () => {
+  if (isHovering.value || isTouching.value) isVideoPlaying.value = true
+  else videoRef.value?.pause()
 }
 
 const handleVideoEnded = () => {
@@ -285,7 +292,7 @@ const handleVideoEnded = () => {
 
 // Mobile touch handlers for LivePhoto
 const handleTouchStart = (event: TouchEvent) => {
-  if (!isMobile.value || !props.photo.isLivePhoto || !videoBlobUrl.value) return
+  if (!isMobile.value || !hasLivePhoto.value) return
 
   touchCount.value = event.touches.length
 
@@ -296,12 +303,11 @@ const handleTouchStart = (event: TouchEvent) => {
       initialTouchPos.value = { x: touch.clientX, y: touch.clientY }
       isTouching.value = true
 
-      // Set a timer for long press (350ms)
       longPressTimer.value = setTimeout(() => {
-        // Double check: only play if still single touch and touching
-        if (isTouching.value && touchCount.value === 1) {
-          playLivePhotoVideo()
-        }
+        if (!(isTouching.value && touchCount.value === 1)) return
+        void ensureLiveVideoMounted().then((ok) => {
+          if (ok && isTouching.value) playLivePhotoVideo()
+        })
       }, 350)
     }
   }
@@ -391,90 +397,6 @@ const handleClick = (event: Event) => {
   emit('openViewer', props.index)
 }
 
-// 静图出来之后，等浏览器空闲再排队下载动态短视频。慢网或省流时不预取，避免和缩略图抢带宽。
-const queueLivePhotoAfterStill = () => {
-  if (
-    livePhotoQueued.value ||
-    isLoading.value ||
-    !isVisible.value ||
-    !props.photo.isLivePhoto ||
-    !props.photo.livePhotoVideoUrl
-  ) {
-    return
-  }
-  const connection = (
-    navigator as Navigator & {
-      connection?: { saveData?: boolean; effectiveType?: string }
-    }
-  ).connection
-  if (
-    connection?.saveData ||
-    connection?.effectiveType === 'slow-2g' ||
-    connection?.effectiveType === '2g' ||
-    connection?.effectiveType === '3g'
-  ) {
-    return
-  }
-  livePhotoQueued.value = true
-  const photoId = props.photo.id
-  const videoUrl = props.photo.livePhotoVideoUrl
-  const run = () => {
-    if (!isVisible.value) {
-      livePhotoQueued.value = false
-      return
-    }
-    scheduleBackgroundLivePhoto(videoUrl, photoId).then((blob) => {
-      if (!blob || props.photo.id !== photoId) return
-      videoBlob.value = blob
-      if (videoBlobUrl.value) URL.revokeObjectURL(videoBlobUrl.value)
-      videoBlobUrl.value = URL.createObjectURL(blob)
-      isVideoLoaded.value = true
-      videoRef.value?.load()
-    })
-  }
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(run, { timeout: 2000 })
-  } else {
-    setTimeout(run, 400)
-  }
-}
-
-// 智能LivePhoto处理：悬停时立即加载，不等后台队列
-const processLivePhotoWhenVisible = async () => {
-  if (
-    !props.photo.isLivePhoto ||
-    !props.photo.livePhotoVideoUrl ||
-    !isVisible.value
-  )
-    return
-
-  try {
-    // 使用优化的转换函数，支持重试和缓存
-    const blob = await convertMovToMp4(
-      props.photo.livePhotoVideoUrl,
-      props.photo.id,
-    )
-
-    if (blob) {
-      videoBlob.value = blob
-      // Clean up previous blob URL
-      if (videoBlobUrl.value) {
-        URL.revokeObjectURL(videoBlobUrl.value)
-      }
-      videoBlobUrl.value = URL.createObjectURL(blob)
-      isVideoLoaded.value = true
-
-      // 预热视频元素以提高播放性能
-      if (videoRef.value) {
-        videoRef.value.load()
-      }
-    }
-  } catch (error) {
-    console.error('Failed to process LivePhoto:', error)
-    // 错误状态会通过processingState反映出来
-  }
-}
-
 const formatExposureTime = (
   exposureTime: string | number | undefined,
 ): string => {
@@ -538,10 +460,6 @@ onMounted(() => {
                 isVisible: newVisibility,
                 date: props.photo.dateTaken || new Date().toISOString(),
               })
-
-              if (newVisibility && !isLoading.value) {
-                queueLivePhotoAfterStill()
-              }
             }
           })
         },
@@ -568,11 +486,6 @@ onUnmounted(() => {
     clearTimeout(longPressTimer.value)
     longPressTimer.value = null
   }
-
-  // Clean up video blob URL
-  if (videoBlobUrl.value) {
-    URL.revokeObjectURL(videoBlobUrl.value)
-  }
 })
 </script>
 
@@ -581,7 +494,10 @@ onUnmounted(() => {
     ref="photoRef"
     class="photo-card transition-transform duration-300 cursor-pointer select-none"
     :class="fillMode ? 'h-full w-full' : 'w-full'"
-    :style="{ 'contain-intrinsic-size': `auto ${intrinsicSize}px`, borderRadius: cardRadius }"
+    :style="{
+      'contain-intrinsic-size': `auto ${intrinsicSize}px`,
+      borderRadius: cardRadius,
+    }"
     @click="handleClick"
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
@@ -611,11 +527,11 @@ onUnmounted(() => {
           @error="handleImageError"
         />
 
-        <!-- LivePhoto video with enhanced motion transition -->
+        <!-- LivePhoto：使用已下载的 Blob，真正播放后才显示视频层 -->
         <motion.video
-          v-if="photo.isLivePhoto && videoBlobUrl"
+          v-if="liveVideoSrc"
           ref="videoRef"
-          :src="videoBlobUrl"
+          :src="liveVideoSrc"
           class="absolute inset-0 w-full h-full object-cover"
           :class="{ 'select-none pointer-events-none': isVideoPlaying }"
           muted
@@ -636,16 +552,14 @@ onUnmounted(() => {
               : [0.25, 0.46, 0.45, 0.94],
             delay: isVideoPlaying ? 0.05 : 0,
           }"
-          @ended="handleVideoEnded"
-          @loadeddata="
-            () => {
-              // 视频加载完成后预热
-              if (videoRef && !isVideoPlaying) {
-                videoRef.currentTime = 0.1
-                videoRef.pause()
-              }
+          @playing="handleLiveVideoPlaying"
+          @error="
+            (event) => {
+              isVideoPlaying = false
+              handleLivePhotoError(event)
             }
           "
+          @ended="handleVideoEnded"
         />
       </div>
 
@@ -656,7 +570,9 @@ onUnmounted(() => {
       />
 
       <!-- 左上角角标区：全景 / 实况照片，纵向排列 -->
-      <div class="pointer-events-none absolute top-2 left-2 flex flex-col items-start gap-1">
+      <div
+        class="pointer-events-none absolute top-2 left-2 flex flex-col items-start gap-1"
+      >
         <PanoramaBadge
           v-if="isPanorama(photo)"
           :photo="photo"
@@ -665,7 +581,7 @@ onUnmounted(() => {
           v-if="photo.isLivePhoto"
           :photo="photo"
           :is-video-playing="isVideoPlaying"
-          :processing-state="processingState || null"
+          :processing-state="processingState"
         />
       </div>
 
@@ -690,7 +606,10 @@ onUnmounted(() => {
           </p>
 
           <!-- Tags -->
-          <div v-if="photo.tags?.length" class="flex flex-wrap gap-1.5">
+          <div
+            v-if="photo.tags?.length"
+            class="flex flex-wrap gap-1.5"
+          >
             <span
               v-for="tag in photo.tags"
               :key="tag"
@@ -712,7 +631,10 @@ onUnmounted(() => {
             :key="item.text"
             class="flex items-center gap-1.5 rounded-md bg-white/10 px-2 py-1 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-hover:backdrop-blur-sm"
           >
-            <Icon :name="item.icon" class="shrink-0 text-white/70" />
+            <Icon
+              :name="item.icon"
+              class="shrink-0 text-white/70"
+            />
             <span class="whitespace-nowrap text-white/90">{{ item.text }}</span>
           </div>
         </div>

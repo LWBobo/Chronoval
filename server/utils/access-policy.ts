@@ -32,6 +32,7 @@ const RULES: AccessRule[] = [
 
   { pattern: /^\/api\/wizard(\/|$)/, access: 'public' },
 
+  { methods: ['GET'], pattern: /^\/api\/assets\/[a-f0-9]+$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/photos$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/map\/photos$/, access: 'public' },
   {

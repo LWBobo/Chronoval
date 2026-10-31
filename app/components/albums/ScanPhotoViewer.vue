@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { useLivePhotoSource } from '~/composables/useLivePhotoSource'
+import { canPrefetchLivePhoto } from '~/composables/useLivePhotoProcessor'
 import { motion, AnimatePresence } from 'motion-v'
 import { Swiper, SwiperSlide } from 'swiper/vue'
 import { Navigation, Keyboard, Virtual } from 'swiper/modules'
@@ -29,8 +31,6 @@ const emit = defineEmits<{
 }>()
 
 const isMobile = useMediaQuery('(max-width: 768px)')
-const { convertMovToMp4 } = useLivePhotoProcessor()
-const liveVideoUrl = ref<string | null>(null)
 const livePlaying = ref(false)
 const liveVideoRef = ref<HTMLVideoElement | null>(null)
 const toast = useToast()
@@ -106,53 +106,91 @@ const zoomLevelTimer = ref<NodeJS.Timeout | null>(null)
 
 const currentPhoto = computed(() => props.photos[props.currentIndex])
 
+const {
+  src: liveVideoUrl,
+  processingState: livePhotoProcessingState,
+  load: loadLivePhoto,
+  reset: resetLivePhoto,
+  onError: handleLivePhotoError,
+} = useLivePhotoSource(currentPhoto, () => props.isOpen)
+let livePlayRequest = 0
+let liveRequested = false
 const clearLiveVideo = () => {
+  livePlayRequest++
+  liveRequested = false
   livePlaying.value = false
-  if (liveVideoUrl.value) URL.revokeObjectURL(liveVideoUrl.value)
-  liveVideoUrl.value = null
+  liveVideoRef.value?.pause()
+  resetLivePhoto()
 }
-
-watch(
-  () => currentPhoto.value?.id,
-  () => {
-    clearLiveVideo()
-  },
-)
-
+watch([() => currentPhoto.value?.id, () => props.isOpen], clearLiveVideo, {
+  flush: 'sync',
+})
+watch([currentTextureReady, () => props.isOpen], () => {
+  if (props.isOpen && currentTextureReady.value && canPrefetchLivePhoto())
+    void loadLivePhoto(true)
+})
 const startLivePhoto = async () => {
   const photo = currentPhoto.value
-  if (!photo?.isLivePhoto || !photo.livePhotoVideoUrl || isZoomed.value) return
-  if (!liveVideoUrl.value) {
-    const blob = await convertMovToMp4(photo.livePhotoVideoUrl, photo.id)
-    if (!blob || currentPhoto.value?.id !== photo.id) return
-    liveVideoUrl.value = URL.createObjectURL(blob)
-  }
-  livePlaying.value = true
+  if (
+    !props.isOpen ||
+    !photo?.isLivePhoto ||
+    !photo.livePhotoVideoUrl ||
+    isZoomed.value
+  )
+    return
+  liveRequested = true
+  const request = ++livePlayRequest
+  const url = await loadLivePhoto()
   await nextTick()
+  if (
+    !url ||
+    request !== livePlayRequest ||
+    !liveRequested ||
+    !props.isOpen ||
+    currentPhoto.value?.id !== photo.id
+  )
+    return
   const video = liveVideoRef.value
   if (!video) return
-  video.currentTime = 0
-  video.play().catch(() => {
+  try {
+    video.currentTime = 0
+    await video.play()
+    if (request !== livePlayRequest || !liveRequested) {
+      video.pause()
+      return
+    }
+    livePlaying.value = true
+  } catch {
     livePlaying.value = false
-  })
+  }
 }
-
-onUnmounted(clearLiveVideo)
-
 const stopLivePhoto = () => {
+  livePlayRequest++
+  liveRequested = false
   livePlaying.value = false
   const video = liveVideoRef.value
   if (!video) return
   video.pause()
-  video.currentTime = 0
+  try {
+    video.currentTime = 0
+  } catch {
+    /* metadata not ready */
+  }
 }
+const handleLiveVideoPlaying = () => {
+  if (liveRequested && props.isOpen) livePlaying.value = true
+  else liveVideoRef.value?.pause()
+}
+onUnmounted(clearLiveVideo)
 
 // 背景模糊图：切换图片时新图需重新加载，若直接隐藏背景会露出 #0a0a0e 底色造成「黑屏闪烁」。
 // 因此用双层交叉淡化 —— persistentBlur 保留「上一张已加载」的模糊图作为持续底图，
 // 待新模糊图 @load 就绪后再淡入覆盖，切换全程背景不为空。
 const blurReady = ref(false)
 const persistentBlur = ref<string | null>(null)
-const currentBlur = computed(() => props.photos[props.currentIndex]?.thumbnailUrl ?? null)
+const currentBlur = computed(
+  () => props.photos[props.currentIndex]?.thumbnailUrl ?? null,
+)
 watch(currentBlur, () => {
   blurReady.value = false
 })
@@ -460,7 +498,10 @@ const swiperModules = [Navigation, Keyboard, Virtual]
           @load="handleBlurLoad"
         />
         <!-- 无缩略图时的兜底深色 -->
-        <div v-if="!currentBlur" class="absolute inset-0 h-full w-full bg-[#0a0a0e]" />
+        <div
+          v-if="!currentBlur"
+          class="absolute inset-0 h-full w-full bg-[#0a0a0e]"
+        />
       </motion.div>
     </AnimatePresence>
 
@@ -491,6 +532,7 @@ const swiperModules = [Navigation, Keyboard, Virtual]
               v-if="infoPhoto?.isLivePhoto"
               :photo="infoPhoto"
               :is-video-playing="livePlaying"
+              :processing-state="livePhotoProcessingState"
             />
             <button
               v-if="isMobile"
@@ -500,21 +542,28 @@ const swiperModules = [Navigation, Keyboard, Virtual]
               :class="showExifPanel ? 'bg-black/55' : ''"
               @click="showExifPanel = !showExifPanel"
             >
-              <Icon name="tabler:info-circle" class="size-5" />
+              <Icon
+                name="tabler:info-circle"
+                class="size-5"
+              />
             </button>
           </div>
           <div class="pointer-events-auto flex items-center gap-2">
             <button
               v-if="!isMobile"
               type="button"
-              :aria-label="isDesktopInspectorVisible ? 'collapse info' : 'expand info'"
+              :aria-label="
+                isDesktopInspectorVisible ? 'collapse info' : 'expand info'
+              "
               class="flex size-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
               @click="isDesktopInspectorVisible = !isDesktopInspectorVisible"
             >
               <Icon
-                :name="isDesktopInspectorVisible
-                  ? 'tabler:layout-sidebar-right-collapse'
-                  : 'tabler:layout-sidebar-right-expand'"
+                :name="
+                  isDesktopInspectorVisible
+                    ? 'tabler:layout-sidebar-right-collapse'
+                    : 'tabler:layout-sidebar-right-expand'
+                "
                 class="size-5"
               />
             </button>
@@ -524,229 +573,262 @@ const swiperModules = [Navigation, Keyboard, Virtual]
               class="flex size-9 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-colors hover:bg-black/55"
               @click="emit('close')"
             >
-              <Icon name="tabler:x" class="size-5" />
+              <Icon
+                name="tabler:x"
+                class="size-5"
+              />
             </button>
           </div>
         </div>
 
         <div
           class="relative h-full w-full"
-          :style="{ paddingRight: !isMobile && isDesktopInspectorVisible ? '320px' : '0px' }"
-        >
-
-        <!-- 底部计数：n / M，与首页查看器一致 -->
-        <div
-          class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/35 px-3 py-1 text-xs tabular-nums text-white/80 backdrop-blur-sm"
-        >
-          {{ props.currentIndex + 1 }} / {{ props.photos.length }}
-        </div>
-
-        <LoadingIndicator ref="loadingIndicatorRef" />
-
-        <video
-          v-if="liveVideoUrl"
-          ref="liveVideoRef"
-          :src="liveVideoUrl"
-          class="pointer-events-none absolute inset-0 z-10 h-full w-full object-contain transition-opacity duration-200"
-          :class="livePlaying ? 'opacity-100' : 'opacity-0'"
-          muted
-          playsinline
-          loop
-        />
-
-        <!-- 缩放倍率提示（与首页查看器一致）：缩放或纹理构建后短暂显示 -->
-        <AnimatePresence>
-          <motion.div
-            v-if="showZoomLevel && zoomLevel > 0"
-            :initial="{ opacity: 0, y: 10 }"
-            :animate="{ opacity: 1, y: 0 }"
-            :exit="{ opacity: 0, y: 10 }"
-            :transition="{ duration: 0.2 }"
-            class="absolute bottom-4 left-4 z-20 bg-black/40 backdrop-blur-3xl rounded-xl border border-white/10 px-4 py-2 shadow-2xl"
-          >
-            <span class="text-white font-medium">{{ Number(zoomLevel).toFixed(1) }}x</span>
-          </motion.div>
-        </AnimatePresence>
-
-        <!-- Swiper：可左右滑动切换 -->
-        <Swiper
-          :modules="swiperModules"
-          :space-between="0"
-          :slides-per-view="1"
-          :initial-slide="props.currentIndex"
-          :virtual="true"
-          :keyboard="{
-            enabled: true,
-            onlyInViewport: true,
+          :style="{
+            paddingRight:
+              !isMobile && isDesktopInspectorVisible ? '320px' : '0px',
           }"
-          class="h-full w-full"
-          :style="{ touchAction: isMobile ? 'pan-x' : 'pan-y' }"
-          @swiper="handleSwiperInit"
-          @slide-change="handleSlideChange"
         >
-          <SwiperSlide
-            v-for="(photo, index) in props.photos"
-            :key="photo.id"
-            :virtual-index="index"
-            class="flex items-center justify-center"
+          <!-- 底部计数：n / M，与首页查看器一致 -->
+          <div
+            class="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/35 px-3 py-1 text-xs tabular-nums text-white/80 backdrop-blur-sm"
           >
+            {{ props.currentIndex + 1 }} / {{ props.photos.length }}
+          </div>
+
+          <LoadingIndicator ref="loadingIndicatorRef" />
+
+          <video
+            v-if="liveVideoUrl"
+            ref="liveVideoRef"
+            :src="liveVideoUrl"
+            class="pointer-events-none absolute inset-0 z-10 h-full w-full object-contain transition-opacity duration-200"
+            :class="livePlaying ? 'opacity-100' : 'opacity-0'"
+            muted
+            playsinline
+            preload="metadata"
+            loop
+            @playing="handleLiveVideoPlaying"
+            @error="
+              (event) => {
+                livePlaying = false
+                handleLivePhotoError(event)
+              }
+            "
+          />
+
+          <!-- 缩放倍率提示（与首页查看器一致）：缩放或纹理构建后短暂显示 -->
+          <AnimatePresence>
             <motion.div
-              :initial="{ opacity: 1, scale: 1 }"
-              :animate="{ opacity: 1, scale: 1 }"
-              :exit="{ opacity: 0, scale: 0.95 }"
-              :transition="{ type: 'spring', duration: 0.4, bounce: 0 }"
-              class="relative flex h-full w-full items-center justify-center"
-              style="user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;"
-              @contextmenu.prevent=""
+              v-if="showZoomLevel && zoomLevel > 0"
+              :initial="{ opacity: 0, y: 10 }"
+              :animate="{ opacity: 1, y: 0 }"
+              :exit="{ opacity: 0, y: 10 }"
+              :transition="{ duration: 0.2 }"
+              class="absolute bottom-4 left-4 z-20 bg-black/40 backdrop-blur-3xl rounded-xl border border-white/10 px-4 py-2 shadow-2xl"
             >
-              <!-- 视频媒体：自定义播放器（进度条/音量/全屏，自动隐藏控制栏） -->
-              <AlbumsScanVideoPlayer
-                v-if="photo.type === 'video'"
-                :src="photo.originalUrl || ''"
-                :poster="photo.thumbnailUrl || null"
-                :active="index === props.currentIndex"
-                class="h-full w-full"
-              />
-
-              <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
-              <img
-                v-else-if="isGifPhoto(photo)"
-                :src="photo.originalUrl || ''"
-                :alt="photo.title || ''"
-                draggable="false"
-                class="h-full w-full select-none object-contain"
-                @load="index === props.currentIndex && handleImageLoaded()"
-              />
-
-              <!-- 纹理(WebGL)加载：与首页查看器相同的 ProgressiveImage -->
-              <ProgressiveImage
-                v-else
-                class="h-full w-full object-contain"
-                :loading-indicator-ref="loadingIndicatorRef || null"
-                :is-current-image="index === props.currentIndex"
-                :src="photo.originalUrl || ''"
-                :thumbnail-src="photo.thumbnailUrl || ''"
-                :thumbhash="photo.thumbnailHash"
-                :hold-thumb-placeholder-until-webgl-ready="true"
-                :on-image-loaded="
-                  index === props.currentIndex ? handleImageLoaded : undefined
-                "
-                :on-texture-ready="
-                  index === props.currentIndex ? handleTextureReady : undefined
-                "
-                :enable-pan="index === props.currentIndex"
-                :enable-zoom="index === props.currentIndex"
-                :on-zoom-change="
-                  index === props.currentIndex ? handleZoomChange : undefined
-                "
-              />
-              <PhotoFaceLayer
-                v-if="index === props.currentIndex && photo.type !== 'video'"
-                :photo-id="photo.id"
-                :image-width="photo.width"
-                :image-height="photo.height"
-                :hidden="isZoomed"
-              />
-            </motion.div>
-          </SwiperSlide>
-        </Swiper>
-
-        <AnimatePresence>
-          <motion.div
-            v-if="!isZoomed && currentTextureReady"
-            :initial="{ opacity: 0, scale: 0.8, y: 20 }"
-            :animate="{ opacity: 1, scale: 1, y: 0 }"
-            :exit="{ opacity: 0, scale: 0.8, y: 20 }"
-            :transition="{ type: 'spring', stiffness: 300, damping: 20, delay: 0.1 }"
-            class="absolute bottom-4 right-4 z-20"
-          >
-            <div class="relative">
-              <ReactionPicker
-                :is-open="showReactionPicker"
-                :trigger-el="reactionButtonRef"
-                :selected-reaction="selectedReaction"
-                :reaction-counts="reactionCounts"
-                @select="handleReactionSelect"
-                @close="showReactionPicker = false"
-              />
-              <ReactionConfetti
-                v-if="confettiIcon"
-                :icon-name="confettiIcon"
-                :trigger-count="confettiTriggerCount"
-              />
-              <motion.button
-                ref="reactionButtonRef"
-                type="button"
-                :animate="{ scale: showReactionPicker ? 0.92 : 1 }"
-                :class="[
-                  'pointer-events-auto flex items-center justify-center gap-2 cursor-pointer',
-                  'px-4 h-11 rounded-full',
-                  'backdrop-blur-xl border shadow-lg',
-                  'transition-all duration-200',
-                  selectedReaction
-                    ? 'bg-blue-500/90 border-blue-400/50 text-white shadow-blue-500/30'
-                    : 'bg-white/90 dark:bg-neutral-800/90 border-neutral-200/50 dark:border-white/10 text-neutral-700 dark:text-white/80 shadow-black/10 dark:shadow-black/30',
-                ]"
-                @pointerdown="handleReactionButtonPointerDown"
-                @click="toggleReactionPicker"
+              <span class="text-white font-medium"
+                >{{ Number(zoomLevel).toFixed(1) }}x</span
               >
-                <Icon
-                  v-if="selectedReaction && currentReactionIcon"
-                  :name="currentReactionIcon"
-                  class="text-xl leading-none select-none"
-                />
-                <Icon
-                  v-else
-                  name="tabler:mood-smile"
-                  class="text-xl"
-                />
-                <div class="flex flex-col items-start gap-0.5">
-                  <span class="text-sm font-medium leading-none">
-                    {{
-                      selectedReaction
-                        ? $t('viewer.reaction.change')
-                        : $t('viewer.reaction.add')
-                    }}
-                  </span>
-                  <span
-                    v-if="totalReactions > 0"
-                    class="text-[10px] leading-none opacity-70"
-                  >
-                    {{
-                      $t(
-                        'viewer.reaction.count',
-                        { count: totalReactions },
-                        totalReactions,
-                      )
-                    }}
-                  </span>
-                </div>
-              </motion.button>
-            </div>
-          </motion.div>
-        </AnimatePresence>
+            </motion.div>
+          </AnimatePresence>
 
-        <!-- 桌面端悬停导航 -->
-        <template v-if="!isMobile">
-          <button
-            v-if="props.currentIndex > 0"
-            type="button"
-            aria-label="prev"
-            class="absolute top-1/2 left-4 z-20 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
-            @click="handlePrevious"
+          <!-- Swiper：可左右滑动切换 -->
+          <Swiper
+            :modules="swiperModules"
+            :space-between="0"
+            :slides-per-view="1"
+            :initial-slide="props.currentIndex"
+            :virtual="true"
+            :keyboard="{
+              enabled: true,
+              onlyInViewport: true,
+            }"
+            class="h-full w-full"
+            :style="{ touchAction: isMobile ? 'pan-x' : 'pan-y' }"
+            @swiper="handleSwiperInit"
+            @slide-change="handleSlideChange"
           >
-            <Icon name="tabler:chevron-left" class="size-6" />
-          </button>
-          <button
-            v-if="props.currentIndex < props.photos.length - 1"
-            type="button"
-            aria-label="next"
-            class="absolute top-1/2 right-4 z-20 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
-            @click="handleNext"
-          >
-            <Icon name="tabler:chevron-right" class="size-6" />
-          </button>
-        </template>
+            <SwiperSlide
+              v-for="(photo, index) in props.photos"
+              :key="photo.id"
+              :virtual-index="index"
+              class="flex items-center justify-center"
+            >
+              <motion.div
+                :initial="{ opacity: 1, scale: 1 }"
+                :animate="{ opacity: 1, scale: 1 }"
+                :exit="{ opacity: 0, scale: 0.95 }"
+                :transition="{ type: 'spring', duration: 0.4, bounce: 0 }"
+                class="relative flex h-full w-full items-center justify-center"
+                style="
+                  user-select: none;
+                  -webkit-user-select: none;
+                  -webkit-touch-callout: none;
+                  -webkit-tap-highlight-color: transparent;
+                "
+                @contextmenu.prevent=""
+              >
+                <!-- 视频媒体：自定义播放器（进度条/音量/全屏，自动隐藏控制栏） -->
+                <AlbumsScanVideoPlayer
+                  v-if="photo.type === 'video'"
+                  :src="photo.originalUrl || ''"
+                  :poster="photo.thumbnailUrl || null"
+                  :active="index === props.currentIndex"
+                  class="h-full w-full"
+                />
+
+                <!-- GIF 动图：WebGL 纹理只渲染首帧，改用原生 <img> 由浏览器自动播放动画 -->
+                <img
+                  v-else-if="isGifPhoto(photo)"
+                  :src="photo.originalUrl || ''"
+                  :alt="photo.title || ''"
+                  draggable="false"
+                  class="h-full w-full select-none object-contain"
+                  @load="index === props.currentIndex && handleImageLoaded()"
+                />
+
+                <!-- 纹理(WebGL)加载：与首页查看器相同的 ProgressiveImage -->
+                <ProgressiveImage
+                  v-else
+                  class="h-full w-full object-contain"
+                  :loading-indicator-ref="loadingIndicatorRef || null"
+                  :is-current-image="index === props.currentIndex"
+                  :src="photo.originalUrl || ''"
+                  :thumbnail-src="photo.thumbnailUrl || ''"
+                  :thumbhash="photo.thumbnailHash"
+                  :hold-thumb-placeholder-until-webgl-ready="true"
+                  :on-image-loaded="
+                    index === props.currentIndex ? handleImageLoaded : undefined
+                  "
+                  :on-texture-ready="
+                    index === props.currentIndex
+                      ? handleTextureReady
+                      : undefined
+                  "
+                  :enable-pan="index === props.currentIndex"
+                  :enable-zoom="index === props.currentIndex"
+                  :on-zoom-change="
+                    index === props.currentIndex ? handleZoomChange : undefined
+                  "
+                />
+                <PhotoFaceLayer
+                  v-if="index === props.currentIndex && photo.type !== 'video'"
+                  :photo-id="photo.id"
+                  :image-width="photo.width"
+                  :image-height="photo.height"
+                  :hidden="isZoomed"
+                />
+              </motion.div>
+            </SwiperSlide>
+          </Swiper>
+
+          <AnimatePresence>
+            <motion.div
+              v-if="!isZoomed && currentTextureReady"
+              :initial="{ opacity: 0, scale: 0.8, y: 20 }"
+              :animate="{ opacity: 1, scale: 1, y: 0 }"
+              :exit="{ opacity: 0, scale: 0.8, y: 20 }"
+              :transition="{
+                type: 'spring',
+                stiffness: 300,
+                damping: 20,
+                delay: 0.1,
+              }"
+              class="absolute bottom-4 right-4 z-20"
+            >
+              <div class="relative">
+                <ReactionPicker
+                  :is-open="showReactionPicker"
+                  :trigger-el="reactionButtonRef"
+                  :selected-reaction="selectedReaction"
+                  :reaction-counts="reactionCounts"
+                  @select="handleReactionSelect"
+                  @close="showReactionPicker = false"
+                />
+                <ReactionConfetti
+                  v-if="confettiIcon"
+                  :icon-name="confettiIcon"
+                  :trigger-count="confettiTriggerCount"
+                />
+                <motion.button
+                  ref="reactionButtonRef"
+                  type="button"
+                  :animate="{ scale: showReactionPicker ? 0.92 : 1 }"
+                  :class="[
+                    'pointer-events-auto flex items-center justify-center gap-2 cursor-pointer',
+                    'px-4 h-11 rounded-full',
+                    'backdrop-blur-xl border shadow-lg',
+                    'transition-all duration-200',
+                    selectedReaction
+                      ? 'bg-blue-500/90 border-blue-400/50 text-white shadow-blue-500/30'
+                      : 'bg-white/90 dark:bg-neutral-800/90 border-neutral-200/50 dark:border-white/10 text-neutral-700 dark:text-white/80 shadow-black/10 dark:shadow-black/30',
+                  ]"
+                  @pointerdown="handleReactionButtonPointerDown"
+                  @click="toggleReactionPicker"
+                >
+                  <Icon
+                    v-if="selectedReaction && currentReactionIcon"
+                    :name="currentReactionIcon"
+                    class="text-xl leading-none select-none"
+                  />
+                  <Icon
+                    v-else
+                    name="tabler:mood-smile"
+                    class="text-xl"
+                  />
+                  <div class="flex flex-col items-start gap-0.5">
+                    <span class="text-sm font-medium leading-none">
+                      {{
+                        selectedReaction
+                          ? $t('viewer.reaction.change')
+                          : $t('viewer.reaction.add')
+                      }}
+                    </span>
+                    <span
+                      v-if="totalReactions > 0"
+                      class="text-[10px] leading-none opacity-70"
+                    >
+                      {{
+                        $t(
+                          'viewer.reaction.count',
+                          { count: totalReactions },
+                          totalReactions,
+                        )
+                      }}
+                    </span>
+                  </div>
+                </motion.button>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
+          <!-- 桌面端悬停导航 -->
+          <template v-if="!isMobile">
+            <button
+              v-if="props.currentIndex > 0"
+              type="button"
+              aria-label="prev"
+              class="absolute top-1/2 left-4 z-20 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
+              @click="handlePrevious"
+            >
+              <Icon
+                name="tabler:chevron-left"
+                class="size-6"
+              />
+            </button>
+            <button
+              v-if="props.currentIndex < props.photos.length - 1"
+              type="button"
+              aria-label="next"
+              class="absolute top-1/2 right-4 z-20 flex size-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
+              @click="handleNext"
+            >
+              <Icon
+                name="tabler:chevron-right"
+                class="size-6"
+              />
+            </button>
+          </template>
         </div>
 
         <InfoPanel
@@ -755,7 +837,12 @@ const swiperModules = [Navigation, Keyboard, Virtual]
           :current-photo="infoPhoto"
           :exif-data="infoPhoto.exif"
           :visible="isMobile ? showExifPanel : isDesktopInspectorVisible"
-          :on-close="() => isMobile ? (showExifPanel = false) : (isDesktopInspectorVisible = false)"
+          :on-close="
+            () =>
+              isMobile
+                ? (showExifPanel = false)
+                : (isDesktopInspectorVisible = false)
+          "
         />
       </motion.div>
     </AnimatePresence>

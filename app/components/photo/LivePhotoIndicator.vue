@@ -7,6 +7,7 @@ defineProps<{
   processingState?: {
     isProcessing: boolean
     progress: number
+    error?: string | null
   } | null
 }>()
 </script>
@@ -15,6 +16,7 @@ defineProps<{
   <motion.div
     v-if="photo.isLivePhoto"
     class="backdrop-blur-md rounded-full pl-1 pr-1.5 py-1 text-[13px] font-bold flex items-center gap-0.5 leading-0 select-none transition-colors duration-300"
+    :title="processingState?.error || undefined"
     :class="`${isVideoPlaying ? 'text-yellow-300 bg-yellow-300/10' : 'text-white bg-black/30'}`"
     :animate="{
       scale: isVideoPlaying ? 1.06 : 1,

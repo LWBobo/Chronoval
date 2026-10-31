@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { clearLivePhotoCache } from '~/composables/useLivePhotoProcessor'
 import { clearImageLoaderCache } from '~/libs/image-loader-manager'
 import type { NuxtApp } from 'nuxt/app'
 import dayjsLocale_zhCN from 'dayjs/locale/zh-cn'
@@ -327,6 +328,7 @@ watch(photoViewerKey, () => {
   closePanoramaViewer()
   clearReturnRoute()
   clearImageLoaderCache()
+  clearLivePhotoCache()
 }, { flush: 'sync' })
 
 
