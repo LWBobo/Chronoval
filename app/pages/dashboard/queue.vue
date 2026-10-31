@@ -244,6 +244,7 @@ const statusOptions = computed(() => [
 const typeOptions = computed(() => [
   { label: $t('dashboard.queue.filters.all'), value: 'all' },
   { label: $t('dashboard.queue.types.photo'), value: 'photo' },
+  { label: $t('dashboard.queue.types.library-file'), value: 'library-file' },
   {
     label: $t('dashboard.queue.types.live-photo-video'),
     value: 'live-photo-video',
@@ -273,6 +274,12 @@ const typeOptions = computed(() => [
     value: 'photo-ocr',
   },
 ])
+
+const getTypeColor = (type: string) => {
+  if (type === 'photo') return 'info'
+  if (type === 'library-file') return 'warning'
+  return 'secondary'
+}
 
 // 展开行状态
 const expanded = ref<Record<string, boolean>>({})
@@ -476,9 +483,7 @@ onBeforeUnmount(() => {
                     $t(`dashboard.queue.types.${row.original.payload.type}`)
                   "
                   variant="soft"
-                  :color="
-                    row.original.payload.type === 'photo' ? 'info' : 'secondary'
-                  "
+                  :color="getTypeColor(row.original.payload.type)"
                   size="sm"
                 />
               </template>
@@ -536,7 +541,7 @@ onBeforeUnmount(() => {
                     {{ $t('dashboard.queue.buttons.retry') }}
                   </UButton>
                   <UButton
-                    v-if="row.original.status !== 'in-stage'"
+                    v-if="row.original.status === 'failed'"
                     icon="tabler:trash"
                     size="xs"
                     variant="soft"
@@ -562,8 +567,16 @@ onBeforeUnmount(() => {
                 <div class="px-2">
                   <div class="space-y-3">
                     <!-- 任务ID和类型 -->
-                    <div class="flex gap-4">
-                      <div>
+                    <div class="flex flex-wrap gap-4">
+                      <div v-if="row.original.payload.type === 'library-file'">
+                        <p class="text-xs text-neutral-500">
+                          {{ $t('dashboard.queue.table.detail.libraryPath') }}
+                        </p>
+                        <p class="font-mono text-sm wrap-break-word">
+                          {{ row.original.payload.mount }}/{{ row.original.payload.libraryPath }}
+                        </p>
+                      </div>
+                      <div v-else>
                         <p class="text-xs text-neutral-500">{{ $t('dashboard.queue.table.detail.photoId') }}</p>
                         <p class="text-sm capitalize">
                           {{ row.original.payload.photoId || '-' }}

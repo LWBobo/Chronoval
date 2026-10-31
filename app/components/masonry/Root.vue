@@ -33,7 +33,6 @@ const isMobile = useMediaQuery('(max-width: 768px)')
 const containerRef = ref<HTMLElement>()
 const containerWidth = ref(0)
 
-const showFloatingActions = ref(false)
 const dateRange = ref<string>()
 const visibleCities = ref<string>()
 const visiblePhotos = ref(new Set<number>())
@@ -221,7 +220,6 @@ const updateViewport = () => {
   const localTop = scrollTop - origin
   viewportTop.value = localTop
   viewportBottom.value = localTop + vh
-  showFloatingActions.value = scrollTop > 500
 
   const total = timeline.value.totalHeight
   if (total > 0 && !isScrubbing.value) {
@@ -325,10 +323,6 @@ onUnmounted(() => {
 <template>
   <div class="relative w-full">
     <MasonryActiveFiltersHero v-if="hasActiveFilters" />
-
-    <div class="hidden md:block">
-      <MasonryFloatingActionButton :show-floating="showFloatingActions" />
-    </div>
 
     <!-- Floating date range (wired from visible photos) -->
     <UiDateRangeIndicator

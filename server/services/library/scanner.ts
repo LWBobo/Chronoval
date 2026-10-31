@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'crypto'
 import sharp from 'sharp'
-import { eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
+import { resolveInsideRoot, isRelativePathInsideRoot } from '~~/server/utils/safe-path'
 import type {
   LibraryMount,
   LibraryConfig,
@@ -218,6 +219,12 @@ export class LibraryScanner {
         const entry = await this.processFile(mount, rel, absFile, stat, storageProvider)
         if (!entry) {
           result.failed++
+          await this.enqueueFailedFile(
+            mount.name,
+            rel,
+            stat.mtime.toISOString(),
+            '文件处理返回空（可能是不支持的格式或文件已损坏）',
+          )
           continue
         }
 
@@ -240,6 +247,14 @@ export class LibraryScanner {
         const msg = err instanceof Error ? err.message : String(err)
         result.errors.push(`${path.basename(absFile)}: ${msg}`)
         result.failed++
+        const rel = sanitizeRelPath(path.relative(mount.root, absFile))
+        let mtime: string | undefined
+        try {
+          mtime = (await fs.stat(absFile)).mtime.toISOString()
+        } catch {
+          /* File may have disappeared since collection. */
+        }
+        await this.enqueueFailedFile(mount.name, rel, mtime, msg)
       }
     }
 
@@ -304,6 +319,140 @@ export class LibraryScanner {
     this.mounts = getAllScalableMounts()
     const mount = this.mounts.find((m) => m.name === name)
     return mount ? await this.scanMount(mount) : null
+  }
+
+  /**
+   * 扫描失败的文件入队为 library-file 任务：
+   * - 队列管理页（/dashboard/queue）可见失败原因，可手动重试
+   * - 工作器自动重试，瞬时故障（网络挂载抖动等）可自愈
+   * - 去重：同挂载+同路径已有进行中任务、或同文件版本（mtime）已失败任务时跳过
+   */
+  private async enqueueFailedFile(
+    mountName: string,
+    relPath: string,
+    lastModified?: string,
+    reason?: string,
+  ): Promise<void> {
+    try {
+      const db = useDB()
+      const sameKeyTasks = db
+        .select({
+          id: tables.pipelineQueue.id,
+          status: tables.pipelineQueue.status,
+          payload: tables.pipelineQueue.payload,
+        })
+        .from(tables.pipelineQueue)
+        .where(
+          and(
+            sql`json_extract(${tables.pipelineQueue.payload}, '$.type') = 'library-file'`,
+            sql`json_extract(${tables.pipelineQueue.payload}, '$.mount') = ${mountName}`,
+            sql`json_extract(${tables.pipelineQueue.payload}, '$.libraryPath') = ${relPath}`,
+          ),
+        )
+        .all()
+
+      const hasActive = sameKeyTasks.some(
+        (t) => t.status === 'pending' || t.status === 'in-stages',
+      )
+      const hasSameVersionFailed = sameKeyTasks.some(
+        (t) =>
+          t.status === 'failed' &&
+          t.payload.type === 'library-file' &&
+          t.payload.lastModified === lastModified,
+      )
+      if (hasActive || hasSameVersionFailed) return
+
+      const pool = globalThis.__workerPool
+      if (!pool) {
+        log().warn('Worker pool not ready, skip enqueue failed library file')
+        return
+      }
+      await pool.addTask(
+        {
+          type: 'library-file',
+          mount: mountName,
+          libraryPath: relPath,
+          ...(lastModified ? { lastModified } : {}),
+          ...(reason ? { reason } : {}),
+        },
+        { maxAttempts: 3 },
+      )
+      log().info(
+        `Enqueued failed library file for retry: ${mountName}/${relPath}`,
+      )
+    } catch (err) {
+      // 入队失败不影响扫描主流程
+      log().warn(
+        `Failed to enqueue failed library file ${mountName}/${relPath}:`,
+        err,
+      )
+    }
+  }
+
+  /**
+   * 重新处理队列中的单个文件，沿用扫描库的动态照片识别和 ML 入队规则。
+   */
+  async processSingleFile(
+    mountName: string,
+    relPath: string,
+  ): Promise<'indexed' | 'updated'> {
+    const mount = getAllScalableMounts().find((item) => item.name === mountName)
+    if (!mount) throw new Error(`Library mount not found: ${mountName}`)
+
+    const requestedPath = resolveInsideRoot(mount.root, sanitizeRelPath(relPath))
+    const [realRoot, realFile] = await Promise.all([
+      fs.realpath(mount.root),
+      fs.realpath(requestedPath),
+    ])
+    if (!isRelativePathInsideRoot(path.relative(realRoot, realFile))) {
+      throw new Error('Library file is outside its mount')
+    }
+    const rel = path.relative(path.resolve(mount.root), requestedPath).split(path.sep).join('/')
+    const stat = await fs.stat(requestedPath)
+    if (!stat.isFile() || !mount.extensions.has(path.extname(rel).toLowerCase())) {
+      throw new Error(`Unsupported library file: ${rel}`)
+    }
+    const storageProvider = getStorageManager()?.getProvider()
+    if (!storageProvider) throw new Error('Storage manager not initialized')
+
+    const db = useDB()
+    const photoId = buildLibraryPhotoId(mountName, rel)
+
+    // 同名 MOV 是实况短片，重试仍归入静图，不生成重复的视频卡片。
+    if (path.extname(rel).toLowerCase() === '.mov') {
+      const still = await findSiblingLiveStill(requestedPath)
+      if (still) {
+        const outcome = await this.processSingleFile(
+          mountName,
+          path.relative(mount.root, still),
+        )
+        db.delete(tables.photos).where(eq(tables.photos.id, photoId)).run()
+        return outcome
+      }
+    }
+
+    const existing = db
+      .select({ id: tables.photos.id })
+      .from(tables.photos)
+      .where(eq(tables.photos.id, photoId))
+      .get()
+    const entry = await this.processFile(
+      mount, rel, requestedPath, stat, storageProvider,
+    )
+    if (!entry) throw new Error(`Failed to process library file: ${rel}`)
+
+    // 重试与周期扫描可能重叠；按稳定 ID upsert，保留未参与更新的人工信息。
+    db.insert(tables.photos)
+      .values({ id: photoId, ...entry })
+      .onConflictDoUpdate({ target: tables.photos.id, set: entry })
+      .run()
+    try {
+      const { enqueueMlJobsForPhoto } = await import('../ml/enqueue')
+      await enqueueMlJobsForPhoto(photoId)
+    } catch {
+      /* ML enqueue optional, as in a full scan. */
+    }
+    return existing ? 'updated' : 'indexed'
   }
 
   /**

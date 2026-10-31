@@ -570,7 +570,9 @@
       "immersive": "Immersive",
       "timeline": "Timeline",
       "unknownDate": "Unknown date",
-      "photoCount": "photos"
+      "photoCount": "photos",
+      "simple": "Simple view",
+      "simpleExit": "Exit simple view"
     }
   },
   "auth": {
@@ -586,7 +588,7 @@
       },
       "signin": {
         "title": "Sign In",
-        "subtitle": "Log in to {0}",
+        "subtitle": "Sign in to the admin dashboard",
         "twoFactorTitle": "Two-Step Verification",
         "twoFactorSubtitle": "Enter the 6-digit code from your authenticator app"
       },
@@ -1444,7 +1446,8 @@
         "expandAria": "Expand",
         "detail": {
           "photoId": "Photo ID",
-          "payload": "Payload"
+          "payload": "Payload",
+          "libraryPath": "Library file"
         }
       },
       "status": {
@@ -1461,7 +1464,8 @@
         "photo-smart-search": "Smart search",
         "photo-face-detection": "Face detection",
         "photo-face-recognition": "Face recognition",
-        "photo-ocr": "OCR"
+        "photo-ocr": "OCR",
+        "library-file": "External Library"
       },
       "stages": {
         "preprocessing": "Preprocessing",
@@ -2624,5 +2628,14 @@
     "dragHint": "Drag to look",
     "zoomHint": "Scroll / pinch to zoom",
     "resetHint": "Double-click to reset"
+  },
+  "gallery": {
+    "browse": {
+      "simple": "Simple view",
+      "masonry": "Masonry",
+      "prev": "Prev",
+      "next": "Next",
+      "backToMasonry": "Back to masonry"
+    }
   }
 }

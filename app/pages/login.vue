@@ -5,6 +5,13 @@ definePageMeta({
 
 useHead({
   title: () => $t('auth.form.signin.title'),
+  // 注意：不要给 html/body 设置内联背景色——移动端浏览器会采样页面底色
+  // 给系统状态栏/地址栏上色，会连带改掉用户设备的状态栏外观。
+  // 首帧深绿底由下方渲染阻塞的 scoped CSS（.login-enter）保证，足够了。
+  link: [
+    // 预加载预模糊背景（磨砂/卡片共用，仅 13KB）：确保首帧即最终观感
+    { rel: 'preload', as: 'image', href: '/login-forest/forest-blurred.jpg' },
+  ],
 })
 
 // 程序 Logo（内联 SVG data URI）：避免依赖 public 文件相对路径/尾斜杠解析，
@@ -18,6 +25,13 @@ const appLogo = 'data:image/svg+xml;utf8,' + encodeURIComponent(`
     <circle cx="256" cy="256" r="26" fill="#f4f4f5"/>
   </svg>
 `)
+
+// 森林背景的响应式 srcset（桌面磨砂上的内嵌亮窗与移动端全屏背景共用同一资源）
+const FOREST_SRCSET = `
+  /login-forest/forest-1080p.jpg 1920w,
+  /login-forest/forest-2k.jpg 2560w,
+  /login-forest/forest.jpg 3840w
+`
 
 // 注：移动端采用弹性布局 + 基于视口高度的响应式间距（clamp）自适应任意尺寸，
 // 不使用容器/整页 transform 缩放——实测 transform 与 zoom 都会让 backdrop-filter 毛玻璃失效。
@@ -35,8 +49,14 @@ const isLoading = ref(false)
 // 支持 ?step=verify 直达验证码步骤（水合前兜底脚本完成密码校验后以整页跳转交接）
 const step = ref<'login' | 'verify'>(route.query.step === 'verify' ? 'verify' : 'login')
 
-// AuthForm 实例引用：登录接口失败时复用它的顶部浮动通知卡片（不在卡片内插错误条）
+// AuthForm 实例引用：桌面与移动各渲染一份（CSS 互斥显示，双端同时在 DOM）。
+// 登录接口失败时向两端同时推送顶部浮动通知，只有可见端会实际呈现。
 const authFormRef = ref<{ showNotice: (text: string) => void } | null>(null)
+const authFormRefDesk = ref<{ showNotice: (text: string) => void } | null>(null)
+const showAuthNotice = (message: string) => {
+  authFormRef.value?.showNotice(message)
+  authFormRefDesk.value?.showNotice(message)
+}
 
 const githubOauthEnabled = computed(() => {
   const settingsValue = settingsStore.getSetting('system:auth.github.enabled')
@@ -114,7 +134,7 @@ const handleAuthError = (error: any) => {
   const message = isInvalid
     ? $t('auth.messages.loginInvalid')
     : (error?.data?.message || $t('auth.messages.loginFailed.description'))
-  authFormRef.value?.showNotice(message)
+  showAuthNotice(message)
   toast.add({
     color: 'error',
     title: $t('auth.messages.loginFailed.title'),
@@ -130,11 +150,7 @@ const handleAuthError = (error: any) => {
     <div class="absolute inset-0" aria-hidden="true">
       <img
         src="/login-forest/forest-1080p.jpg"
-        :srcset="`
-          /login-forest/forest-1080p.jpg 1920w,
-          /login-forest/forest-2k.jpg 2560w,
-          /login-forest/forest.jpg 3840w
-        `"
+        :srcset="FOREST_SRCSET"
         sizes="100vw"
         alt=""
         decoding="async"
@@ -142,18 +158,15 @@ const handleAuthError = (error: any) => {
         draggable="false"
         class="pointer-events-none select-none h-full w-full object-cover"
       />
-      <!-- 桌面：左侧重压暗留白字区，右侧轻压暗留卡片区 -->
-      <div class="absolute inset-0 hidden lg:block">
-        <div class="absolute inset-0 bg-neutral-950/40" />
-        <div class="absolute inset-0 bg-gradient-to-r from-neutral-950/60 via-transparent to-transparent lg:bg-gradient-to-r" />
-      </div>
       <!-- 移动：整体均匀轻压暗，保证白玻璃卡与品牌可读，不强化上下渐变 -->
       <div class="absolute inset-0 bg-neutral-950/35 lg:hidden" />
     </div>
 
     <!-- ===== 移动端品牌顶栏（仅移动端）：占位式高斯模糊渐入，仿首页顶栏；占据顶部空间，卡片在其下方不再被遮挡/挤压 ===== -->
     <div class="relative z-30 w-full shrink-0 lg:hidden">
-      <!-- 毛玻璃层 + 向下渐隐遮罩：顶部实、向下淡出，与首页顶栏观感一致（暗色高斯模糊） -->
+      <!-- 毛玻璃顶栏（恢复原版）：半透明深色 + 高斯模糊 + 向下渐隐，与首页画廊顶栏同款观感。
+           顶栏为细长条，backdrop 采样面积极小；页面 main 有深绿底色兜底，
+           图未就绪时采样到的也是深绿而非白色，无分块风险 -->
       <div class="absolute inset-0 -z-10 bg-neutral-950/30 backdrop-blur-2xl [mask-image:linear-gradient(to_bottom,black_0%,black_55%,transparent_100%)]" />
       <!-- 品牌内容（logo + CHRONOVAL wordmark，Carter One 水彩笔刷描画动画） -->
       <div class="relative flex items-center gap-3 px-5 pb-4 pt-[max(1rem,env(safe-area-inset-top))] lg:pb-6 lg:pt-6">
@@ -165,55 +178,98 @@ const handleAuthError = (error: any) => {
       </div>
     </div>
 
-    <!-- ===== 桌面端：左栏放大字标题（仅桌面，占左半） ===== -->
-    <aside class="relative z-10 hidden w-full flex-col justify-between p-12 lg:flex lg:w-1/2 xl:p-16">
-      <div class="flex items-center gap-3">
-        <img :src="appLogo" alt="Chronoval" class="h-8 w-8" />
-        <span class="brand-wordmark brand-ink text-[1.05rem] leading-none">
-          CHRONOVAL
-        </span>
-      </div>
+    <!-- ===== 桌面端：全屏白色高斯磨砂 + 左侧内嵌森林亮窗（四周白色光晕包裹） ===== -->
+    <div class="login-desktop absolute inset-0 z-10 hidden lg:block" aria-hidden="true">
+      <!-- 全屏白色高斯磨砂：用 mask 在亮窗位置"开洞"——洞内不参与磨砂，直接透出
+           已加载的清晰背景原图（无二次图片请求，杜绝先白块后图片的闪烁）；
+           上/下/右由登录面板的白玻璃直接覆盖满 -->
+      <div class="login-frost absolute inset-0" />
 
-      <div>
-        <p class="mb-4 text-[0.7rem] font-medium uppercase tracking-[0.5em] text-white/55">
-          Private Photo Collection
-        </p>
-        <h1 class="max-w-md text-6xl font-extralight leading-[1.05] tracking-tight text-white text-balance xl:text-7xl">
-          {{ $t('auth.poster.title') }}
-        </h1>
-        <div class="mt-8 h-px w-full max-w-sm bg-white/25" />
+      <!-- 亮窗：仅描边 + 白色光晕 + 窗内压暗承托文案（自身透明，洞里透出的是背景原图） -->
+      <div class="login-window absolute overflow-hidden rounded-[1.75rem]">
+        <!-- 窗内顶部柔和压暗：承托品牌行 -->
+        <div class="absolute inset-x-0 top-0 bg-gradient-to-b from-neutral-950/45 via-neutral-950/10 to-transparent px-8 pb-12 pt-7">
+          <div class="flex items-center gap-3">
+            <img :src="appLogo" alt="Chronoval" class="h-8 w-8 shrink-0 rounded-lg" />
+            <span class="brand-wordmark brand-ink text-[1.05rem] leading-none">
+              CHRONOVAL
+            </span>
+          </div>
+        </div>
+        <!-- 窗内底部柔和压暗：承托海报大字标题 -->
+        <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950/60 via-neutral-950/15 to-transparent px-9 pb-10 pt-20">
+          <p class="mb-3 text-[0.68rem] font-medium uppercase tracking-[0.5em] text-white/70">
+            Private Photo Collection
+          </p>
+          <h1 class="max-w-lg text-4xl font-extralight leading-[1.08] tracking-tight text-white text-balance xl:text-5xl">
+            {{ $t('auth.poster.title') }}
+          </h1>
+          <div class="mt-6 h-px w-40 bg-white/35" />
+        </div>
       </div>
-    </aside>
+    </div>
 
-    <!-- ===== 登录卡片：桌面偏右占右半，移动居中浮于全屏森林上 ===== -->
-    <section class="relative z-20 flex w-full flex-1 items-center justify-center px-5 py-6 min-h-0 lg:w-1/2 lg:min-h-auto lg:py-0 lg:px-0 lg:pr-14 xl:pr-20">
-      <div class="auth-glass w-full max-w-[24rem] rounded-[1.375rem] px-7 py-9 max-h-[88svh] overflow-y-auto sm:px-10 lg:max-w-md lg:rounded-[2rem] lg:px-10 lg:py-12 lg:max-h-none lg:overflow-visible">
+    <!-- ===== 桌面端登录面板：白玻璃直接顶满上/下/右边缘，表单居中坐于磨砂之上（占比收窄让图片更大） ===== -->
+    <section class="absolute inset-y-0 right-0 z-20 hidden w-[42%] items-center justify-center lg:flex lg:pr-[3vw]">
+      <div class="login-panel w-full max-w-[22rem]">
         <AuthForm
-              ref="authFormRef"
-              :verify="step === 'verify'"
-              :title="$t(step === 'verify' ? 'auth.form.signin.twoFactorTitle' : 'auth.form.signin.title')"
-              :subtitle="$t(
-                step === 'verify'
-                  ? 'auth.form.signin.twoFactorSubtitle'
-                  : 'auth.form.signin.subtitle',
-                [config.public.app.title],
-              )"
-              :loading="isLoading"
-              :providers="[
-                githubOauthEnabled && {
-                  icon: 'tabler:brand-github',
-                  size: 'lg',
-                  color: 'neutral',
-                  variant: 'outline',
-                  block: true,
-                  label: 'GitHub',
-                  to: '/api/auth/github',
-                  external: true,
-                },
-              ]"
-              @submit="onFormSubmit"
-              @cancel="step = 'login'"
-            />
+          ref="authFormRefDesk"
+          :verify="step === 'verify'"
+          :title="$t(step === 'verify' ? 'auth.form.signin.twoFactorTitle' : 'auth.form.signin.title')"
+          :subtitle="$t(
+            step === 'verify'
+              ? 'auth.form.signin.twoFactorSubtitle'
+              : 'auth.form.signin.subtitle',
+            [config.public.app.title],
+          )"
+          :loading="isLoading"
+          :providers="[
+            githubOauthEnabled && {
+              icon: 'tabler:brand-github',
+              size: 'lg',
+              color: 'neutral',
+              variant: 'outline',
+              block: true,
+              label: 'GitHub',
+              to: '/api/auth/github',
+              external: true,
+            },
+          ]"
+          @submit="onFormSubmit"
+          @cancel="step = 'login'"
+        />
+      </div>
+    </section>
+
+    <!-- ===== 登录卡片（移动端保持原样：居中浮于全屏森林上） ===== -->
+    <section class="relative z-20 flex w-full flex-1 items-center justify-center px-5 py-6 min-h-0 lg:hidden">
+      <div class="auth-glass w-full max-w-[24rem] rounded-[1.375rem] px-7 py-9 max-h-[88svh] overflow-y-auto sm:px-10">
+        <AuthForm
+          ref="authFormRef"
+          :verify="step === 'verify'"
+          :title="$t(step === 'verify' ? 'auth.form.signin.twoFactorTitle' : 'auth.form.signin.title')"
+          :subtitle="$t(
+            step === 'verify'
+              ? 'auth.form.signin.twoFactorSubtitle'
+              : 'auth.form.signin.subtitle',
+            [config.public.app.title],
+          )"
+          :loading="isLoading"
+          :providers="[
+            githubOauthEnabled && {
+              icon: 'tabler:brand-github',
+              size: 'lg',
+              color: 'neutral',
+              variant: 'outline',
+              block: true,
+              label: 'GitHub',
+              to: '/api/auth/github',
+              external: true,
+            },
+          ]"
+          @submit="onFormSubmit"
+          @cancel="step = 'login'"
+        />
       </div>
     </section>
   </main>
@@ -227,6 +283,9 @@ const handleAuthError = (error: any) => {
   animation: loginPageIn 0.7s cubic-bezier(0.33, 0, 0.4, 1) both;
   transform: translateZ(0);
   will-change: transform, opacity;
+  /* 底色兜底：与森林图同调的深绿。背景图绘制完成前，页面任何区域（含毛玻璃
+     合成分块的采样底）都是这个颜色而不是浏览器默认白 → 杜绝白色方块 */
+  background-color: #0e1a13;
   /* 移动端长按体验修复：去掉点按高亮闪块与文本选中时的白条闪烁，禁用 iOS 长按放大镜/存储卡弹层 */
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
@@ -242,6 +301,92 @@ const handleAuthError = (error: any) => {
 @keyframes loginPageIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+/* 桌面端禁用整页 opacity 渐入：整页淡入会逐帧驱动全屏 backdrop-filter
+   重新采样（白块逐块出现的像素卡顿来源之一）。桌面改由面板/亮窗各自的
+   轻量动画承担入场；移动端保持原整页淡入不变。 */
+@media (min-width: 1024px) {
+  .login-enter {
+    animation: none;
+  }
+}
+
+/* ===== 桌面端专属：白色磨砂 + 内嵌森林亮窗 ===== */
+.login-desktop {
+  /* 亮窗几何参数：磨砂开洞与描边光晕共用（边距收窄让图片占比更大） */
+  --win-x: 1.5vw;
+  --win-y: 2vh;
+  --win-w: 54vw;
+  --win-h: 96vh;
+  --win-r: 28px;
+}
+
+/* 全屏白色高斯磨砂层：罩住整片森林，形成明亮的白色毛玻璃底。
+   关键：不做任何 opacity/transform 动画——backdrop-filter 一旦被祖先级
+   动画逐帧驱动重采样，就会出现"白色块块逐块出现"的像素卡顿；
+   首帧直接渲染到位，一次成型。
+   开洞：第二层圆角矩形与第一层做 exclude/xor 合成，洞内不参与磨砂，
+   直接透出下层已加载的清晰森林原图（无二次图片请求）。 */
+.login-frost {
+  /* 磨砂 = 预模糊森林图（13KB，preload 抢加载）+ 白色渐变叠加。
+     完全不用 backdrop-filter：全屏实时模糊采样渲染过重，合成器分块
+     跟不上时就会出现"白色加载分块"；预模糊图一次渲染即成型，零分块。
+     图未加载完成时上层白色渐变兜底，观感依旧是白色磨砂（无透明感）。 */
+  background:
+    linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.82) 0%,
+      rgba(255, 255, 255, 0.66) 48%,
+      rgba(240, 244, 248, 0.78) 100%
+    ),
+    url('/login-forest/forest-blurred.jpg') center / cover no-repeat;
+  -webkit-mask-image:
+    linear-gradient(#000 0 0),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' rx='28' fill='black'/></svg>");
+  -webkit-mask-position: 0 0, var(--win-x) var(--win-y);
+  -webkit-mask-size: 100% 100%, var(--win-w) var(--win-h);
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: xor;
+  mask-image:
+    linear-gradient(#000 0 0),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' rx='28' fill='black'/></svg>");
+  mask-position: 0 0, var(--win-x) var(--win-y);
+  mask-size: 100% 100%, var(--win-w) var(--win-h);
+  mask-repeat: no-repeat;
+  mask-composite: exclude;
+}
+
+/* 左侧内嵌森林亮窗：自身完全透明（洞里透出的就是背景原图），
+   只承担三件事：1px 白描边 + 收敛的白色光晕（细边让图片占比更大）+
+   底部深色投影（窗体厚度）。opacity 渐入安全（无 backdrop-filter）。 */
+.login-window {
+  left: var(--win-x);
+  top: var(--win-y);
+  width: var(--win-w);
+  height: var(--win-h);
+  border-radius: var(--win-r);
+  pointer-events: none;
+  isolation: isolate;
+  transform: translateZ(0);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.95),
+    0 0 0 4px rgba(255, 255, 255, 0.4),
+    0 0 36px 10px rgba(255, 255, 255, 0.5),
+    0 30px 70px -22px rgba(15, 23, 42, 0.36);
+  animation: windowIn 0.8s cubic-bezier(0.33, 0, 0.4, 1) 0.1s both;
+}
+@keyframes windowIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 右侧登录面板：白玻璃直接顶满上/下/右边缘，表单轻微上浮渐入 */
+.login-panel {
+  animation: panelIn 0.8s cubic-bezier(0.33, 0, 0.4, 1) 0.1s both;
+}
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 品牌 wordmark：Carter One + 从左到右水彩笔扫过描画。
@@ -283,10 +428,9 @@ const handleAuthError = (error: any) => {
   100% { mask-size: 430% 100%; -webkit-mask-size: 430% 100%; opacity: 1; }
 }
 
-/* 苹果风亮色毛玻璃卡片：白色半透明 + 重高斯模糊，深字高对比；浅/暗主题下均亮眼。
+/* 苹果风亮色毛玻璃卡片（移动端）：白色半透明 + 森林模糊底，深字高对比。
    transform: translateZ(0) + will-change 让卡片独占一个稳定的合成层，
-   固定 backdrop-filter 的采样源；配合父级整页的合成层，彻底避免登入成功时
-   （loading 态切换 / 成功 toast 注入 / 路由切换触发重绘）卡片闪白。 */
+   彻底避免登入成功时（loading 态切换 / 成功 toast 注入 / 路由切换触发重绘）卡片闪白。 */
 .auth-glass {
   position: relative;
   transform: translateZ(0);
@@ -294,14 +438,18 @@ const handleAuthError = (error: any) => {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   isolation: isolate;
+  /* 毛玻璃卡片（静态成型，首帧即最终观感）：
+     白色渐变 + 预模糊森林图（13KB，preload 抢加载），不用 backdrop-filter。
+     之前"先白卡后透明"的两段式来自 bg-ready 门控切换；现在与桌面磨砂同方案，
+     一次渲染到位——无采样分块、无中间态。模糊图与卡片后方实景在视觉上
+     几乎无差（均为重度模糊的森林色调）。 */
   background:
     linear-gradient(
       160deg,
       rgba(255, 255, 255, 0.82) 0%,
       rgba(255, 255, 255, 0.55) 100%
-    );
-  -webkit-backdrop-filter: blur(36px) saturate(1.8);
-  backdrop-filter: blur(36px) saturate(1.8);
+    ),
+    url('/login-forest/forest-blurred.jpg') center / cover no-repeat;
   border: 1px solid rgba(255, 255, 255, 0.6);
   box-shadow:
     0 30px 70px -20px rgba(0, 0, 0, 0.4),

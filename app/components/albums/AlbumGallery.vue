@@ -31,6 +31,17 @@ const layout = defineModel<AlbumLayout>('layout', { default: 'waterfall' })
 
 const { t } = useI18n()
 
+// 简洁看图只改变本次浏览状态，不写入相簿的持久化布局。
+const simpleActive = ref(false)
+const openSimple = () => {
+  if (!props.photos.length) return
+  simpleActive.value = true
+  expanded.value = false
+}
+const closeSimple = () => {
+  simpleActive.value = false
+}
+
 // 瀑布流按列排布。不用会先清空再重排的瀑布流组件，避免滚动位置被夹回顶部。
 const isMobile = useMediaQuery('(max-width: 768px)')
 
@@ -59,16 +70,19 @@ const hasItems = computed(
   () => props.photos.length > 0 || leadList.value.length > 0,
 )
 
-const LAYOUT_OPTIONS: { value: AlbumLayout; label: string; icon: string }[] = [
+type LayoutOptionValue = AlbumLayout | 'simple'
+
+const LAYOUT_OPTIONS: { value: LayoutOptionValue; label: string; icon: string }[] = [
   // 图标与后台「管理相簿·编辑」的布局选项保持一致
   { value: 'waterfall', label: t('albums.layout.waterfall'), icon: 'tabler:layout-collage' },
   { value: 'grid', label: t('albums.layout.grid'), icon: 'tabler:layout-grid' },
   { value: 'immersive', label: t('albums.layout.immersive'), icon: 'tabler:photo' },
   { value: 'timeline', label: t('albums.layout.timeline'), icon: 'tabler:timeline' },
+  { value: 'simple', label: t('albums.layout.simple'), icon: 'tabler:arrows-horizontal' },
 ]
 
 // —— 收缩式布局切换控件 ——
-// 单一胶囊元素：收起态显示山体图标 + 照片数；点击后胶囊从中心向左右平滑展开，露出四个布局选项。
+// 单一胶囊元素：收起态显示山体图标 + 照片数；点击后胶囊从中心向左右平滑展开，露出五个布局选项。
 const expanded = ref(false)
 const hovered = ref(false) // 桌面端鼠标悬停胶囊时显示彩虹光晕
 const canHover = useMediaQuery('(hover: hover)') // 仅电脑端（支持悬停）才显示光晕
@@ -79,7 +93,7 @@ const collapsedCapRef = ref<HTMLElement | null>(null)
 
 /** 收起态胶囊宽度（风景图标 + 分隔线 + 照片数 + 分隔线 + 魔百盒） */
 const collapsedWidth = ref(0)
-/** 展开态胶囊宽度（四个布局选项） */
+/** 展开态胶囊宽度（五个布局选项） */
 const expandedWidth = ref(0)
 
 /** 有趣的魔百盒图标：点击随机预览一张相簿照片 */
@@ -113,7 +127,11 @@ const toggleSwitch = () => {
   expanded.value = !expanded.value
 }
 
-const pickLayout = (v: AlbumLayout) => {
+const pickLayout = (v: LayoutOptionValue) => {
+  if (v === 'simple') {
+    openSimple()
+    return
+  }
   layout.value = v
   expanded.value = false
 }
@@ -244,7 +262,7 @@ onUnmounted(() => {
 <template>
   <div class="w-full">
     <!-- 顶部切换控件：仅在有照片且需要展示时渲染 -->
-    <!-- 单一胶囊：收起态显示山体+数量，点击后胶囊从中心向左右平滑展开，露出四个布局选项 -->
+    <!-- 单一胶囊：收起态显示山体+数量，点击后胶囊从中心向左右平滑展开，露出五个布局选项 -->
     <div
       v-if="hasItems"
       ref="switchRoot"
@@ -327,7 +345,7 @@ onUnmounted(() => {
           </template>
         </div>
 
-        <!-- 展开态内容：四个布局选项，每个为独立胶囊，文字图标不挤压，一行契合排列 -->
+        <!-- 展开态内容：五个布局选项，每个为独立胶囊，文字图标不挤压，一行契合排列 -->
         <div
           ref="innerRef"
           class="absolute left-1/2 flex h-full -translate-x-1/2 transform-gpu items-center p-1 will-change-transform [backface-visibility:hidden]"
@@ -340,11 +358,12 @@ onUnmounted(() => {
             type="button"
             class="group flex h-full shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-xs font-medium transition-colors duration-200 [backface-visibility:hidden]"
             :class="
-              layout === opt.value
+              (opt.value === 'simple' ? simpleActive : layout === opt.value)
                 ? 'bg-neutral-900 text-white shadow-sm dark:bg-white dark:text-black'
                 : 'text-neutral-500 hover:bg-neutral-200/60 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white'
             "
-            :aria-pressed="layout === opt.value"
+            :aria-pressed="opt.value === 'simple' ? simpleActive : layout === opt.value"
+            :disabled="opt.value === 'simple' && !photos.length"
             @click="pickLayout(opt.value)"
           >
             <Icon
@@ -505,6 +524,14 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    <Teleport to="body">
+      <MasonrySimpleView
+        v-if="simpleActive"
+        :photos="photos"
+        :back-label="t('albums.layout.simpleExit')"
+        @back="closeSimple"
+      />
+    </Teleport>
   </div>
 </template>
 

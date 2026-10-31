@@ -10,6 +10,7 @@ const TASK_TYPES = [
   'photo-face-detection',
   'photo-face-recognition',
   'photo-ocr',
+  'library-file',
 ] as const
 
 /**

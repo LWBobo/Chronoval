@@ -865,7 +865,7 @@ export class QueueManager {
       try {
         const { type } = task.payload
 
-        switch (type) {
+        switch (task.payload.type) {
           case 'live-photo-video':
             await this.processors.livePhotoDetect(task)
             break
@@ -878,6 +878,17 @@ export class QueueManager {
           case 'photo-erase-location':
             await this.processors.eraseLocation(task)
             break
+          case 'library-file': {
+            const { libraryScanner } = await import('../library/scanner')
+            const outcome = await libraryScanner.processSingleFile(
+              task.payload.mount,
+              task.payload.libraryPath,
+            )
+            this.logger.success(
+              `[${task.id}:library-file] ${outcome}: ${task.payload.mount}/${task.payload.libraryPath}`,
+            )
+            break
+          }
           case 'photo-smart-search': {
             await this.updateTaskStage(task.id, 'smart-search')
             const { processSmartSearch } = await import('../ml/smart-search.service')
