@@ -1,17 +1,18 @@
 import { z } from 'zod'
 
 export default defineEventHandler(async (event) => {
+  await requireAccess(event,'admin')
 
   try {
     const payloadSchema = z.discriminatedUnion('type', [
       z.object({
         type: z.literal('photo'),
-        storageKey: z.string().nonempty(),
+        photoId: z.string().nonempty(),
         eraseLocation: z.boolean().optional(),
       }),
       z.object({
         type: z.literal('live-photo-video'),
-        storageKey: z.string().nonempty(),
+        photoId: z.string().nonempty(),
       }),
       z.object({
         type: z.literal('photo-reverse-geocoding'),

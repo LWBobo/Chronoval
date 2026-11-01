@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { createAccount, createUserSchema, usernameSchema, passwordSchema } from '../../services/users'
+import { normalizeEmail } from '../../utils/identity'
 import { settingsManager } from '~~/server/services/settings/settingsManager'
 import { mapPmtilesFilename } from '~~/shared/map-pmtiles'
 import { storageConfigSchema } from '~~/shared/types/storage'
@@ -9,9 +11,9 @@ export default eventHandler(async (event) => {
     event,
     z.object({
       admin: z.object({
-        email: z.string().email(),
-        password: z.string().min(6),
-        username: z.string().min(2).default('admin'),
+        email: z.email().transform(normalizeEmail),
+        password: passwordSchema,
+        username: usernameSchema.default('admin'),
       }),
       site: z.object({
         title: z.string().min(1),
@@ -44,41 +46,16 @@ export default eventHandler(async (event) => {
 
   const db = useDB()
 
-  // 1. Handle Admin User
   let adminUser: typeof tables.users.$inferSelect | undefined
-  const existingUser = db.select().from(tables.users).limit(1).get()
-  if (existingUser) {
-    if (existingUser.email === body.admin.email) {
-      await db
-        .update(tables.users)
-        .set({
-          password: await hashPassword(body.admin.password),
-          username: body.admin.username,
-          isAdmin: 1,
-          role: 'admin',
-        })
-        .where(eq(tables.users.id, existingUser.id))
-        .run()
-      adminUser = db.select().from(tables.users).where(eq(tables.users.id, existingUser.id)).get()
-    } else {
-      throw createError({
-        statusCode: 400,
-        message: 'User already exists',
-      })
+  const existing = db.select().from(tables.users).limit(1).get()
+  if (existing) {
+    if (existing.role !== 'admin' || existing.status !== 'active' || existing.emailKey !== body.admin.email || existing.username !== body.admin.username || !(await verifyPassword(existing.password || '', body.admin.password))) {
+      throw createError({ statusCode: 409, message: 'Initial administrator already exists' })
     }
+    adminUser = existing
   } else {
-    await db
-      .insert(tables.users)
-      .values({
-        email: body.admin.email,
-        username: body.admin.username,
-        password: await hashPassword(body.admin.password),
-        isAdmin: 1,
-        role: 'admin',
-        createdAt: new Date(),
-      })
-      .run()
-    adminUser = db.select().from(tables.users).where(eq(tables.users.email, body.admin.email)).get()
+    const result = await createAccount(createUserSchema.parse({ ...body.admin, quotaBytes: null }), null, 'admin')
+    adminUser = db.select().from(tables.users).where(eq(tables.users.id, result.user.id)).get()
   }
 
   // 2. Handle Site Settings
@@ -128,15 +105,7 @@ export default eventHandler(async (event) => {
 
   // 6. Auto-login the admin user
   if (adminUser) {
-    await setUserSession(
-      event,
-      { user: toSessionUser(adminUser) },
-      {
-        cookie: {
-          secure: useSecureCookie(event),
-        },
-      },
-    )
+    await establishUserSession(event, adminUser)
   }
 
   return { success: true }

@@ -1,3 +1,4 @@
+import { folderAudienceAccess } from '~~/server/services/collections/access'
 import { z } from 'zod'
 import {
   getScanLibraryByKey,
@@ -69,13 +70,13 @@ export default eventHandler(async (event) => {
   const actor = await getActor(event)
   const detail = await getScanAlbumDetail(libIdNum, relPath)
   const visibility = getScanAlbumEffectiveVisibility(libIdNum, relPath)
-  if (!detail || !albumOpenToActor({ visibility }, actor)) {
+  if (!detail || !folderAudienceAccess(libIdNum, relPath, actor)) {
     throw createError({ statusCode: 404, statusMessage: 'Not Found' })
   }
   const adminBypass = await isAlbumAdminBypass(event, actor)
 
   if (adminBypass) {
-    authorizeScanAlbum(event, {
+    await authorizeScanAlbum(event, {
       libId: libIdNum,
       relPath,
       passwordHash,
@@ -94,7 +95,7 @@ export default eventHandler(async (event) => {
       actor.user,
     )
   ) {
-    authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
+    await authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
     return { authorized: true }
   }
 
@@ -102,6 +103,6 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: 'Incorrect password' })
   }
 
-  authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
+  await authorizeScanAlbum(event, { libId: libIdNum, relPath, passwordHash })
   return { authorized: true }
 })

@@ -33,7 +33,7 @@ export default eventHandler(async (event) => {
     .from(tables.users)
     .where(eq(tables.users.id, challenge.userId))
     .get()
-  if (!user || !user.totpEnabled || !user.totpSecret) {
+  if (!user || user.status !== 'active' || user.authVersion !== challenge.authVersion || !user.totpEnabled || !user.totpSecret) {
     throw _invalidChallengeOrCode
   }
 
@@ -50,19 +50,17 @@ export default eventHandler(async (event) => {
   if (!consumeChallenge(challenge)) {
     throw _invalidChallengeOrCode
   }
+  db.transaction(tx => {
+    const current = tx.select().from(tables.users).where(eq(tables.users.id, user.id)).get()
+    if (!current || current.status !== 'active' || current.authVersion !== challenge.authVersion || current.totpSecret !== user.totpSecret || !current.totpEnabled) throw _invalidChallengeOrCode
+    const inserted = tx.insert(tables.authChallengeUses).values({ nonce: challenge.nonce, userId: user.id, expiresAt: new Date(challenge.expiresAt * 1000) }).onConflictDoNothing().run()
+    if (!inserted.changes) throw _invalidChallengeOrCode
+  }, { behavior: 'immediate' })
 
   // 两步验证通过：把本条挑战记录转为成功登入
   markChallengeAsSucceeded(event, user.id, user.email)
 
-  await setUserSession(
-    event,
-    { user: toSessionUser(user) },
-    {
-      cookie: {
-        secure: useSecureCookie(event),
-      },
-    },
-  )
+  await establishUserSession(event, user)
 
   // 挑战一次性：签发正式会话后立即清除挑战 Cookie
   deleteCookie(event, totpConstants.CHALLENGE_COOKIE, { path: '/' })

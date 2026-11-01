@@ -1,3 +1,4 @@
+import { photoWithMediaColumns } from '../../utils/photo-media'
 import { desc, isNotNull } from 'drizzle-orm'
 
 /**
@@ -6,7 +7,7 @@ import { desc, isNotNull } from 'drizzle-orm'
  */
 export default eventHandler(async () => {
   const rows = useDB()
-    .select()
+    .select(photoWithMediaColumns())
     .from(tables.photos)
     .where(isNotNull(tables.photos.deletedAt))
     .orderBy(desc(tables.photos.deletedAt))

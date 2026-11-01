@@ -1,3 +1,4 @@
+import { mlSnapshotCurrent } from './partition'
 import { eq } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import { detectFaces, MlUnavailableError } from './client'
@@ -81,6 +82,7 @@ async function processFaceDetectionBody(
     .from(tables.photos)
     .where(eq(tables.photos.id, photoId))
     .get()
+  if(!mlSnapshotCurrent(photoId,loaded.snapshot))return
   const width = result.width || photo?.width || 1
   const height = result.height || photo?.height || 1
 

@@ -1,3 +1,4 @@
+import { photoWithMediaColumns } from '../../../utils/photo-media'
 import { and, asc, eq, getTableColumns, isNull } from 'drizzle-orm'
 import z from 'zod'
 import { hasAlbumAccess } from '~~/server/utils/manualAlbumAuth'
@@ -16,6 +17,7 @@ import { albumOpenToActor } from '~~/server/utils/albumVisibility'
 import { getManualAlbumByPublicKey } from '~~/server/services/collections/manual-album'
 import { resolveRandomQuotesPool } from '~~/server/services/settings/quoteLibraries'
 import { discoverablePhotoIds } from '~~/server/utils/photo-access'
+import { withAssetUrlsBatch } from '../../../services/media-files'
 
 export default eventHandler(async (event) => {
   const { listMusic, serializeMusic } = await import('~~/server/services/music')
@@ -128,9 +130,7 @@ export default eventHandler(async (event) => {
   // 获取相册中的照片（排除已移入回收站的软删除照片）
   const photos = await db
     // all fields from tables.photos
-    .select({
-      ...getTableColumns(tables.photos),
-    })
+    .select(photoWithMediaColumns())
     .from(tables.photos)
     .innerJoin(
       tables.collectionPhotos,
@@ -201,8 +201,6 @@ export default eventHandler(async (event) => {
     coverPhotoId: uniquePhotos.some((photo) => photo.id === album.coverPhotoId)
       ? album.coverPhotoId
       : (uniquePhotos.find((photo) => photo.type !== 'video')?.id ?? null),
-    photos: manageMode
-      ? uniquePhotos
-      : uniquePhotos.map((photo) => toPublicPhoto(photo)),
+    photos: withAssetUrlsBatch(uniquePhotos, photo => manageMode || actor.user?.id === photo.ownerId).map(photo => manageMode ? photo : toPublicPhoto(photo, actor.user?.id === photo.ownerId)),
   }
 })

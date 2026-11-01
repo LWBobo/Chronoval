@@ -115,11 +115,11 @@ useHead({
 // 登录用户或后台管理页面显示所有照片，未登录用户在前端页面只显示可见照片
 const route = useRoute()
 const { loggedIn, user } = useUserSession()
-const photoViewerKey = computed(() => loggedIn.value ? `${user.value?.id}:${Boolean(user.value?.isAdmin)}` : 'guest')
+const photoViewerKey = computed(() => loggedIn.value ? `${user.value?.id}:${user.value?.authVersion}:${Boolean(user.value?.isAdmin)}` : 'guest')
 const apiEndpoint = computed(() => {
   // 后台管理页面始终显示所有照片
   if (route.path.startsWith('/dashboard')) {
-    return '/api/photos'
+    return '/api/photos?manage=1'
   }
   // 前端画廊：设为「相簿」的扫描库照片始终不显示（未登录走 /visible，
   // 登录走 /api/photos?gallery=1，均已排除相簿扫描库）。

@@ -1,131 +1,18 @@
+import { and, eq, inArray, or } from 'drizzle-orm'
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
-import { generateSafePhotoId } from '~~/server/utils/file-utils'
+import { photoWithMediaColumns } from '../../utils/photo-media'
 
-/**
- * 检查照片是否已存在
- * 可以检查单个或多个文件
- */
-export default defineEventHandler(async (event) => {
-
-  const t = await useTranslation(event)
-
-  try {
-    const { fileNames, storageKeys } = await readValidatedBody(
-      event,
-      z.object({
-        fileNames: z.array(z.string()).optional(),
-        storageKeys: z.array(z.string()).optional(),
-      }).parse,
-    )
-
-    if (!fileNames && !storageKeys) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: t('upload.error.required.title'),
-        data: {
-          title: t('upload.error.required.title'),
-          message: t('upload.error.required.message', {
-            field: 'fileNames or storageKeys',
-          }),
-        },
-      })
-    }
-
-    const db = useDB()
-    const results = []
-
-    // 检查文件名
-    if (fileNames && fileNames.length > 0) {
-      for (const fileName of fileNames) {
-        // 生成 photoId（与上传时的逻辑相同）
-        const { storageProvider } = useStorageProvider(event)
-        const storageKey = `${(storageProvider.config?.prefix || '').replace(/\/+$/, '')}/${fileName}`
-        const photoId = generateSafePhotoId(storageKey)
-
-        // 查询数据库
-        const existingPhoto = await db
-          .select({
-            id: tables.photos.id,
-            title: tables.photos.title,
-            storageKey: tables.photos.storageKey,
-            originalUrl: tables.photos.originalUrl,
-            thumbnailUrl: tables.photos.thumbnailUrl,
-            dateTaken: tables.photos.dateTaken,
-            fileSize: tables.photos.fileSize,
-            width: tables.photos.width,
-            height: tables.photos.height,
-          })
-          .from(tables.photos)
-          .where(eq(tables.photos.id, photoId))
-          .get()
-
-        results.push({
-          fileName,
-          storageKey,
-          photoId,
-          exists: !!existingPhoto,
-          photo: existingPhoto || null,
-        })
-      }
-    }
-
-    // 检查 storageKey
-    if (storageKeys && storageKeys.length > 0) {
-      for (const storageKey of storageKeys) {
-        const photoId = generateSafePhotoId(storageKey)
-
-        const existingPhoto = await db
-          .select({
-            id: tables.photos.id,
-            title: tables.photos.title,
-            storageKey: tables.photos.storageKey,
-            originalUrl: tables.photos.originalUrl,
-            thumbnailUrl: tables.photos.thumbnailUrl,
-            dateTaken: tables.photos.dateTaken,
-            fileSize: tables.photos.fileSize,
-            width: tables.photos.width,
-            height: tables.photos.height,
-          })
-          .from(tables.photos)
-          .where(eq(tables.photos.id, photoId))
-          .get()
-
-        results.push({
-          storageKey,
-          photoId,
-          exists: !!existingPhoto,
-          photo: existingPhoto || null,
-        })
-      }
-    }
-
-    const duplicatesFound = results.filter((r) => r.exists).length
-
-    return {
-      success: true,
-      results,
-      duplicatesFound,
-      summary: {
-        title: t('upload.success.check.title'),
-        message: t('upload.success.check.message', {
-          total: results.length,
-          duplicates: duplicatesFound,
-        }),
-      },
-    }
-  } catch (error: any) {
-    if (error.statusCode) {
-      throw error
-    }
-
-    throw createError({
-      statusCode: 500,
-      statusMessage: t('upload.error.uploadFailed.title'),
-      data: {
-        title: t('upload.error.uploadFailed.title'),
-        message: error.message || t('upload.error.uploadFailed.message'),
-      },
-    })
-  }
+export default defineEventHandler(async event => {
+  await requireAccess(event,'admin')
+  const input=await readValidatedBody(event,z.object({fileNames:z.array(z.string().max(1024)).max(500).optional(),storageKeys:z.array(z.string().max(2048)).max(500).optional()}).strict().refine(value=>(value.fileNames?.length??0)+(value.storageKeys?.length??0)>0,'请选择要检查的文件').parse)
+  const files=useDB().select({photoId:tables.photoFiles.photoId,filename:tables.photoFiles.originalFilename,key:tables.photoFiles.storageKey}).from(tables.photoFiles).where(and(eq(tables.photoFiles.role,'original'),eq(tables.photoFiles.state,'ready'),or(input.fileNames?.length?inArray(tables.photoFiles.originalFilename,input.fileNames):undefined,input.storageKeys?.length?inArray(tables.photoFiles.storageKey,input.storageKeys):undefined))).all()
+  const ids=[...new Set(files.map(file=>file.photoId))]
+  const photos=ids.length?useDB().select(photoWithMediaColumns()).from(tables.photos).where(inArray(tables.photos.id,ids)).all():[]
+  const queries=[...(input.fileNames??[]).map(fileName=>({fileName,storageKey:undefined as string|undefined})),...(input.storageKeys??[]).map(storageKey=>({fileName:undefined as string|undefined,storageKey}))]
+  const results=queries.map(query=>{
+    const matching=files.filter(file=>query.fileName!==undefined?file.filename===query.fileName:file.key===query.storageKey)
+    const photo=photos.find(row=>row.id===matching[0]?.photoId)??null
+    return {...query,photoId:photo?.id??null,exists:matching.length>0,photo,matchingCount:matching.length}
+  })
+  return {success:true,results,duplicatesFound:results.filter(result=>result.exists).length,policy:'separate-directory'}
 })

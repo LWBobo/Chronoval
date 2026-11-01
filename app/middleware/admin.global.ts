@@ -5,8 +5,9 @@
 export default defineNuxtRouteMiddleware((to) => {
   if (!/^\/dashboard(?:\/|$)/.test(to.path)) return
   const { loggedIn, user } = useUserSession()
+  if (loggedIn.value && user.value?.mustChangePassword) return navigateTo('/me/settings/security')
   if (loggedIn.value && user.value?.isAdmin) return
-  if (loggedIn.value) return navigateTo('/')
+  if (loggedIn.value) return navigateTo('/me/photos')
   return navigateTo({
     path: '/login',
     query: { redirect: to.fullPath },

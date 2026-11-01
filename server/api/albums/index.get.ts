@@ -1,3 +1,4 @@
+import { photoAssetSql } from '../../utils/photo-media'
 import { eq, tables, useDB } from '~~/server/utils/db'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 import { redactAlbumSecrets } from '~~/server/utils/albumAccess'
@@ -26,7 +27,9 @@ export default eventHandler(async (event) => {
   // 管理端（登录管理员）返回完整树状二级相簿并包含隐藏的外部库相簿；
   // 公开访问时过滤掉设置为“隐藏”的外部库相簿。
   const actor = await getActor(event)
-  const { isAdmin } = actor
+  const requestedManage = getQuery(event).manage === '1'
+  if (requestedManage && !actor.isAdmin) throw createError({statusCode:403,message:'Admin privileges required'})
+  const isAdmin = requestedManage && actor.isAdmin
   const blockedByPerson = blockedPhotoIdsForActor(actor)
   const adminBypass = await isAlbumAdminBypass(event, actor)
 
@@ -65,7 +68,7 @@ export default eventHandler(async (event) => {
       .select({
         photoId: tables.collectionPhotos.photoId,
         position: tables.collectionPhotos.position,
-        thumbnailUrl: tables.photos.thumbnailUrl,
+        thumbnailUrl: photoAssetSql('thumbnail'),
         thumbnailHash: tables.photos.thumbnailHash,
         aspectRatio: tables.photos.aspectRatio,
         libraryMount: tables.photos.libraryMount,

@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { createClientId } from '~/utils/client-id'
+import { getCollectionVersions, getPersonVersions } from '~/utils/collection-versions'
 import type { FormSubmitEvent } from '@nuxt/ui'
 import type { Photo, PipelineQueueItem } from '~~/server/utils/db'
 import { resolveComponent } from 'vue'
@@ -136,6 +138,7 @@ interface EditFormState {
 
 const editingPhoto = ref<Photo | null>(null)
 const isEditModalOpen = ref(false)
+const editReason = ref('')
 const isSavingMetadata = ref(false)
 
 const editFormState = reactive<EditFormState>({
@@ -356,11 +359,14 @@ const uploadImage = async (
   try {
     // 第一步：获取预签名 URL
     uploadingFile.status = 'preparing'
-    const signedUrlResponse = await $fetch('/api/photos', {
+    const signedUrlResponse: any = await $fetch('/api/photos', {
       method: 'POST',
       body: {
         fileName: file.name,
         contentType: file.type,
+        size: file.size,
+        idempotencyKey: createClientId(),
+        stripLocation: eraseLocationOnUpload ?? systemUploadEraseLocationDefault.value,
         ...(targetLibraryId != null
           ? { targetLibraryId }
           : {}),
@@ -457,30 +463,8 @@ const uploadImage = async (
         }
 
         try {
-          // 检查是否为MOV视频文件（通过MIME类型或文件扩展名）
-          const isMovFile =
-            file.type === 'video/quicktime' ||
-            file.type === 'video/mp4' ||
-            file.name.toLowerCase().endsWith('.mov')
-
-          const resp = await $fetch('/api/queue/add-task', {
-            method: 'POST',
-            body: {
-              payload: {
-                type: isMovFile ? 'live-photo-video' : 'photo',
-                storageKey: signedUrlResponse.fileKey,
-                ...(isMovFile
-                  ? {}
-                  : {
-                      eraseLocation:
-                        eraseLocationOnUpload ??
-                        systemUploadEraseLocationDefault.value,
-                    }),
-              },
-              priority: isMovFile ? 0 : 1, // Live Photo 视频优先级更低，确保图片优先处理
-              maxAttempts: 3,
-            },
-          })
+          const completed: any = await $fetch(`/api/uploads/sessions/${signedUrlResponse.uploadSessionId}/complete`,{method:'POST'})
+          const resp = {success:true,taskId:completed.taskId}
 
           if (resp.success) {
             uploadingFile.taskId = resp.taskId
@@ -754,7 +738,7 @@ const photoSearchText = (photo: Photo) => {
     photo.country,
     photo.locationName,
     photo.libraryPath,
-    photo.storageKey,
+    photo.originalFilename,
     photo.id,
   ]
     .filter(Boolean)
@@ -1330,6 +1314,7 @@ const openMetadataEditor = (photo: Photo) => {
     typeof photo.latitude === 'number' && typeof photo.longitude === 'number'
 
   editingPhoto.value = photo
+  editReason.value = ''
   editFormState.title = initialTitle
   editFormState.description = initialDescription
   editFormState.tags = [...initialTags]
@@ -1406,7 +1391,11 @@ const saveMetadataChanges = async () => {
 
   isSavingMetadata.value = true
   try {
+    const metadataVersion = editingPhoto.value.metadataVersion
+    if (typeof metadataVersion !== 'number') throw new Error($t('accounts.refresh'))
     const payload: {
+      expectedVersion: number
+      reason?: string
       title?: string
       description?: string
       tags?: string[]
@@ -1415,7 +1404,7 @@ const saveMetadataChanges = async () => {
       isPanorama?: number | null
       panoYaw?: number | null
       panoPitch?: number | null
-    } = {}
+    } = { expectedVersion: metadataVersion, reason: editReason.value.trim() || undefined }
 
     if (titleChanged.value) {
       payload.title = normalizedTitle.value
@@ -1617,7 +1606,7 @@ const handleEraseLocationRequest = async (photo: Photo) => {
 // 重新处理单张照片
 const handleReprocessSingle = async (photo: Photo) => {
   try {
-    if (!photo || !photo.storageKey) {
+    if (!photo || !photo.id) {
       toast.add({
         title: $t('dashboard.photos.messages.error'),
         description: $t('dashboard.photos.messages.noStorageKey'),
@@ -1637,7 +1626,7 @@ const handleReprocessSingle = async (photo: Photo) => {
       body: {
         payload: {
           type: 'photo',
-          storageKey: photo.storageKey,
+          photoId: photo.id,
         },
         priority: 0,
         maxAttempts: 3,
@@ -1873,7 +1862,7 @@ const addToSaving = ref(false)
 const addAlbumIds = ref<number[]>([])
 const addPersonIds = ref<string[]>([])
 const newAlbumTitle = ref('')
-const newAlbumVisibility = ref<'public' | 'login' | 'admin'>('public')
+const newAlbumAccess = ref<import('~~/shared/types/permissions').CollectionAccessInput | null>(null)
 const newAlbumHideGallery = ref(false)
 const albumChoices = ref<{ id: number; title: string }[]>([])
 const personChoices = ref<{ id: string; name: string }[]>([])
@@ -1896,21 +1885,21 @@ const openAddTo = async () => {
   addAlbumIds.value = []
   addPersonIds.value = []
   newAlbumTitle.value = ''
-  newAlbumVisibility.value = 'public'
+  newAlbumAccess.value = null
   newAlbumHideGallery.value = false
   addToOpen.value = true
   addToLoading.value = true
   try {
     const [albums, peoplePayload] = await Promise.all([
-      $fetch<Array<{ id?: number; title?: string; kind?: string }>>('/api/albums'),
-      $fetch<{ people?: Array<{ id: string; name?: string | null }> }>(
+      $fetch<Array<{ id?: number; title?: string; kind?: string }>>('/api/albums', { query: { manage: '1' } }),
+      $fetch<{ people?: Array<{ id: string; name?: string | null; ownershipType: string }> }>(
         '/api/people?manage=1',
       ),
     ])
     albumChoices.value = (albums || [])
       .filter((album) => album.kind !== 'scan' && typeof album.id === 'number')
       .map((album) => ({ id: album.id as number, title: album.title || String(album.id) }))
-    personChoices.value = (peoplePayload.people || []).map((person) => ({
+    personChoices.value = (peoplePayload.people || []).filter(person => person.ownershipType === 'site').map((person) => ({
       id: person.id,
       name: person.name?.trim() || person.id,
     }))
@@ -1943,7 +1932,7 @@ const confirmAddTo = async () => {
         body: {
           title,
           photoIds,
-          visibility: newAlbumVisibility.value,
+          access: newAlbumAccess.value,
           hideFromGallery: newAlbumHideGallery.value,
         },
       })
@@ -1953,14 +1942,14 @@ const confirmAddTo = async () => {
     if (addAlbumIds.value.length) {
       const result = await $fetch<{ albums: number }>('/api/albums/add-photos', {
         method: 'POST',
-        body: { albumIds: addAlbumIds.value, photoIds },
+        body: { albumIds: addAlbumIds.value, photoIds, versions: await getCollectionVersions(addAlbumIds.value), reason: $t('accounts.membershipReason') },
       })
       albums += result.albums
     }
     if (addPersonIds.value.length) {
       const result = await $fetch<{ people: number }>('/api/people/assign-photos', {
         method: 'POST',
-        body: { personIds: addPersonIds.value, photoIds },
+        body: { personIds: addPersonIds.value, photoIds, versions: await getPersonVersions(addPersonIds.value), reason: $t('accounts.membershipReason') },
       })
       people += result.people
     }
@@ -1994,7 +1983,7 @@ const handleBatchReprocess = async () => {
 
   // 检查所有选中照片是否都有 storageKey
   const photosWithStorageKey = selectedPhotos.filter(
-    (photo: Photo) => photo.storageKey,
+    (photo: Photo) => photo.id,
   )
   if (photosWithStorageKey.length !== selectedPhotos.length) {
     toast.add({
@@ -2020,7 +2009,7 @@ const handleBatchReprocess = async () => {
         tasks: photosWithStorageKey.map((photo: Photo) => ({
           payload: {
             type: 'photo',
-            storageKey: photo.storageKey,
+            photoId: photo.id,
           },
           priority: 0,
           maxAttempts: 3,
@@ -2995,6 +2984,7 @@ onUnmounted(() => {
                 class="space-y-5"
                 @submit="handleEditSubmit"
               >
+                <UFormField :label="$t('permissions.reason')"><UInput v-model="editReason" class="w-full" /></UFormField>
                 <UFormField
                   :label="$t('dashboard.photos.editModal.fields.title')"
                   name="title"
@@ -3311,19 +3301,7 @@ onUnmounted(() => {
                     v-model="newAlbumTitle"
                     :placeholder="$t('dashboard.photos.addTo.newTitle')"
                   />
-                  <div class="flex flex-wrap gap-2">
-                    <UButton
-                      v-for="level in (['public', 'login', 'admin'] as const)"
-                      :key="level"
-                      type="button"
-                      size="xs"
-                      :color="newAlbumVisibility === level ? 'primary' : 'neutral'"
-                      :variant="newAlbumVisibility === level ? 'solid' : 'soft'"
-                      @click="newAlbumVisibility = level"
-                    >
-                      {{ $t(`dashboard.albums.form.visibility_${level}`) }}
-                    </UButton>
-                  </div>
+                  <CollectionAccessEditor v-if="addToOpen" v-model="newAlbumAccess" />
                   <label class="flex items-center gap-2 text-sm">
                     <USwitch v-model="newAlbumHideGallery" />
                     {{ $t('dashboard.photos.addTo.hideFromGallery') }}

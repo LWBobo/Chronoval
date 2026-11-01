@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { writeClipboard } from '~/utils/clipboard'
+
 definePageMeta({
   layout: 'dashboard',
 })
@@ -66,6 +68,10 @@ const startSetup = async () => {
     setup.value = { qr: res.qr, secret: res.secret, account: res.account }
   } catch (error) {
     console.error('Failed to start 2FA setup:', error)
+    toast.add({
+      color: 'error',
+      title: $t('settings.security.twoFactor.setupError'),
+    })
   } finally {
     enabling.value = false
   }
@@ -150,11 +156,15 @@ const confirmDisable = async () => {
 const copySecret = async () => {
   if (!setup.value?.secret) return
   try {
-    await navigator.clipboard.writeText(setup.value.secret)
+    await writeClipboard(setup.value.secret)
     copied.value = true
     setTimeout(() => (copied.value = false), 1600)
   } catch {
-    /* clipboard unavailable */
+    copied.value = false
+    toast.add({
+      color: 'error',
+      title: $t('settings.security.twoFactor.copyFailed'),
+    })
   }
 }
 

@@ -3,6 +3,7 @@ import { useStorage } from '@vueuse/core'
 import { onMounted, watch } from 'vue'
 
 interface AlbumItem {
+  collectionId?: number
   id?: number
   title: string
   description?: string | null
@@ -73,7 +74,7 @@ const locateNode = (roots: any[], relPath: string): any => {
 const loadParent = async () => {
   isLoading.value = true
   try {
-    const res = (await $fetch('/api/albums')) as any[]
+    const res = (await $fetch('/api/albums', { query: { manage: 1 } })) as any[]
     const found = locateNode(res, parentPath.value)
     parentAlbum.value = (found as AlbumItem) ?? null
     if (!found) {
@@ -211,6 +212,7 @@ const totalPhotos = computed(() =>
     </template>
 
     <template #body>
+      <CollectionBatchPanel :collections="children.map((item:any)=>({collectionId:item.collectionId||item.id,title:item.title||item.relPath||String(item.id)})).filter((item:any)=>item.collectionId)" @saved="loadParent()" />
       <div class="flex flex-col gap-6 p-4 sm:p-6">
         <!-- 加载态 -->
         <div

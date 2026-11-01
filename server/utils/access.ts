@@ -34,15 +34,18 @@ export async function getActor(event: H3Event): Promise<Actor> {
         .where(eq(tables.users.id, userId))
         .get()
     : null
-  const user = row ? toSessionUser(row) : null
+  const user = row && row.status === 'active' && row.authVersion === sessionUser?.authVersion ? toSessionUser(row) : null
 
   if (sessionUser && !user) {
     await clearUserSession(event).catch(() => undefined)
   }
-  return {
+  const actor = {
     user,
     isAdmin: user?.role === 'admin',
   }
+  event.context.permissionActor = actor
+  event.context.permissionSessionKey = session?.csrfToken ? `${user?.id ?? 'guest'}:${user?.authVersion ?? 0}:${session.csrfToken}` : null
+  return actor
 }
 
 export async function requireAccess(
@@ -62,6 +65,10 @@ export async function requireAccess(
       statusCode: 403,
       statusMessage: 'Admin privileges required',
     })
+  }
+  const path = getRequestURL(event).pathname
+  if (actor.user.mustChangePassword && !/^\/api\/(?:me\/(?:password|profile)|profile|auth\/(?:csrf|2fa\/status)|logout|_auth\/session)$/.test(path)) {
+    throw createError({ statusCode: 403, message: '请先修改初始密码', data: { code: 'PASSWORD_CHANGE_REQUIRED' } })
   }
   return actor
 }

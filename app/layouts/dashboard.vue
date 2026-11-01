@@ -5,6 +5,7 @@ const route = useRoute()
 const router = useRouter()
 const { loggedIn, user, clear } = useUserSession()
 const settingsStore = useSettingsStore()
+const logoutAccount = useAccountLogout()
 
 const appTitle = computed(() => {
   const value = settingsStore.getSetting('app:title')
@@ -13,6 +14,9 @@ const appTitle = computed(() => {
 
 const navItems = computed<NavigationMenuItem[][]>(() => [
   [
+    { label: $t('accounts.users'), icon: 'tabler:user-cog', to: '/dashboard/users' },
+    { label: $t('accounts.allPhotos'), icon: 'tabler:photo-shield', to: '/dashboard/managed-photos' },
+    { label: $t('accounts.audit'), icon: 'tabler:clipboard-list', to: '/dashboard/audit' },
     {
       label: $t('title.dashboard'),
       icon: 'tabler:dashboard',
@@ -138,6 +142,7 @@ const navItems = computed<NavigationMenuItem[][]>(() => [
     },
   ],
   [
+    { label: $t('accounts.personalSpace'), icon: 'tabler:user', to: '/me/photos' },
     {
       label: $t('dashboard.nav.home'),
       icon: 'tabler:home',
@@ -182,11 +187,7 @@ onBeforeUnmount(() => {
 
 // 退出登录：从管理后台跳回首页（登出后 loggedIn 为 false，管理端自动拒绝访问）
 const handleLogout = async () => {
-  try {
-    await clear()
-  } finally {
-    await router.push('/')
-  }
+  await logoutAccount()
 }
 </script>
 
@@ -211,7 +212,13 @@ const handleLogout = async () => {
       :to="{ path: '/login', query: { redirect: route.fullPath } }"
     >{{ $t('auth.form.signin.title') }}</UButton>
   </div>
-  <UDashboardGroup v-else class="dashboard-root">
+  <!-- Use Nuxt UI's overlay scrolling layout to avoid transformed, clipped
+       modal content. Theme only modal props; slideovers keep their own layout. -->
+  <UTheme
+    v-else
+    :props="{ modal: { scrollable: true, transition: false } }"
+  >
+  <UDashboardGroup class="dashboard-root">
     <UDashboardSidebar
       id="cframe-dashboard-sidebar"
       resizable
@@ -343,4 +350,5 @@ const handleLogout = async () => {
       <component :is="Component" :key="route.path" />
     </NuxtPage>
   </UDashboardGroup>
+  </UTheme>
 </template>

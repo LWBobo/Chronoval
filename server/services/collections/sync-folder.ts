@@ -118,8 +118,9 @@ export function syncLibraryFolders(libraryId: number) {
 }
 
 export function removeLibraryCollections(libraryId: number) {
-  useDB()
-    .delete(tables.libraries)
-    .where(eq(tables.libraries.id, libraryId))
-    .run()
+  useDB().transaction(tx => {
+    const rows=tx.select({id:tables.collections.id,path:tables.collections.relPath}).from(tables.collections).where(eq(tables.collections.libraryId,libraryId)).all().sort((a,b)=>b.path.length-a.path.length)
+    for(const row of rows)tx.delete(tables.collections).where(eq(tables.collections.id,row.id)).run()
+    tx.delete(tables.libraries).where(eq(tables.libraries.id,libraryId)).run()
+  },{behavior:'immediate'})
 }

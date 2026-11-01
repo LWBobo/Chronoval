@@ -1,9 +1,10 @@
+import { photoWithMediaColumns } from './photo-media'
 import type { H3Event } from 'h3'
 import { and, eq, inArray, type SQL } from 'drizzle-orm'
 import { photoVisibleSql } from './photo-visibility'
 import { getActor, type Actor } from './access'
-import { hasAlbumAccess } from './manualAlbumAuth'
-import { hasScanAlbumAccess } from './scanAlbumAuth'
+import { collectionPasswordAccess } from './collection-password'
+import { isAlbumAdminBypass } from './albumAccess'
 
 const PHOTO_ID_BATCH_SIZE = 500
 
@@ -12,68 +13,7 @@ const PHOTO_ID_BATCH_SIZE = 500
  * 批量可见性查询前计算一次，并作为 SQL 的密码豁免集合传入。
  */
 export function unlockedCollectionIds(event: H3Event): number[] {
-  const rows = useDB()
-    .select({
-      id: tables.collections.id,
-      kind: tables.collections.kind,
-      libraryId: tables.collections.libraryId,
-      relPath: tables.collections.relPath,
-      passwordHash: tables.collections.passwordHash,
-    })
-    .from(tables.collections)
-    .all()
-
-  const unlocked: number[] = []
-  for (const row of rows) {
-    if (row.kind === 'manual') {
-      if (!row.passwordHash) continue
-      if (
-        hasAlbumAccess(
-          event,
-          {
-            albumId: row.id,
-            passwordHash: row.passwordHash,
-            sessionExempt: false,
-          },
-          false,
-        )
-      ) {
-        unlocked.push(row.id)
-      }
-      continue
-    }
-
-    if (row.kind !== 'folder' || row.libraryId == null) continue
-    // 子目录可继承最近父目录的密码。解锁子目录时 Cookie 作用域仍是子目录路径，
-    // 因此即使该集合自身 passwordHash 为空，也必须用继承后的哈希检查它的 Cookie。
-    const effectivePassword = rows
-      .filter(
-        (candidate) =>
-          candidate.kind === 'folder' &&
-          candidate.libraryId === row.libraryId &&
-          candidate.passwordHash &&
-          (candidate.relPath === '' ||
-            row.relPath === candidate.relPath ||
-            row.relPath.startsWith(`${candidate.relPath}/`)),
-      )
-      .sort((a, b) => b.relPath.length - a.relPath.length)[0]?.passwordHash
-    if (!effectivePassword) continue
-    if (
-      hasScanAlbumAccess(
-        event,
-        {
-          libId: row.libraryId,
-          relPath: row.relPath,
-          passwordHash: effectivePassword,
-          sessionExempt: false,
-        },
-        false,
-      )
-    ) {
-      unlocked.push(row.id)
-    }
-  }
-  return unlocked
+  return useDB().select({ id: tables.collections.id }).from(tables.collections).all().filter((row) => collectionPasswordAccess(event,row.id)).map((row) => row.id)
 }
 
 export interface PhotoAccessContext {
@@ -81,6 +21,7 @@ export interface PhotoAccessContext {
   viewerRank: 0 | 1 | 2
   userId: number | null
   unlockedIds: number[]
+  adminPasswordBypass: boolean
 }
 
 export async function buildPhotoAccessContext(
@@ -94,6 +35,7 @@ export async function buildPhotoAccessContext(
     viewerRank,
     userId: Number.isFinite(rawUserId) ? rawUserId : null,
     unlockedIds: unlockedCollectionIds(event),
+    adminPasswordBypass: await isAlbumAdminBypass(event, actor),
   }
 }
 
@@ -106,6 +48,7 @@ export function visiblePhotoSql(
     userId: context.userId,
     surface,
     unlockedIds: context.unlockedIds,
+    adminPasswordBypass: context.adminPasswordBypass,
   })
 }
 
@@ -115,21 +58,27 @@ export async function requireVisiblePhoto(
   options: {
     context?: PhotoAccessContext
     allowAdminDeleted?: boolean
+    allowOwnerDeleted?: boolean
   } = {},
 ) {
   const context = options.context ?? (await buildPhotoAccessContext(event))
   const db = useDB()
 
-  const photo =
+  let photo =
     options.allowAdminDeleted && context.actor.isAdmin
-      ? db.select().from(tables.photos).where(eq(tables.photos.id, photoId)).get()
+      ? db.select(photoWithMediaColumns()).from(tables.photos).where(eq(tables.photos.id, photoId)).get()
       : db
-          .select()
+          .select(photoWithMediaColumns())
           .from(tables.photos)
           .where(
             and(eq(tables.photos.id, photoId), visiblePhotoSql(context)),
           )
           .get()
+
+  if (!photo && options.allowOwnerDeleted && context.userId) {
+    photo = db.select(photoWithMediaColumns()).from(tables.photos).where(and(eq(tables.photos.id, photoId), eq(tables.photos.ownershipType, 'user'), eq(tables.photos.ownerId, context.userId))).get()
+  }
+  if (photo && (photo.processingStatus === 'purging' || photo.processingStatus === 'uploading' || (photo.transferState === 'moving' && !context.actor.isAdmin))) photo = undefined
 
   if (!photo) {
     throw createError({ statusCode: 404, statusMessage: 'Photo not found' })

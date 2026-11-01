@@ -1,3 +1,4 @@
+import { folderAudienceAccess } from '../services/collections/access'
 import type { H3Event } from 'h3'
 import { and, inArray } from 'drizzle-orm'
 import type { Actor } from './access'
@@ -36,7 +37,7 @@ export async function serializeScanAlbumNodes(
     .where(
       and(
         inArray(tables.photos.libraryId, libraryIds),
-        visiblePhotoSql(context),
+        manageMode ? undefined : visiblePhotoSql(context),
       ),
     )
     .all()
@@ -55,7 +56,7 @@ export async function serializeScanAlbumNodes(
 
   const visit = async (node: any): Promise<any | null> => {
     const visibility = getScanAlbumEffectiveVisibility(node.libId, node.relPath)
-    if (!albumOpenToActor({ visibility }, options.actor)) return null
+    if (!folderAudienceAccess(node.libId, node.relPath, options.actor)) return null
     const auth = await getScanAlbumEffectiveAuth(node.libId, node.relPath)
     const sessionExempt = isPasswordExemptForUser(
       {

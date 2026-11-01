@@ -1,3 +1,4 @@
+import { photoAssetSql } from '../../utils/photo-media'
 import { and, desc, eq, isNull, like, or, sql } from 'drizzle-orm'
 
 function likeTerm(raw: string) {
@@ -64,7 +65,7 @@ export default eventHandler(async (event) => {
     .select({
       id: tables.photos.id,
       title: tables.photos.title,
-      thumbnailUrl: tables.photos.thumbnailUrl,
+      thumbnailUrl: photoAssetSql('thumbnail'),
       dateTaken: tables.photos.dateTaken,
     })
     .from(tables.photos)

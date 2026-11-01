@@ -151,169 +151,173 @@ const clearSelected = async () => {
 </script>
 
 <template>
-  <UContainer class="py-6 space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-      <div class="space-y-2 max-w-3xl">
-        <h1 class="text-2xl font-semibold">
-          {{ $t('dashboard.watermark.title') }}
-        </h1>
-        <p class="text-sm text-neutral-500 dark:text-neutral-400 leading-relaxed">
-          {{ $t('dashboard.watermark.description') }}
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
-        <UButton
-          icon="tabler:search"
-          variant="soft"
-          :loading="scanning"
-          :disabled="clearing"
-          @click="scan"
-        >
-          {{ $t('dashboard.watermark.scan') }}
-        </UButton>
-        <UButton
-          icon="tabler:eraser"
-          color="error"
-          :loading="clearing"
-          :disabled="scanning || selected.length === 0"
-          @click="confirmOpen = true"
-        >
-          {{ $t('dashboard.watermark.clear') }}
-        </UButton>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <DashboardIndicator
-        :title="$t('dashboard.watermark.stats.mounts')"
-        icon="tabler:folder"
-        color="blue"
-        :value="mountCount"
-      />
-      <DashboardIndicator
-        :title="$t('dashboard.watermark.stats.scanned')"
-        icon="tabler:photo"
-        color="orange"
-        :value="scanned"
-      />
-      <DashboardIndicator
-        :title="$t('dashboard.watermark.stats.found')"
-        icon="tabler:badge"
-        color="green"
-        :value="items.length"
-      />
-      <DashboardIndicator
-        :title="$t('dashboard.watermark.stats.selected')"
-        icon="tabler:checks"
-        color="red"
-        :value="selected.length"
-      />
-    </div>
-
-    <UAlert
-      v-if="unavailable.length"
-      color="warning"
-      variant="soft"
-      icon="tabler:alert-triangle"
-      :title="$t('dashboard.watermark.unavailable')"
-      :description="unavailable.join(', ')"
-    />
-
-    <UCard>
-      <template #header>
-        <div class="flex items-center justify-between gap-3">
-          <UCheckbox
-            :model-value="allSelected"
-            :disabled="items.length === 0 || clearing"
-            :label="$t('dashboard.watermark.selectAll')"
-            @update:model-value="toggleAll(Boolean($event))"
-          />
-          <span class="text-sm text-neutral-500">
-            {{ $t('dashboard.watermark.selectedCount', { count: selected.length }) }}
-          </span>
-        </div>
-      </template>
-
-      <div
-        v-if="items.length === 0"
-        class="py-16 text-center text-sm text-neutral-500"
-      >
-        {{ scanning ? $t('dashboard.watermark.scanning') : $t('dashboard.watermark.empty') }}
-      </div>
-
-      <div
-        v-else
-        class="max-h-[32rem] divide-y divide-neutral-200 overflow-y-auto dark:divide-neutral-800"
-      >
-        <div
-          v-for="item in items"
-          :key="keyOf(item)"
-          class="flex cursor-pointer items-start gap-3 px-1 py-3"
-          @click="toggle(item, !isSelected(item))"
-        >
-          <UCheckbox
-            :model-value="isSelected(item)"
-            :disabled="clearing"
-            class="mt-0.5"
-            @click.stop
-            @update:model-value="toggle(item, Boolean($event))"
-          />
-          <span class="min-w-0 flex-1">
-            <span class="block truncate text-sm font-medium">{{ item.fileName }}</span>
-            <span class="block truncate text-xs text-neutral-500">
-              {{ item.mountName }} / {{ item.relPath }}
-              · {{ $t(`dashboard.watermark.brands.${item.brand}`) }}
-            </span>
-            <span
-              v-if="results[keyOf(item)] && !results[keyOf(item)]?.ok"
-              class="mt-1 block text-xs text-error-500"
-            >
-              {{ results[keyOf(item)]?.message }}
-            </span>
-          </span>
-          <span class="shrink-0 text-xs text-neutral-500">{{ formatSize(item.size) }}</span>
-        </div>
-      </div>
-    </UCard>
-
-    <UModal v-model:open="confirmOpen">
-      <template #body>
-        <div class="space-y-4">
-          <div class="flex items-start gap-4">
-            <div
-              class="flex size-10 shrink-0 items-center justify-center rounded-full bg-error-100 text-error-600 dark:bg-error-900/40 dark:text-error-400"
-            >
-              <Icon
-                name="tabler:eraser"
-                class="size-6"
-              />
-            </div>
-            <div class="space-y-1.5 pt-1">
-              <h3 class="text-lg font-semibold leading-5">
-                {{ $t('dashboard.watermark.confirmTitle') }}
-              </h3>
-              <p class="text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
-                {{ $t('dashboard.watermark.confirmBody', { count: selected.length }) }}
-              </p>
-            </div>
+  <UDashboardPanel>
+    <template #body>
+      <UContainer class="w-full py-6 space-y-6">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div class="space-y-2 max-w-3xl">
+            <h1 class="text-2xl font-semibold">
+              {{ $t('dashboard.watermark.title') }}
+            </h1>
+            <p class="text-sm text-neutral-500 dark:text-neutral-400 leading-relaxed">
+              {{ $t('dashboard.watermark.description') }}
+            </p>
           </div>
-          <div class="flex justify-end gap-2">
+          <div class="flex shrink-0 items-center gap-2">
             <UButton
-              variant="ghost"
-              @click="confirmOpen = false"
+              icon="tabler:search"
+              variant="soft"
+              :loading="scanning"
+              :disabled="clearing"
+              @click="scan"
             >
-              {{ $t('dashboard.watermark.cancel') }}
+              {{ $t('dashboard.watermark.scan') }}
             </UButton>
             <UButton
-              color="error"
               icon="tabler:eraser"
-              @click="clearSelected"
+              color="error"
+              :loading="clearing"
+              :disabled="scanning || selected.length === 0"
+              @click="confirmOpen = true"
             >
-              {{ $t('dashboard.watermark.confirm') }}
+              {{ $t('dashboard.watermark.clear') }}
             </UButton>
           </div>
         </div>
-      </template>
-    </UModal>
-  </UContainer>
+
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <DashboardIndicator
+            :title="$t('dashboard.watermark.stats.mounts')"
+            icon="tabler:folder"
+            color="blue"
+            :value="mountCount"
+          />
+          <DashboardIndicator
+            :title="$t('dashboard.watermark.stats.scanned')"
+            icon="tabler:photo"
+            color="orange"
+            :value="scanned"
+          />
+          <DashboardIndicator
+            :title="$t('dashboard.watermark.stats.found')"
+            icon="tabler:badge"
+            color="green"
+            :value="items.length"
+          />
+          <DashboardIndicator
+            :title="$t('dashboard.watermark.stats.selected')"
+            icon="tabler:checks"
+            color="red"
+            :value="selected.length"
+          />
+        </div>
+
+        <UAlert
+          v-if="unavailable.length"
+          color="warning"
+          variant="soft"
+          icon="tabler:alert-triangle"
+          :title="$t('dashboard.watermark.unavailable')"
+          :description="unavailable.join(', ')"
+        />
+
+        <UCard>
+          <template #header>
+            <div class="flex items-center justify-between gap-3">
+              <UCheckbox
+                :model-value="allSelected"
+                :disabled="items.length === 0 || clearing"
+                :label="$t('dashboard.watermark.selectAll')"
+                @update:model-value="toggleAll(Boolean($event))"
+              />
+              <span class="text-sm text-neutral-500">
+                {{ $t('dashboard.watermark.selectedCount', { count: selected.length }) }}
+              </span>
+            </div>
+          </template>
+
+          <div
+            v-if="items.length === 0"
+            class="py-16 text-center text-sm text-neutral-500"
+          >
+            {{ scanning ? $t('dashboard.watermark.scanning') : $t('dashboard.watermark.empty') }}
+          </div>
+
+          <div
+            v-else
+            class="max-h-[32rem] divide-y divide-neutral-200 overflow-y-auto dark:divide-neutral-800"
+          >
+            <div
+              v-for="item in items"
+              :key="keyOf(item)"
+              class="flex cursor-pointer items-start gap-3 px-1 py-3"
+              @click="toggle(item, !isSelected(item))"
+            >
+              <UCheckbox
+                :model-value="isSelected(item)"
+                :disabled="clearing"
+                class="mt-0.5"
+                @click.stop
+                @update:model-value="toggle(item, Boolean($event))"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm font-medium">{{ item.fileName }}</span>
+                <span class="block truncate text-xs text-neutral-500">
+                  {{ item.mountName }} / {{ item.relPath }}
+                  · {{ $t(`dashboard.watermark.brands.${item.brand}`) }}
+                </span>
+                <span
+                  v-if="results[keyOf(item)] && !results[keyOf(item)]?.ok"
+                  class="mt-1 block text-xs text-error-500"
+                >
+                  {{ results[keyOf(item)]?.message }}
+                </span>
+              </span>
+              <span class="shrink-0 text-xs text-neutral-500">{{ formatSize(item.size) }}</span>
+            </div>
+          </div>
+        </UCard>
+
+        <UModal v-model:open="confirmOpen">
+          <template #body>
+            <div class="space-y-4">
+              <div class="flex items-start gap-4">
+                <div
+                  class="flex size-10 shrink-0 items-center justify-center rounded-full bg-error-100 text-error-600 dark:bg-error-900/40 dark:text-error-400"
+                >
+                  <Icon
+                    name="tabler:eraser"
+                    class="size-6"
+                  />
+                </div>
+                <div class="space-y-1.5 pt-1">
+                  <h3 class="text-lg font-semibold leading-5">
+                    {{ $t('dashboard.watermark.confirmTitle') }}
+                  </h3>
+                  <p class="text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
+                    {{ $t('dashboard.watermark.confirmBody', { count: selected.length }) }}
+                  </p>
+                </div>
+              </div>
+              <div class="flex justify-end gap-2">
+                <UButton
+                  variant="ghost"
+                  @click="confirmOpen = false"
+                >
+                  {{ $t('dashboard.watermark.cancel') }}
+                </UButton>
+                <UButton
+                  color="error"
+                  icon="tabler:eraser"
+                  @click="clearSelected"
+                >
+                  {{ $t('dashboard.watermark.confirm') }}
+                </UButton>
+              </div>
+            </div>
+          </template>
+        </UModal>
+      </UContainer>
+    </template>
+  </UDashboardPanel>
 </template>

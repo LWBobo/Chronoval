@@ -20,14 +20,14 @@ const emit = defineEmits<{
 }>()
 
 const schema = z.object({
-  email: z.email($t('auth.form.errors.invalidEmail')),
-  password: z.string().min(6, $t('auth.form.errors.invalidPassword')),
+  identifier: z.string().trim().min(1).max(254),
+  password: z.string().min(1).max(128),
 })
 
 type Schema = z.output<typeof schema>
 
 const state = reactive<Partial<Schema>>({
-  email: undefined,
+  identifier: undefined,
   password: '',
 })
 
@@ -58,7 +58,7 @@ window.__chronovalLoginGuard=true
 var ready=function(){return window.__chronovalAuthReady===true}
 var redirectTarget=function(){
 try{var q=new URLSearchParams(window.location.search).get('redirect')
-return q&&q.charAt(0)==='/'?q:'/dashboard'}catch(e){return '/dashboard'}
+return q&&q.charAt(0)==='/'&&q.charAt(1)!=='/'&&q.indexOf(String.fromCharCode(92))===-1?q:'/me/photos'}catch(e){return '/dashboard'}
 }
 var setBusy=function(form,busy){
 var btn=form.querySelector('button[type="submit"]')
@@ -68,10 +68,10 @@ else{btn.disabled=false;var l=btn.getAttribute('data-auth-label');if(l)btn.textC
 }
 var post=function(url,body,form){
 setBusy(form,true)
-fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)})
+fetch('/api/auth/csrf',{credentials:'same-origin'}).then(function(res){return res.json()}).then(function(csrf){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf.token},credentials:'same-origin',body:JSON.stringify(body)})})
 .then(function(res){
-if(res.ok){window.location.replace(redirectTarget());return}
 if(res.status===202){var sp=new URLSearchParams(window.location.search);sp.set('step','verify');window.location.replace(window.location.pathname+'?'+sp.toString());return}
+if(res.ok){fetch('/api/profile',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(u){window.location.replace(u.mustChangePassword?'/me/settings/security':(new URLSearchParams(window.location.search).has('redirect')?redirectTarget():(u.isAdmin?'/dashboard':'/me/photos')))});return}
 setBusy(form,false)
 var btn=form.querySelector('button[type="submit"]')
 if(btn&&${JSON.stringify($t('auth.messages.loginInvalid'))}){btn.textContent=${JSON.stringify($t('auth.messages.loginInvalid'))};setTimeout(function(){setBusy(form,false)},1800)}
@@ -86,12 +86,12 @@ e.preventDefault()
 if(e.stopImmediatePropagation)e.stopImmediatePropagation()
 var codeInput=form.querySelector('input[name="code"]')
 if(codeInput){var c=(codeInput.value||'').trim();if(c)post('/api/login/2fa',{code:c},form);return}
-var emailEl=form.querySelector('input[name="email"]')
+var emailEl=form.querySelector('input[name="identifier"]')
 var passEl=form.querySelector('input[name="password"]')
 var email=emailEl?(emailEl.value||'').trim():''
 var password=passEl?(passEl.value||''):''
 if(!email||!password)return
-post('/api/login',{email:email,password:password},form)
+post('/api/login',{identifier:email,password:password},form)
 },true)
 })()`,
     },
@@ -104,7 +104,6 @@ onMounted(() => {
 })
 
 // 细分校验提示：区分“没输入”与“格式错误”，让提示更贴近实际情况。
-const sEmail = z.email()
 const onSubmit = () => {
   if (props.verify) {
     const code = (verifyCode.value ?? '').trim()
@@ -120,7 +119,7 @@ const onSubmit = () => {
     return
   }
 
-  const email = (state.email ?? '').trim()
+  const email = (state.identifier ?? '').trim()
   const password = state.password ?? ''
   const msgs: string[] = []
 
@@ -129,12 +128,10 @@ const onSubmit = () => {
   } else {
     if (!email) {
       msgs.push($t('auth.form.errors.emailMissing'))
-    } else if (!sEmail.safeParse(email).success) {
-      msgs.push($t('auth.form.errors.invalidEmail'))
     }
     if (!password) {
       msgs.push($t('auth.form.errors.passwordMissing'))
-    } else if (password.length < 6) {
+    } else if (password.length > 128) {
       msgs.push($t('auth.form.errors.invalidPassword'))
     }
   }
@@ -143,7 +140,7 @@ const onSubmit = () => {
     showNotice(msgs.join('，'))
     return
   }
-  emit('submit', { data: JSON.parse(JSON.stringify({ email, password })) })
+  emit('submit', { data: JSON.parse(JSON.stringify({ identifier: email, password })) })
 }
 
 // 暴露给父组件：登录接口失败时也能复用同一个顶部浮动通知卡片
@@ -232,14 +229,14 @@ const inputUi = {
     >
       <template v-if="!$props.verify">
       <UFormField
-        :label="$t('auth.form.labels.email')"
-        name="email"
+        :label="$t('accounts.identifier')"
+        name="identifier"
         :ui="{ label: 'mb-1.5 text-[0.6rem] lg:text-[0.65rem] font-medium uppercase tracking-[0.2em] text-neutral-600' }"
       >
         <UInput
-          v-model="state.email"
+          v-model="state.identifier"
           :autofocus="false"
-          name="email"
+          name="identifier"
           class="w-full"
           :ui="inputUi"
         />

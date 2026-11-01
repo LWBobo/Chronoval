@@ -323,12 +323,9 @@ const animLibrary = useAnimatedNumber(() => mediaStats.value.library)
 
 
 
-// 缩略图地址纠错：thumbnailKey 存在时走 /thumb 代理，防止明文 token 泄漏
+// 媒体地址已由文件登记服务生成并逐次鉴权。
 const thumbSrc = (photo: Photo): string | null => {
-  if (!photo.thumbnailUrl) return null
-  return photo.thumbnailKey
-    ? `/thumb/${encodeURIComponent(photo.thumbnailUrl)}`
-    : photo.thumbnailUrl
+  return photo.thumbnailUrl || null
 }
 
 // 最近上传小窗口预览：与照片管理一致（UModal + MasonryItemPhoto 单图），点击缩略图弹出

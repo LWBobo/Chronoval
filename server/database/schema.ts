@@ -15,14 +15,19 @@ import type { NeededExif } from '~~/shared/types/photo'
 import type { StorageConfig } from '../services/storage'
 
 type PipelineQueuePayload =
+  | { type: 'photo-process'; photoId: string; uploadSessionId: string }
+  | { type: 'photo-purge'; photoId: string }
+  | { type: 'upload-cleanup'; uploadSessionId: string }
+  | { type: 'ownership-transfer' | 'ownership-transfer-cleanup'; transferId: string }
+  | { type: 'user-deletion'; userId: number }
   | {
       type: 'photo'
-      storageKey: string
+      photoId: string
       eraseLocation?: boolean
     }
   | {
       type: 'live-photo-video'
-      storageKey: string
+      photoId: string
     }
   | {
       type: 'photo-reverse-geocoding'
@@ -68,20 +73,47 @@ type PipelineQueuePayload =
 
 export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  username: text('name').notNull().unique(),
+  username: text('username').notNull().unique(),
+  usernameKey: text('username_key').notNull().unique(),
+  displayName: text('display_name').notNull(),
   email: text('email').notNull().unique(),
-  password: text('password'),
+  emailKey: text('email_key').notNull().unique(),
+  password: text('password_hash'),
   avatar: text('avatar'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
-  isAdmin: integer('is_admin').default(0).notNull(),
-  /** admin / user。读权限以本列为准，is_admin 仅作迁移过渡。 */
   role: text('role', { enum: ['admin', 'user'] }).notNull().default('user'),
+  status: text('status', { enum: ['active', 'disabled', 'deleting', 'deleted'] }).notNull().default('active'),
+  canUpload: integer('can_upload', { mode: 'boolean' }).notNull().default(true),
+  mustChangePassword: integer('must_change_password', { mode: 'boolean' }).notNull().default(true),
+  authVersion: integer('auth_version').notNull().default(1),
+  version: integer('version').notNull().default(1),
+  storageQuotaBytes: integer('storage_quota_bytes').default(21474836480),
+  createdBy: integer('created_by').references((): AnySQLiteColumn => users.id, { onDelete: 'restrict' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  disabledAt: integer('disabled_at', { mode: 'timestamp' }),
+  deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   // 两次验证（TOTP）：secret 在开启前先生成并暂存，用户用验证器扫码确认后才置 enabled
   totpSecret: text('totp_secret'),
   totpEnabled: integer('totp_enabled', { mode: 'boolean' })
     .default(false)
     .notNull(),
-})
+}, (t) => [
+  check('users_identity_check', sql`${t.username} = ${t.usernameKey} AND ${t.email} = ${t.emailKey}`),
+  check('users_username_check', sql`length(${t.username}) BETWEEN 3 AND 32 AND ${t.username} GLOB '[a-z]*' AND ${t.username} NOT GLOB '*[^a-z0-9_-]*' AND ${t.username} NOT IN ('con','prn','aux','nul','com1','com2','com3','com4','com5','com6','com7','com8','com9','lpt1','lpt2','lpt3','lpt4','lpt5','lpt6','lpt7','lpt8','lpt9')`),
+  check('users_email_normalized_check', sql`${t.email}=lower(trim(${t.email}))`),
+  check('users_role_check', sql`${t.role} IN ('admin','user')`),
+  check('users_status_check', sql`${t.status} IN ('active','disabled','deleting','deleted')`),
+  check('users_versions_check', sql`${t.authVersion} >= 1 AND ${t.version} >= 1`),
+  check('users_quota_check', sql`${t.storageQuotaBytes} IS NULL OR ${t.storageQuotaBytes} >= 0`),
+  index('idx_users_status_role').on(t.status, t.role),
+])
+
+export const userStorageUsage = sqliteTable('user_storage_usage', {
+  userId: integer('user_id').primaryKey().references(() => users.id, { onDelete: 'restrict' }),
+  usedBytes: integer('used_bytes').notNull().default(0),
+  reservedBytes: integer('reserved_bytes').notNull().default(0),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [check('usage_nonnegative_check', sql`${t.usedBytes} >= 0 AND ${t.reservedBytes} >= 0`)])
 
 // 登入记录：记录每次登入尝试（成功/失败/待两步验证），用于账户安全审计。
 // userId 对未知账户（登录邮箱不存在）为 null，此时以 email 留存失败足迹。
@@ -94,7 +126,9 @@ export const loginLogs = sqliteTable(
       onDelete: 'set null',
     }),
     // 尝试登入的邮箱（冗余保存，便于未知账户失败记录定位）
-    email: text('email').notNull(),
+    email: text('account_email_snapshot'),
+    loginIdentifier: text('login_identifier').notNull(),
+    identifierType: text('identifier_type', { enum: ['username', 'email'] }).notNull(),
     ip: text('ip'),
     userAgent: text('user_agent'),
     // IP 归属地（离线库解析，失败/内网为 null）
@@ -117,24 +151,41 @@ export const loginLogs = sqliteTable(
   },
   (table) => [
     index('idx_login_logs_user_created').on(table.userId, table.createdAt),
-    index('idx_login_logs_email_created').on(table.email, table.createdAt),
+    index('idx_login_logs_identifier_created').on(table.loginIdentifier, table.createdAt),
   ],
 )
 
 export const photos = sqliteTable('photos', {
   id: text('id').primaryKey(),
+  ownershipType: text('ownership_type', { enum: ['site', 'user'] }).notNull().default('site'),
+  ownerId: integer('owner_id').references(() => users.id, { onDelete: 'restrict' }),
+  uploadedBy: integer('uploaded_by').references(() => users.id, { onDelete: 'restrict' }),
+  visibility: text('visibility', { enum: ['inherit', 'private', 'public', 'shared'] }).notNull().default('inherit'),
+  processingStatus: text('processing_status', { enum: ['uploading', 'processing', 'ready', 'failed', 'purging'] }).notNull().default('ready'),
+  processingErrorCode: text('processing_error_code'),
+  transferState: text('transfer_state', { enum: ['idle', 'moving', 'cleanup_pending'] }).notNull().default('idle'),
+  activeTransferId: text('active_transfer_id'),
+  moderationStatus: text('moderation_status', { enum: ['visible', 'blocked'] }).notNull().default('visible'),
+  moderationReason: text('moderation_reason'),
+  aclVersion: integer('acl_version').notNull().default(1),
+  metadataVersion: integer('metadata_version').notNull().default(1),
+  originalFilename: text('original_filename'),
+  uploadRelativePath: text('upload_relative_path'),
+  storageRelativePath: text('storage_relative_path'),
+  preserveOriginal: integer('preserve_original', { mode: 'boolean' }).notNull().default(true),
+  stripLocation: integer('strip_location', { mode: 'boolean' }).notNull().default(false),
+  originalBytes: integer('original_bytes').notNull().default(0),
+  contentChecksum: text('content_checksum'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   title: text('title'),
   description: text('description'),
   width: integer('width'),
   height: integer('height'),
   aspectRatio: real('aspect_ratio'),
   dateTaken: text('date_taken'),
-  storageKey: text('storage_key'),
-  thumbnailKey: text('thumbnail_key'),
   fileSize: integer('file_size'),
   lastModified: text('last_modified'),
-  originalUrl: text('original_url'),
-  thumbnailUrl: text('thumbnail_url'),
   thumbnailHash: text('thumbnail_hash'),
   tags: text('tags', { mode: 'json' }).$type<string[]>(),
   exif: text('exif', { mode: 'json' }).$type<NeededExif>(),
@@ -146,8 +197,6 @@ export const photos = sqliteTable('photos', {
   locationName: text('location_name'),
   // LivePhoto 相关字段
   isLivePhoto: integer('is_live_photo').default(0).notNull(),
-  livePhotoVideoUrl: text('live_photo_video_url'),
-  livePhotoVideoKey: text('live_photo_video_key'),
   // 360 全景手动标记：null=自动判定；1=强制全景；0=强制非全景
   isPanorama: integer('is_panorama'),
   // 360 全景固定初始视角（度）：null=不固定；前台打开全景时按该视角进入
@@ -173,6 +222,14 @@ export const photos = sqliteTable('photos', {
   // 回收站软删除标记：null=正常；非 null=已移入回收站（该时间戳即删除时刻）
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
 }, (table) => [
+  check('photos_ownership_check', sql`(${table.ownershipType}='site' AND ${table.ownerId} IS NULL AND ${table.visibility}='inherit') OR (${table.ownershipType}='user' AND ${table.ownerId} IS NOT NULL AND ${table.visibility} IN ('private','public','shared'))`),
+  check('photos_personal_source_check', sql`${table.ownershipType}!='user' OR (${table.source}='upload' AND ${table.libraryId} IS NULL AND ${table.libraryMount} IS NULL AND ${table.libraryPath} IS NULL AND ${table.preserveOriginal}=1)`),
+  check('photos_processing_check', sql`${table.processingStatus} IN ('uploading','processing','ready','failed','purging')`),
+  check('photos_transfer_check', sql`${table.transferState} IN ('idle','moving','cleanup_pending')`),
+  check('photos_moderation_check', sql`${table.moderationStatus} IN ('visible','blocked')`),
+  check('photos_versions_bytes_check', sql`${table.originalBytes} >= 0 AND ${table.aclVersion} >= 1 AND ${table.metadataVersion} >= 1`),
+  index('idx_photos_owner_created').on(table.ownerId, table.createdAt, table.id),
+  index('idx_photos_owner_deleted').on(table.ownerId, table.deletedAt),
   index('idx_photos_gallery_order')
     .on(sql`${table.dateTaken} DESC`, sql`${table.id} ASC`)
     .where(sql`${table.deletedAt} IS NULL`),
@@ -201,9 +258,12 @@ export const pipelineQueue = sqliteTable('pipeline_queue', {
     .notNull()
     .default({
       type: 'photo',
-      storageKey: '',
+      photoId: '',
     } satisfies PipelineQueuePayload),
   priority: integer('priority').default(0).notNull(),
+  photoId: text('photo_id').references(() => photos.id, { onDelete: 'set null' }),
+  uploadSessionId: text('upload_session_id').references(() => uploadSessions.id, { onDelete: 'set null' }),
+  dedupeKey: text('dedupe_key'),
   attempts: integer('attempts').default(0).notNull(),
   maxAttempts: integer('max_attempts').default(3).notNull(),
   status: text('status', {
@@ -238,11 +298,14 @@ export const pipelineQueue = sqliteTable('pipeline_queue', {
     .default(sql`(unixepoch())`),
   completedAt: integer('completed_at', { mode: 'timestamp' }),
 }, (table) => [
+  uniqueIndex('idx_pipeline_active_dedupe').on(table.dedupeKey).where(sql`${table.status} IN ('pending','in-stages')`),
   index('idx_pipeline_queue_pending').on(
     table.status,
     sql`${table.priority} DESC`,
     sql`${table.createdAt} ASC`,
   ),
+  index('idx_pipeline_queue_photo_status').on(table.photoId,table.status),
+  index('idx_pipeline_queue_upload_status').on(table.uploadSessionId,table.status),
   index('idx_pipeline_queue_status_completed').on(
     table.status,
     table.completedAt,
@@ -386,6 +449,7 @@ export const libraries = sqliteTable('libraries', {
     .default('start')
     .notNull(),
   enabled: integer('enabled', { mode: 'boolean' }).default(true).notNull(),
+  deleting: integer('deleting', { mode: 'boolean' }).default(false).notNull(),
   watchIntervalMs: integer('watch_interval_ms').default(60000).notNull(),
   lastScanAt: integer('last_scan_at', { mode: 'timestamp' }),
   lastScanResult: text('last_scan_result'),
@@ -398,15 +462,21 @@ export const libraries = sqliteTable('libraries', {
     .default(sql`(unixepoch())`),
 })
 
-/** 手工相簿、扫描文件夹、人物相册。谁能看写在 access_grants。 */
+/** 三类集合共用权限字段，指定可见与密码免密关系分别保存。 */
 export const collections = sqliteTable(
   'collections',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     kind: text('kind', { enum: ['manual', 'folder', 'person'] }).notNull(),
+    ownershipType: text('ownership_type', { enum: ['site', 'user'] }).notNull().default('site'),
+    ownerId: integer('owner_id').references(() => users.id, { onDelete: 'restrict' }),
+    visibility: text('visibility', { enum: ['public', 'login', 'selected', 'admin'] }).notNull().default('public'),
+    aclVersion: integer('acl_version').notNull().default(1),
+    passwordVersion: integer('password_version').notNull().default(1),
+    passwordExemptMode: text('password_exempt_mode', { enum: ['none', 'logged_in', 'selected'] }).notNull().default('none'),
     parentId: integer('parent_id').references(
       (): AnySQLiteColumn => collections.id,
-      { onDelete: 'set null' },
+      { onDelete: 'restrict' },
     ),
     libraryId: integer('library_id').references(() => libraries.id, {
       onDelete: 'cascade',
@@ -459,6 +529,10 @@ export const collections = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (table) => [
+    check('collections_visibility_check', sql`${table.visibility} IN ('public','login','selected','admin')`),
+    check('collections_exempt_check', sql`${table.passwordExemptMode} IN ('none','logged_in','selected')`),
+    check('collections_ownership_check', sql`(${table.ownershipType}='site' AND ${table.ownerId} IS NULL) OR (${table.ownershipType}='user' AND ${table.ownerId} IS NOT NULL AND ${table.kind}='person' AND ${table.visibility}='admin')`),
+    check('collections_versions_check', sql`${table.aclVersion}>=1 AND ${table.passwordVersion}>=1`),
     uniqueIndex('collections_uid_unique').on(table.uid),
     uniqueIndex('collections_slug_unique').on(table.slug),
     uniqueIndex('collections_url_key_unique').on(table.urlKey),
@@ -498,44 +572,6 @@ export const collectionPhotos = sqliteTable(
   ],
 )
 
-/**
- * 谁能看一个集合。audience=user 且 user_id 为空表示全体登录用户免密，不参与档位。
- */
-export const accessGrants = sqliteTable(
-  'access_grants',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    collectionId: integer('collection_id')
-      .notNull()
-      .references(() => collections.id, { onDelete: 'cascade' }),
-    audience: text('audience', {
-      enum: ['public', 'login', 'admin', 'user'],
-    }).notNull(),
-    userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .notNull()
-      .default(sql`(unixepoch())`),
-  },
-  (table) => [
-    uniqueIndex('access_grants_principal_unique')
-      .on(table.collectionId, table.audience, table.userId)
-      .where(sql`${table.userId} IS NOT NULL`),
-    uniqueIndex('access_grants_scope_unique')
-      .on(table.collectionId, table.audience)
-      .where(sql`${table.userId} IS NULL`),
-    index('idx_access_grants_collection').on(table.collectionId),
-    index('idx_access_grants_user').on(table.userId),
-    check(
-      'access_grants_user_scope_check',
-      sql`${table.audience} = 'user' OR ${table.userId} IS NULL`,
-    ),
-    check(
-      'access_grants_audience_check',
-      sql`${table.audience} IN ('public', 'login', 'admin', 'user')`,
-    ),
-  ],
-)
-
 // —— ML / AI：内容搜索、人脸、人物、OCR ——
 
 /** CLIP 图像向量（一期 SQLite blob；检索时可暴力余弦） */
@@ -555,14 +591,15 @@ export const photoEmbeddings = sqliteTable(
   (table) => [index('idx_photo_embeddings_model').on(table.model)],
 )
 
-/** 人物（一期单租户扁平模型；owner_id 预留给以后的多用户） */
+/** People are partitioned between site assets and each personal owner. */
 export const people = sqliteTable(
   'people',
   {
     id: text('id').primaryKey(),
     name: text('name'),
-    /** Reserved. Null while Chronoval is single-tenant. */
-    ownerId: text('owner_id'),
+    /** Null only for the site partition. */
+    ownerId: integer('owner_id').references(() => users.id, { onDelete: 'restrict' }),
+    ownershipType: text('ownership_type', { enum: ['site', 'user'] }).notNull().default('site'),
     /** 对应的 kind=person 集合。授权写在该集合上。 */
     collectionId: integer('collection_id')
       .unique()
@@ -578,7 +615,12 @@ export const people = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
-  (table) => [index('idx_people_name').on(table.name)],
+  (table) => [
+    index('idx_people_name').on(table.name),
+    index('idx_people_partition').on(table.ownershipType,table.ownerId),
+    check('people_ownership_check',sql`(${table.ownershipType}='site' AND ${table.ownerId} IS NULL) OR (${table.ownershipType}='user' AND ${table.ownerId} IS NOT NULL)`),
+    check('people_count_check',sql`${table.faceCount}>=0`),
+  ],
 )
 
 /** 检测到的人脸框 */
@@ -790,3 +832,225 @@ export const appMeta = sqliteTable('app_meta', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 })
+
+/** Durable receipts keep retried batch permission changes from applying twice. */
+export const mutationReceipts = sqliteTable('mutation_receipts', {
+  id: text('id').primaryKey(),
+  actorUserId: integer('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  operationKey: text('operation_key').notNull(),
+  requestDigest: text('request_digest').notNull(),
+  resultJson: text('result_json', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [uniqueIndex('mutation_receipt_key_unique').on(t.actorUserId, t.operationKey)])
+
+export const authChallengeUses = sqliteTable('auth_challenge_uses', {
+  nonce: text('nonce').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const userDeletionTasks = sqliteTable('user_deletion_tasks', {
+  id: text('id').primaryKey(),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  actorUserId: integer('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  mode: text('mode', { enum: ['transfer', 'purge'] }).notNull(),
+  targetUserId: integer('target_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestDigest: text('request_digest').notNull(),
+  reason: text('reason').notNull(),
+  state: text('state', { enum: ['pending', 'running', 'failed', 'completed'] }).notNull().default('pending'),
+  errorCode: text('error_code'),
+  leaseToken: text('lease_token'),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+}, (t) => [
+  uniqueIndex('user_deletion_idempotency_unique').on(t.actorUserId, t.idempotencyKey),
+  uniqueIndex('user_deletion_active_unique').on(t.userId).where(sql`${t.state}!='completed'`),
+  check('user_deletion_state_check',sql`${t.state} IN ('pending','running','failed','completed')`),
+  check('user_deletion_mode_check', sql`(${t.mode}='purge' AND ${t.targetUserId} IS NULL) OR (${t.mode}='transfer' AND ${t.targetUserId} IS NOT NULL AND ${t.targetUserId}!=${t.userId})`),
+])
+
+export const photoShares = sqliteTable('photo_shares', {
+  photoId: text('photo_id').notNull().references(() => photos.id, { onDelete: 'cascade' }),
+  recipientUserId: integer('recipient_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  grantedBy: integer('granted_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [primaryKey({ columns: [t.photoId, t.recipientUserId] }), index('idx_shares_recipient').on(t.recipientUserId, t.photoId)])
+
+export const collectionViewers = sqliteTable('collection_viewers', {
+  collectionId: integer('collection_id').notNull().references(() => collections.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  grantedBy: integer('granted_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [primaryKey({ columns: [t.collectionId, t.userId] }), index('idx_collection_viewers_user').on(t.userId, t.collectionId)])
+
+export const collectionPasswordExemptions = sqliteTable('collection_password_exemptions', {
+  collectionId: integer('collection_id').notNull().references(() => collections.id, { onDelete: 'cascade' }),
+  userId: integer('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  grantedBy: integer('granted_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [primaryKey({ columns: [t.collectionId, t.userId] }), index('idx_collection_exempt_user').on(t.userId, t.collectionId)])
+
+export const photoFiles = sqliteTable('photo_files', {
+  id: text('id').primaryKey(),
+  photoId: text('photo_id').notNull().references(() => photos.id, { onDelete: 'restrict' }),
+  role: text('role', { enum: ['original', 'preview', 'thumbnail', 'live_video', 'poster', 'sanitized_download'] }).notNull(),
+  originalFilename: text('original_filename'),
+  uploadRelativePath: text('upload_relative_path'),
+  locatorType: text('locator_type', { enum: ['provider', 'library', 'embedded'] }).notNull(),
+  storageProviderId: integer('storage_provider_id').references(() => settingsStorageProviders.id, { onDelete: 'restrict' }),
+  storageKey: text('storage_key'),
+  libraryId: integer('library_id').references(() => libraries.id, { onDelete: 'restrict' }),
+  libraryPath: text('library_path'),
+  parentFileId: text('parent_file_id').references((): AnySQLiteColumn => photoFiles.id, { onDelete: 'restrict' }),
+  byteOffset: integer('byte_offset'),
+  byteLength: integer('byte_length'),
+  mimeType: text('mime_type').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  checksumSha256: text('checksum_sha256'),
+  isBillableOriginal: integer('is_billable_original', { mode: 'boolean' }).notNull().default(false),
+  state: text('state', { enum: ['staging', 'ready', 'deleting', 'deleted'] }).notNull().default('ready'),
+  contentVersion: integer('content_version').notNull().default(1),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  uniqueIndex('photo_files_role_unique').on(t.photoId, t.role),
+  uniqueIndex('photo_files_provider_key_unique').on(t.storageProviderId, t.storageKey).where(sql`${t.locatorType}='provider' AND ${t.state}!='deleted'`),
+  uniqueIndex('photo_files_library_path_unique').on(t.libraryId, t.libraryPath).where(sql`${t.locatorType}='library' AND ${t.state}!='deleted'`),
+  check('photo_files_id_check', sql`length(${t.id})=32 AND ${t.id} NOT GLOB '*[^a-f0-9]*'`),
+  check('photo_files_checksum_check',sql`${t.checksumSha256} IS NULL OR (length(${t.checksumSha256})=64 AND ${t.checksumSha256} NOT GLOB '*[^a-f0-9]*')`),
+  check('photo_files_billable_check',sql`${t.isBillableOriginal}=0 OR (${t.locatorType}='provider' AND ${t.role} IN ('original','live_video') AND ${t.uploadRelativePath} IS NOT NULL AND ${t.checksumSha256} IS NOT NULL)`),
+  check('photo_files_role_check', sql`${t.role} IN ('original','preview','thumbnail','live_video','poster','sanitized_download')`),
+  check('photo_files_state_check', sql`${t.state} IN ('staging','ready','deleting','deleted')`),
+  check('photo_files_size_check', sql`${t.byteSize}>=0 AND ${t.contentVersion}>=1`),
+  check('photo_files_locator_check', sql`(${t.locatorType}='provider' AND ${t.storageProviderId} IS NOT NULL AND ${t.storageKey} IS NOT NULL AND ${t.libraryId} IS NULL AND ${t.libraryPath} IS NULL AND ${t.parentFileId} IS NULL AND ${t.byteOffset} IS NULL AND ${t.byteLength} IS NULL) OR (${t.locatorType}='library' AND ${t.libraryId} IS NOT NULL AND ${t.libraryPath} IS NOT NULL AND ${t.storageProviderId} IS NULL AND ${t.storageKey} IS NULL AND ${t.parentFileId} IS NULL AND ${t.byteOffset} IS NULL AND ${t.byteLength} IS NULL) OR (${t.locatorType}='embedded' AND ${t.parentFileId} IS NOT NULL AND ${t.byteOffset} IS NOT NULL AND ${t.byteLength} IS NOT NULL AND ${t.byteOffset}>=0 AND ${t.byteLength}>0 AND ${t.storageProviderId} IS NULL AND ${t.storageKey} IS NULL AND ${t.libraryId} IS NULL AND ${t.libraryPath} IS NULL)`),
+])
+
+export const uploadSessions = sqliteTable('upload_sessions', {
+  id: text('id').primaryKey(),
+  actorUserId: integer('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  ownerUserId: integer('owner_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  photoId: text('photo_id').unique().references(() => photos.id, { onDelete: 'set null' }),
+  photoIdSnapshot: text('photo_id_snapshot').notNull().unique(),
+  storageProviderId: integer('storage_provider_id').notNull().references(() => settingsStorageProviders.id, { onDelete: 'restrict' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestDigest: text('request_digest').notNull(),
+  state: text('state', { enum: ['created', 'uploading', 'finalizing', 'committed', 'cancelled', 'expired'] }).notNull().default('created'),
+  reservedBytes: integer('reserved_bytes').notNull().default(0),
+  commitTaskId: integer('commit_task_id'),
+  stagingCleanedAt: integer('staging_cleaned_at', { mode: 'timestamp' }),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  uniqueIndex('upload_sessions_idempotency_unique').on(t.actorUserId, t.idempotencyKey),
+  index('idx_upload_sessions_expiry').on(t.state, t.expiresAt),
+  check('upload_sessions_state_check', sql`${t.state} IN ('created','uploading','finalizing','committed','cancelled','expired')`),
+  check('upload_sessions_reserved_check', sql`${t.reservedBytes}>=0`),
+])
+
+export const uploadParts = sqliteTable('upload_parts', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => uploadSessions.id, { onDelete: 'restrict' }),
+  role: text('role', { enum: ['original', 'live_video'] }).notNull(),
+  originalFilename: text('original_filename').notNull(),
+  uploadRelativePath: text('upload_relative_path').notNull(),
+  declaredMime: text('declared_mime').notNull(),
+  expectedBytes: integer('expected_bytes').notNull(),
+  receivedBytes: integer('received_bytes').notNull().default(0),
+  stagingKey: text('staging_key').notNull(),
+  finalKey: text('final_key').notNull(),
+  detectedMime: text('detected_mime'),
+  checksumSha256: text('checksum_sha256'),
+  state: text('state', { enum: ['pending', 'receiving', 'uploaded', 'validated', 'promoted', 'rejected', 'deleted'] }).notNull().default('pending'),
+  leaseToken: text('lease_token'),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  uniqueIndex('upload_parts_role_unique').on(t.sessionId, t.role),
+  check('upload_parts_role_check', sql`${t.role} IN ('original','live_video')`),
+  check('upload_parts_state_check', sql`${t.state} IN ('pending','receiving','uploaded','validated','promoted','rejected','deleted')`),
+  check('upload_parts_size_check', sql`${t.expectedBytes}>0 AND ${t.receivedBytes}>=0`),
+])
+
+export const storagePathClaims = sqliteTable('storage_path_claims', {
+  id: text('id').primaryKey(),
+  storageProviderId: integer('storage_provider_id').notNull().references(() => settingsStorageProviders.id, { onDelete: 'restrict' }),
+  storageKeyNormalized: text('storage_key_normalized').notNull(),
+  holderType: text('holder_type', { enum: ['upload', 'file', 'transfer'] }).notNull(),
+  holderId: text('holder_id').notNull(),
+}, (t) => [uniqueIndex('storage_claim_key_unique').on(t.storageProviderId, t.storageKeyNormalized), index('idx_storage_claim_holder').on(t.holderType, t.holderId)])
+
+export const photoOwnershipTransfers = sqliteTable('photo_ownership_transfers', {
+  id: text('id').primaryKey(),
+  photoId: text('photo_id').references(() => photos.id, { onDelete: 'set null' }),
+  photoIdSnapshot: text('photo_id_snapshot').notNull(),
+  fromUserId: integer('from_owner_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  toUserId: integer('to_owner_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  actorUserId: integer('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestDigest: text('request_digest').notNull(),
+  sourceAclVersion: integer('source_acl_version').notNull(),
+  sourceMetadataVersion: integer('source_metadata_version').notNull(),
+  state: text('state', { enum: ['preparing', 'copying', 'cutover', 'cleanup_pending', 'completed', 'rolling_back', 'failed'] }).notNull().default('preparing'),
+  reason: text('reason').notNull(),
+  originalAclJson: text('original_acl_json', { mode: 'json' }).$type<{ visibility: string; recipients: number[] }>().notNull(),
+  reservedBytes: integer('expected_original_bytes').notNull(),
+  targetReservedBytes: integer('target_reserved_bytes').notNull(),
+  leaseToken: text('lease_token'),
+  leaseEpoch: integer('lease_epoch').notNull().default(0),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }),
+  errorCode: text('error_code'),
+  cutoverAt: integer('cutover_at', { mode: 'timestamp' }),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  uniqueIndex('ownership_transfer_idempotency_unique').on(t.actorUserId,t.idempotencyKey),
+  uniqueIndex('ownership_transfer_active_unique').on(t.photoId).where(sql`${t.state} NOT IN ('completed','failed')`),
+  index('idx_transfer_state').on(t.state,t.updatedAt),
+  check('transfer_state_check',sql`${t.state} IN ('preparing','copying','cutover','cleanup_pending','completed','rolling_back','failed')`),
+  check('transfer_parties_check',sql`${t.fromUserId}!=${t.toUserId}`),
+  check('transfer_bytes_epoch_check',sql`${t.reservedBytes}>=0 AND ${t.targetReservedBytes}>=0 AND ${t.leaseEpoch}>=0`),
+])
+
+export const photoTransferFiles = sqliteTable('photo_transfer_files', {
+  id: text('id').primaryKey(),
+  transferId: text('transfer_id').notNull().references(() => photoOwnershipTransfers.id, { onDelete: 'restrict' }),
+  fileId: text('file_id').notNull(),
+  role: text('role').notNull(),
+  sourceContentVersion: integer('source_content_version').notNull(),
+  locatorType: text('locator_type', { enum: ['provider', 'embedded'] }).notNull(),
+  storageProviderId: integer('storage_provider_id').references(() => settingsStorageProviders.id, { onDelete: 'restrict' }),
+  sourceKey: text('source_key'),
+  targetKey: text('target_key'),
+  parentFileId: text('parent_file_id'),
+  byteOffset: integer('byte_offset'),
+  byteLength: integer('byte_length'),
+  byteSize: integer('byte_size').notNull(),
+  checksumSha256: text('checksum_sha256'),
+  state: text('state', { enum: ['pending', 'copied', 'verified'] }).notNull().default('pending'),
+  sourceDeleted: integer('source_deleted', { mode: 'boolean' }).notNull().default(false),
+}, (t) => [
+  uniqueIndex('transfer_file_unique').on(t.transferId, t.fileId),
+  check('transfer_file_locator_check', sql`(${t.locatorType}='provider' AND ${t.storageProviderId} IS NOT NULL AND ${t.sourceKey} IS NOT NULL AND ${t.targetKey} IS NOT NULL AND ${t.parentFileId} IS NULL) OR (${t.locatorType}='embedded' AND ${t.storageProviderId} IS NULL AND ${t.sourceKey} IS NULL AND ${t.targetKey} IS NULL AND ${t.parentFileId} IS NOT NULL AND ${t.byteOffset} IS NOT NULL AND ${t.byteLength} IS NOT NULL AND ${t.byteOffset}>=0 AND ${t.byteLength}>0)`),
+])
+
+export const auditLogs = sqliteTable('audit_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  actorUserId: integer('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  action: text('action').notNull(),
+  targetType: text('target_type').notNull(),
+  targetId: text('target_id').notNull(),
+  ownerUserId: integer('owner_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  reason: text('reason'),
+  requestId: text('request_id'),
+  beforeJson: text('before_json', { mode: 'json' }).$type<Record<string, unknown>>(),
+  afterJson: text('after_json', { mode: 'json' }).$type<Record<string, unknown>>(),
+  ip: text('ip'),
+  userAgent: text('user_agent'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => [index('idx_audit_created').on(t.createdAt, t.id), index('idx_audit_owner_created').on(t.ownerUserId, t.createdAt)])

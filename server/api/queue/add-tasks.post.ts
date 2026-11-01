@@ -1,17 +1,18 @@
 import { z } from 'zod'
 
 export default defineEventHandler(async (event) => {
+  await requireAccess(event,'admin')
 
   try {
     const payloadSchema = z.discriminatedUnion('type', [
       z.object({
         type: z.literal('photo'),
-        storageKey: z.string().nonempty(),
+        photoId: z.string().nonempty(),
         eraseLocation: z.boolean().optional(),
       }),
       z.object({
         type: z.literal('live-photo-video'),
-        storageKey: z.string().nonempty(),
+        photoId: z.string().nonempty(),
       }),
       z.object({
         type: z.literal('photo-reverse-geocoding'),
@@ -75,7 +76,7 @@ export default defineEventHandler(async (event) => {
     const errors = []
 
     for (let i = 0; i < tasks.length; i++) {
-      const task = tasks[i]
+      const task = tasks[i]!
 
       try {
         const taskId = await workerPool.addTask(task.payload, {

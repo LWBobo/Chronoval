@@ -1,4 +1,7 @@
-FROM node:24.16.0-alpine3.22 AS base
+# Node 24.22.2 on Alpine. V8 的优化编译器在给超大 JSON（图标集）生成
+# sourcemap 时会崩（!IsFreeSpaceOrFillerMap）。关掉 Turbofan/Maglev。
+# 活堆超过 4096MB。
+FROM node:24.22.2-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 
@@ -22,51 +25,42 @@ FROM base AS deps
 WORKDIR /usr/src/app
 
 # node-gyp 编译工具链：better-sqlite3 预编译下载失败时回退到源码编译
-RUN --network=host apk add --no-cache python3 make g++
+RUN --network=host \
+    sed -i 's#https://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#g' /etc/apk/repositories \
+    && apk add --no-cache --timeout 60 python3 make g++
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/webgl-image/package.json ./packages/webgl-image/
-RUN --network=host --mount=type=cache,id=pnpm,target=/pnpm/store \
+# 与 Debian 构建分开，避免把 glibc 的可选原生包拿来在 musl 上用。
+RUN --network=host --mount=type=cache,id=pnpm-musl,target=/pnpm/store \
     pnpm install --frozen-lockfile
 
-FROM base AS build
+FROM deps AS build
 WORKDIR /usr/src/app
-# Node 老生代堆上限（MB）。机器内存不够时调低，例如 --build-arg BUILD_HEAP=3072
+# Node old-space limits in MiB, per process (not a total container memory cap).
 ARG BUILD_DEPS_HEAP=4096
-ARG BUILD_HEAP=8192
-COPY --from=deps /usr/src/app/node_modules ./node_modules
-COPY --from=deps /usr/src/app/packages/webgl-image/node_modules ./packages/webgl-image/node_modules
+ARG BUILD_HEAP=6144
+# Inherit the native dependencies and the system libraries they were built with.
 COPY . .
-RUN NODE_OPTIONS="--max-old-space-size=${BUILD_DEPS_HEAP}" pnpm run build:deps
-RUN NODE_OPTIONS="--max-old-space-size=${BUILD_HEAP}" pnpm run build
+# Call both CLIs directly so native crashes retain their actual exit status.
+RUN cd packages/webgl-image && NODE_OPTIONS="--max-old-space-size=${BUILD_DEPS_HEAP}" \
+    node ./node_modules/vite/bin/vite.js build
+# --no-turbofan/--no-maglev are not allowed in NODE_OPTIONS.
+RUN node --max-old-space-size=${BUILD_HEAP} --no-turbofan --no-maglev \
+    ./node_modules/nuxt/bin/nuxt.mjs build
 RUN find ./.output -type f -name '*.map' -delete
 
-FROM node:24.16.0-alpine3.22 AS runtime_deps
-# Alpine 官方 CDN 在部分网络会返回 temporary error / Permission denied
-# 默认换成阿里云镜像，可用 --build-arg ALPINE_MIRROR=https://dl-cdn.alpinelinux.org 改回
+FROM node:24.22.2-alpine AS runtime_deps
 ARG ALPINE_MIRROR=https://mirrors.aliyun.com
 RUN --network=host sed -i "s#https://dl-cdn.alpinelinux.org#${ALPINE_MIRROR}#g" /etc/apk/repositories \
-	&& apk add --no-cache --timeout 60 ca-certificates perl exiftool ffmpeg \
-	&& install -Dm755 "$(readlink -f /usr/bin/perl)" /opt/runtime-bin/perl \
-	&& install -Dm755 "$(readlink -f /usr/bin/env)" /opt/runtime-bin/env \
-	&& install -Dm755 "$(readlink -f /usr/bin/exiftool)" /opt/runtime-bin/exiftool \
-	&& install -Dm755 "$(readlink -f /usr/bin/ffmpeg)" /opt/runtime-bin/ffmpeg \
-	&& install -Dm755 "$(readlink -f /usr/bin/ffprobe)" /opt/runtime-bin/ffprobe \
-	&& mkdir -p /opt/runtime-bin/appdirs/data
+	&& apk add --no-cache --timeout 60 ca-certificates perl exiftool ffmpeg
 
-FROM scratch AS runtime
+# Keep the complete runtime filesystem: media tools, their shared libraries,
+# Perl modules, and the shell utilities used by systeminformation.
+# The runtime_deps stage can still be replaced with a prebuilt dependency image.
+FROM runtime_deps AS runtime
 WORKDIR /app
-
-COPY --from=runtime_deps /opt/runtime-bin/appdirs/data /app/data
-
-COPY --from=runtime_deps /usr/local/bin/node /usr/bin/node
-COPY --from=runtime_deps /opt/runtime-bin/perl /usr/bin/perl
-COPY --from=runtime_deps /opt/runtime-bin/env /usr/bin/env
-COPY --from=runtime_deps /opt/runtime-bin/exiftool /usr/bin/exiftool
-COPY --from=runtime_deps /usr/lib /usr/lib
-COPY --from=runtime_deps /usr/share /usr/share
-COPY --from=runtime_deps /lib /lib
-COPY --from=runtime_deps /etc/ssl /etc/ssl
+RUN mkdir -p /app/data
 
 COPY --from=build /usr/src/app/.output ./.output
 COPY --from=build /usr/src/app/server/database/migrations ./server/database/migrations
@@ -93,4 +87,9 @@ ENV NUXT_PROVIDER_LOCAL_PREFIX=photos/
 ENV LIBRARY_ENABLED=true
 ENV LIBRARY_SCAN_INTERVAL_MS=300000
 
-CMD ["/usr/bin/node", ".output/server/index.mjs"]
+# Catch missing dynamically loaded packages, native binaries and media tools at
+# image build time. This check uses temporary fixtures and an in-memory database.
+COPY scripts/verify-runtime-dependencies.mjs ./.output/server/verify-runtime-dependencies.mjs
+RUN --network=none /usr/local/bin/node ./.output/server/verify-runtime-dependencies.mjs
+
+CMD ["/usr/local/bin/node", ".output/server/index.mjs"]

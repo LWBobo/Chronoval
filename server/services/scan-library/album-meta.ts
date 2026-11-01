@@ -7,6 +7,9 @@ import {
   replaceCollectionAccess,
 } from '../collections/access-grants'
 import { syncFolderCollection } from '../collections/sync-folder'
+import { collectionAccessSchema, replaceCollectionPolicy } from '../collections/access'
+import type { Actor } from '../../utils/access'
+import type { z } from 'zod'
 
 export type RandomAnimationMode = 'default' | 'wheel' | 'compat'
 
@@ -18,7 +21,7 @@ export interface ScanAlbumMetaRow {
   description: string | null
   coverPhotoId: string | null
   isHidden: boolean
-  visibility: 'public' | 'login' | 'admin'
+  visibility: 'public' | 'login' | 'selected' | 'admin'
   passwordHash: string | null
   passwordExemptMode: 'logged_in' | 'selected' | null
   passwordExemptUsers: string[]
@@ -41,10 +44,7 @@ export interface ScanAlbumMetaInput {
   title?: string | null
   description?: string | null
   coverPhotoId?: string | null
-  isHidden?: boolean | null
-  passwordHash?: string | null
-  passwordExemptMode?: 'logged_in' | 'selected' | null
-  passwordExemptUsers?: string[] | null
+  access?: z.infer<typeof collectionAccessSchema>
   slug?: string | null
   urlKey?: string | null
   layout?: 'waterfall' | 'grid' | 'immersive' | 'timeline'
@@ -117,9 +117,10 @@ export const getScanAlbumMeta = async (
   return row ? toMeta(row) : null
 }
 
-export const upsertScanAlbumMeta = async (
+export const upsertScanAlbumMeta = (
   input: ScanAlbumMetaInput,
-): Promise<ScanAlbumMetaRow> => {
+  actor?: Actor,
+): ScanAlbumMetaRow => {
   const libraryId = libraryIdOfMount(input.mount)
   if (libraryId == null) {
     throw createError({ statusCode: 404, statusMessage: 'Library not found' })
@@ -142,8 +143,6 @@ export const upsertScanAlbumMeta = async (
     patch.description = input.description?.trim() || null
   if (input.coverPhotoId !== undefined)
     patch.coverPhotoId = input.coverPhotoId || null
-  if (input.passwordHash !== undefined)
-    patch.passwordHash = input.passwordHash || null
   if (input.slug !== undefined) patch.slug = input.slug?.trim() || null
   if (input.urlKey !== undefined) patch.urlKey = input.urlKey?.trim() || null
   if (input.layout !== undefined) patch.layout = input.layout
@@ -164,31 +163,10 @@ export const upsertScanAlbumMeta = async (
     .where(eq(tables.collections.id, collectionId))
     .run()
 
-  const access = readCollectionAccess(collectionId, db)
-  replaceCollectionAccess(
-    collectionId,
-    {
-      visibility:
-        input.isHidden === undefined
-          ? access.visibility
-          : input.isHidden
-            ? 'login'
-            : 'public',
-      passwordExemptMode:
-        input.passwordHash === null
-          ? null
-          : input.passwordExemptMode === undefined
-            ? access.passwordExemptMode
-            : input.passwordExemptMode,
-      passwordExemptUsers:
-        input.passwordHash === null
-          ? null
-          : input.passwordExemptUsers === undefined
-            ? access.passwordExemptUsers
-            : input.passwordExemptUsers,
-    },
-    db,
-  )
+  if (input.access) {
+    if (!actor) throw createError({ statusCode: 403, message: 'Admin privileges required' })
+    replaceCollectionPolicy(collectionId, input.access, actor, db)
+  }
 
   return toMeta(folderCollection(input.mount, relPath) ?? current)
 }
@@ -200,10 +178,6 @@ export const clearScanAlbumMeta = async (
   const row = folderCollection(mount, relPath)
   if (!row) return false
   const db = useDB()
-  if (row.relPath) {
-    db.delete(tables.collections).where(eq(tables.collections.id, row.id)).run()
-    return true
-  }
   const library = db
     .select()
     .from(tables.libraries)
@@ -211,23 +185,21 @@ export const clearScanAlbumMeta = async (
     .get()
   db.update(tables.collections)
     .set({
-      title: library?.name ?? null,
+      title: row.relPath ? row.relPath.split('/').at(-1) : library?.name ?? null,
       description: null,
       coverPhotoId: null,
       bgmMusicId: null,
       slug: null,
-      urlKey: library?.urlKey ?? null,
+      urlKey: row.relPath ? null : library?.urlKey ?? null,
       layout: 'waterfall',
       randomAnimation: 'default',
       randomQuotesEnabled: true,
       randomQuotes: null,
       randomQuotesTag: null,
-      passwordHash: null,
       updatedAt: new Date(),
     })
     .where(eq(tables.collections.id, row.id))
     .run()
-  replaceCollectionAccess(row.id, { visibility: 'public' }, db)
   return true
 }
 
@@ -292,6 +264,7 @@ export const applyScanAlbumMeta = async (
 
   return {
     ...node,
+    collectionId: meta.id,
     external: true,
     title: meta.title || node.title,
     description: meta.description,

@@ -1,20 +1,11 @@
 import assert from 'node:assert/strict'
 import { beforeEach, afterEach, test } from 'node:test'
-import { registerHooks } from 'node:module'
+import { register } from 'node:module'
 import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { effectScope, ref } from 'vue'
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith('.') && context.parentURL?.startsWith('file:')) {
-      const filename = fileURLToPath(new URL(specifier, context.parentURL))
-      if (existsSync(filename + '.ts'))
-        return { url: pathToFileURL(filename + '.ts').href, shortCircuit: true }
-    }
-    return nextResolve(specifier, context)
-  },
-})
+register(new URL('./test-utils/security-loader.mjs', import.meta.url), { data: { root: fileURLToPath(new URL('../', import.meta.url)), boundaries: [] } })
 const { useLivePhotoSource } =
   await import('../app/composables/useLivePhotoSource.ts')
 const { clearLivePhotoCache } =

@@ -1,3 +1,5 @@
+import { serveRegisteredAsset } from '../../services/media-files'
+import { filesByStorageKey } from '../../utils/media-access'
 import { decodeMediaPath } from '../../utils/media-http'
 import { resolveInsideRoot } from '../../utils/safe-path'
 import { createReadStream, promises as fs } from 'node:fs'
@@ -32,6 +34,9 @@ const guessContentType = (filePath: string): string => {
 }
 
 export default defineEventHandler(async (event) => {
+  const earlyPath=decodeMediaPath(getRouterParam(event,'path')||'')
+  const registered=filesByStorageKey(earlyPath)
+  if(registered.length){if(registered.length!==1)throw createError({statusCode:404,message:'File not found'});return serveRegisteredAsset(event,registered[0]!.id)}
   const manager = getStorageManager()
   const provider = manager.getProvider()
 

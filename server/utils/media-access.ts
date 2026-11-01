@@ -1,97 +1,36 @@
 import type { H3Event } from 'h3'
-import { eq, or, type SQL } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { requireVisiblePhoto } from './photo-access'
 import { requireMusicAccess } from './music-access'
-import { libraryMediaPath, mediaUrlPathMatches } from './media-reference'
+import { mediaUrlPathMatches } from './media-reference'
 
-async function requireMediaPhoto(event: H3Event, condition: SQL | undefined) {
-  setHeader(event, 'Cache-Control', 'private, no-store')
-  setHeader(event, 'Vary', 'Cookie')
-  if (!condition) {
-    throw createError({ statusCode: 404, statusMessage: 'Photo not found' })
-  }
-
-  const row = useDB()
-    .select({ id: tables.photos.id })
-    .from(tables.photos)
-    .where(condition)
-    .get()
-
-  if (!row) {
-    throw createError({ statusCode: 404, statusMessage: 'Photo not found' })
-  }
-
-  return await requireVisiblePhoto(event, row.id, { allowAdminDeleted: true })
+async function authorizeFile(event: H3Event, files: Array<typeof tables.photoFiles.$inferSelect>) {
+  if(files.length!==1)throw createError({statusCode:404,message:'File not found'})
+  const file=files[0]!
+  const access=await requireVisiblePhoto(event,file.photoId,{allowAdminDeleted:true,allowOwnerDeleted:true})
+  const privileged=access.context.actor.isAdmin||access.context.userId===access.photo.ownerId
+  if(access.photo.stripLocation&&!privileged&&['original','live_video'].includes(file.role))throw createError({statusCode:404,message:'File not found'})
+  return {...access,file}
 }
-
-export async function requireStorageMediaAccess(
-  event: H3Event,
-  relativePath: string,
-) {
-  const pathname = `/storage/${relativePath}`
-  try {
-    return await requireMediaPhoto(
-      event,
-      or(
-        eq(tables.photos.storageKey, relativePath),
-        eq(tables.photos.thumbnailKey, relativePath),
-        eq(tables.photos.livePhotoVideoKey, relativePath),
-        mediaUrlPathMatches(tables.photos.originalUrl, pathname),
-        mediaUrlPathMatches(tables.photos.thumbnailUrl, pathname),
-        mediaUrlPathMatches(tables.photos.livePhotoVideoUrl, pathname),
-      ),
-    )
-  } catch (error: any) {
-    if (error?.statusCode !== 404) throw error
-  }
-
-  const music = useDB()
-    .select({ id: tables.music.id })
-    .from(tables.music)
-    .where(mediaUrlPathMatches(tables.music.coverUrl, pathname))
-    .get()
-  if (music) return await requireMusicAccess(event, music.id)
-
-  throw createError({ statusCode: 404, statusMessage: 'Not Found' })
+export function filesByStorageKey(key:string){
+  return useDB().select().from(tables.photoFiles).where(and(eq(tables.photoFiles.locatorType,'provider'),eq(tables.photoFiles.storageKey,key),eq(tables.photoFiles.state,'ready'))).limit(2).all()
 }
-
-export async function requireLibraryMediaAccess(
-  event: H3Event,
-  mountName: string,
-  relativePath: string,
-) {
-  const pathname = libraryMediaPath(mountName, relativePath)
-  return await requireMediaPhoto(
-    event,
-    or(
-      mediaUrlPathMatches(tables.photos.originalUrl, pathname),
-      mediaUrlPathMatches(tables.photos.thumbnailUrl, pathname),
-      mediaUrlPathMatches(tables.photos.livePhotoVideoUrl, pathname),
-    ),
-  )
+export async function requireStorageKeyAccess(event:H3Event,key:string){return authorizeFile(event,filesByStorageKey(key))}
+export async function requireStorageMediaAccess(event:H3Event,key:string){
+  const files=filesByStorageKey(key)
+  if(files.length)return authorizeFile(event,files)
+  const music=useDB().select({id:tables.music.id}).from(tables.music).where(mediaUrlPathMatches(tables.music.coverUrl,`/storage/${key}`)).get()
+  if(music)return requireMusicAccess(event,music.id)
+  throw createError({statusCode:404,message:'File not found'})
 }
-
-export async function requireStorageKeyAccess(event: H3Event, key: string) {
-  return await requireMediaPhoto(
-    event,
-    or(
-      eq(tables.photos.storageKey, key),
-      eq(tables.photos.thumbnailKey, key),
-      eq(tables.photos.livePhotoVideoKey, key),
-    ),
-  )
+export async function requireLibraryMediaAccess(event:H3Event,mount:string,relativePath:string){
+  const match=/^scan_(\d+)$/.exec(mount)
+  if(!match)throw createError({statusCode:404,message:'File not found'})
+  const files=useDB().select().from(tables.photoFiles).where(and(eq(tables.photoFiles.locatorType,'library'),eq(tables.photoFiles.libraryId,Number(match[1])),eq(tables.photoFiles.libraryPath,relativePath),eq(tables.photoFiles.state,'ready'))).limit(2).all()
+  return authorizeFile(event,files)
 }
-
-export async function requireMediaReferenceAccess(
-  event: H3Event,
-  reference: string,
-) {
-  return await requireMediaPhoto(
-    event,
-    or(
-      eq(tables.photos.originalUrl, reference),
-      eq(tables.photos.thumbnailUrl, reference),
-      eq(tables.photos.livePhotoVideoUrl, reference),
-    ),
-  )
+export async function requireMediaReferenceAccess(event:H3Event,reference:string){
+  const match=/^\/api\/assets\/([a-f0-9]{32})$/.exec(reference.split('?')[0]!)
+  if(!match)throw createError({statusCode:404,message:'File not found'})
+  return authorizeFile(event,useDB().select().from(tables.photoFiles).where(and(eq(tables.photoFiles.id,match[1]!),eq(tables.photoFiles.state,'ready'))).all())
 }

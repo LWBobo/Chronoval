@@ -11,6 +11,7 @@ import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/ma
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
 import { viewerFromActor } from '~~/server/services/ml/person.service'
 import { appliedTagNamesForPhotos } from '~~/server/services/ml/tags.service'
+import { photoWithMediaColumns } from '../../utils/photo-media'
 
 export default eventHandler(async (event) => {
   const db = useDB()
@@ -51,7 +52,7 @@ export default eventHandler(async (event) => {
   }
 
   let stmt = db
-    .select()
+    .select(photoWithMediaColumns())
     .from(tables.photos)
     .where(and(...where))
     .orderBy(desc(tables.photos.dateTaken), asc(tables.photos.id))

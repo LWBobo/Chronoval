@@ -26,11 +26,11 @@ async function onGithubOAuthSuccess(event: any, { user }: { user: any }) {
     // 登录入口被用来向用户表持续写入垃圾账号或探测注册行为。
     logger.chrono.warn('Rejected GitHub OAuth for unknown email', user.email)
     throw _accessDeniedError
-  } else if (userFromEmail.role !== 'admin') {
+  } else if ((userFromEmail.role !== 'admin' || userFromEmail.status !== 'active')) {
     throw _accessDeniedError
   } else {
     if (userFromEmail.totpEnabled && userFromEmail.totpSecret) {
-      await beginLoginChallenge(event, userFromEmail.id)
+      await beginLoginChallenge(event, userFromEmail.id, userFromEmail.authVersion)
       recordLoginAttempt(event, {
         userId: userFromEmail.id,
         email: userFromEmail.email,
@@ -39,16 +39,7 @@ async function onGithubOAuthSuccess(event: any, { user }: { user: any }) {
       })
       return sendRedirect(event, '/login?step=verify')
     }
-    await setUserSession(
-      event,
-      { user: toSessionUser(userFromEmail) },
-      {
-        cookie: {
-          // secure: !useRuntimeConfig().allowInsecureCookie,
-          secure: useSecureCookie(event),
-        },
-      },
-    )
+    await establishUserSession(event, userFromEmail)
   }
   return sendRedirect(event, '/')
 }

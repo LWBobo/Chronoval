@@ -1,3 +1,8 @@
+import { beginScannedPhoto, writeScannedDerivative, invalidateScannedSafeCopy, persistScannedPhoto, type ScannedPhoto } from './registry'
+import { photoWithMediaColumns } from '../../utils/photo-media'
+import { settingsManager } from '../settings/settingsManager'
+import { FixedStore } from '../media-files/store'
+import { tmpdir } from 'node:os'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'crypto'
@@ -150,7 +155,7 @@ export class LibraryScanner {
 
         const db = useDB()
         const existing = db
-          .select()
+          .select(photoWithMediaColumns())
           .from(tables.photos)
           .where(eq(tables.photos.id, photoId))
           .get()
@@ -166,20 +171,12 @@ export class LibraryScanner {
               .from(tables.photos)
               .where(eq(tables.photos.id, stillId))
               .get()
-            if (still && !still.isLivePhoto) {
-              await db
-                .update(tables.photos)
-                .set({
-                  isLivePhoto: 1,
-                  livePhotoVideoKey: `${mount.name}/${rel}`,
-                  livePhotoVideoUrl: libraryFileUrl(mount.name, rel),
-                })
-                .where(eq(tables.photos.id, stillId))
-                .run()
+            if(existing){
+              const { permanentlyDeletePhoto }=await import('../trash/cleanup')
+              db.update(tables.photos).set({deletedAt:new Date()}).where(eq(tables.photos.id,photoId)).run()
+              await permanentlyDeletePhoto({...existing,deletedAt:new Date()})
             }
-            if (existing) {
-              await db.delete(tables.photos).where(eq(tables.photos.id, photoId)).run()
-            }
+            if(still&&!still.isLivePhoto)await this.processSingleFile(mount.name,stillRel)
             continue
           }
         }
@@ -190,28 +187,9 @@ export class LibraryScanner {
         if (
           existing &&
           existing.lastModified === stat.mtime.toISOString() &&
-          existing.thumbnailUrl
+          existing.thumbnailUrl &&
+          existing.processingStatus === 'ready'
         ) {
-          if (
-            existing.type !== 'video' &&
-            !existing.isLivePhoto &&
-            existing.livePhotoVideoKey !== LIVE_PHOTO_CHECKED
-          ) {
-            const rawBuffer = await fs.readFile(absFile)
-            const live = await detectLibraryLivePhoto({
-              photoId,
-              mountName: mount.name,
-              rel,
-              absFile,
-              rawBuffer,
-              exifData: existing.exif,
-            })
-            await db
-              .update(tables.photos)
-              .set(live)
-              .where(eq(tables.photos.id, photoId))
-              .run()
-          }
           continue
         }
 
@@ -228,13 +206,7 @@ export class LibraryScanner {
           continue
         }
 
-        if (changed) {
-          result.updated++
-          await db.update(tables.photos).set(entry).where(eq(tables.photos.id, photoId)).run()
-        } else {
-          result.indexed++
-          await db.insert(tables.photos).values({ id: photoId, ...entry }).run()
-        }
+        if(changed)result.updated++;else result.indexed++
 
         // 入库成功后异步入队 ML（CLIP / 人脸 / OCR），失败不影响扫描主流程
         try {
@@ -264,16 +236,15 @@ export class LibraryScanner {
       const stale = db
         .select({ id: tables.photos.id, libraryPath: tables.photos.libraryPath })
         .from(tables.photos)
-        .where(eq(tables.photos.source, 'library'))
-        .where(eq(tables.photos.libraryMount, mount.name))
+        .where(and(eq(tables.photos.source, 'library'),eq(tables.photos.libraryMount,mount.name)))
         .all()
         .filter((row) => row.libraryPath && !seen.has(row.libraryPath))
       if (stale.length) {
         for (const row of stale) {
-          await db
-            .delete(tables.photos)
-            .where(eq(tables.photos.id, row.id))
-            .run()
+          const { permanentlyDeletePhoto }=await import('../trash/cleanup')
+          db.update(tables.photos).set({deletedAt:new Date()}).where(eq(tables.photos.id,row.id)).run()
+          const obsolete=db.select().from(tables.photos).where(eq(tables.photos.id,row.id)).get()
+          if(obsolete)await permanentlyDeletePhoto(obsolete)
         }
         log().info(`Pruned ${stale.length} stale library entry(ies) from "${mount.name}"`)
       }
@@ -426,7 +397,12 @@ export class LibraryScanner {
           mountName,
           path.relative(mount.root, still),
         )
-        db.delete(tables.photos).where(eq(tables.photos.id, photoId)).run()
+        const obsolete = db.select().from(tables.photos).where(eq(tables.photos.id, photoId)).get()
+        if (obsolete) {
+          const { permanentlyDeletePhoto } = await import('../trash/cleanup')
+          db.update(tables.photos).set({ deletedAt: new Date() }).where(eq(tables.photos.id, photoId)).run()
+          await permanentlyDeletePhoto({ ...obsolete, deletedAt: new Date() })
+        }
         return outcome
       }
     }
@@ -442,10 +418,6 @@ export class LibraryScanner {
     if (!entry) throw new Error(`Failed to process library file: ${rel}`)
 
     // 重试与周期扫描可能重叠；按稳定 ID upsert，保留未参与更新的人工信息。
-    db.insert(tables.photos)
-      .values({ id: photoId, ...entry })
-      .onConflictDoUpdate({ target: tables.photos.id, set: entry })
-      .run()
     try {
       const { enqueueMlJobsForPhoto } = await import('../ml/enqueue')
       await enqueueMlJobsForPhoto(photoId)
@@ -472,30 +444,10 @@ export class LibraryScanner {
     const storageProvider = getStorageManager()?.getProvider()
     if (!storageProvider) return
 
-    const stat = await fs.stat(absFile)
-    const entry = await this.processFile(mount, rel, absFile, stat, storageProvider)
-    if (!entry) return
-
-    // 缩略图路径不变，存储接口又按一年不变缓存。换地址后画廊才会拉到新图。
-    if (entry.thumbnailUrl) {
-      const base = entry.thumbnailUrl.split('?')[0]
-      entry.thumbnailUrl = `${base}?v=${Math.trunc(stat.mtimeMs)}`
-    }
-
-    const db = useDB()
     const photoId = buildLibraryPhotoId(mount.name, rel)
-    const existing = db
-      .select({ id: tables.photos.id })
-      .from(tables.photos)
-      .where(eq(tables.photos.id, photoId))
-      .get()
-    if (!existing) return
-
-    await db
-      .update(tables.photos)
-      .set(entry)
-      .where(eq(tables.photos.id, photoId))
-      .run()
+    if (!useDB().select({ id: tables.photos.id }).from(tables.photos).where(eq(tables.photos.id, photoId)).get()) return
+    const stat = await fs.stat(absFile)
+    await this.processFile(mount, rel, absFile, stat, storageProvider)
   }
 
   /**
@@ -546,40 +498,49 @@ private async collectFiles(dir: string): Promise<string[]> {
    * 处理单个媒体文件：提取元数据 + 生成缩略图，返回入库字段
    */
   private async processFile(
+    mount: LibraryMount, rel: string, absFile: string,
+    stat: Awaited<ReturnType<typeof fs.stat>>, storageProvider: any,
+  ): Promise<ScannedPhoto | null> {
+    const photoId = buildLibraryPhotoId(mount.name, rel)
+    const libraryId = /^scan_(\d+)$/.exec(mount.name)?.[1]
+    if (!libraryId) throw new Error('Unknown scan library')
+    const started = await beginScannedPhoto(photoId, Number(libraryId), mount.name, rel, absFile, stat)
+    try {
+      if (started.changed) await invalidateScannedSafeCopy(photoId)
+      const entry = await this.processFileInner(mount, rel, absFile, stat, storageProvider)
+      if (!entry) throw new Error('Library processing failed')
+      await persistScannedPhoto(photoId, entry)
+      return entry
+    } catch (error) {
+      useDB().update(tables.photos).set({ processingStatus: 'failed', processingErrorCode: 'LIBRARY_PROCESSING_FAILED', updatedAt: new Date() }).where(and(eq(tables.photos.id, photoId), eq(tables.photos.processingStatus, 'processing'))).run()
+      throw error
+    }
+  }
+
+  private async processFileInner(
     mount: LibraryMount,
     rel: string,
     absFile: string,
     stat: Awaited<ReturnType<typeof fs.stat>>,
     storageProvider: any,
-  ): Promise<Partial<Photo> | null> {
+  ): Promise<ScannedPhoto | null> {
     const photoId = buildLibraryPhotoId(mount.name, rel)
     // 原文件只读引用：通过 /library/<mountName>/<relpath> 访问
     const originalUrl = libraryFileUrl(mount.name, rel)
+    const active=await settingsManager.storage.getActiveProvider()
+    if(!active)throw new Error('Storage provider unavailable')
+    const fixed=new FixedStore(active.id)
+    if(!fixed.supportsManagedUploads)throw new Error('Scan derivatives require local or S3 storage')
 
     // 缩略图统一写入内部存储（与上传缩略图同源）：
     // 不再就地写入外部库目录，外部库保持纯只读原图。本地存储下 URL 为
     // /storage/thumbnails/<mountName>/<id>.webp，可被 thumb 路由读取渲染。
-    const thumbFileName = `${photoId}.webp`
-
-    const writeThumbnail = async (
-      buffer: Buffer,
-    ): Promise<{ key: string; url: string } | null> => {
-      const provider = storageProvider
-      if (!provider) return null
-      try {
-        const obj = await provider.create(
-          `thumbnails/${mount.name}/${thumbFileName}`,
-          buffer,
-          'image/webp',
-        )
-        return { key: obj.key, url: provider.getPublicUrl(obj.key) }
-      } catch (err) {
-        log().warn(
-          `Failed to write thumbnail for ${absFile} to storage:`,
-          err,
-        )
-        return null
-      }
+    const writeThumbnail = async (buffer: Buffer): Promise<{ key: string; url: string }> => {
+      // Normalize fallback ffmpeg frames as well, so bytes and MIME agree.
+      const bytes = await sharp(buffer, { animated: path.extname(absFile).toLowerCase() === '.gif', limitInputPixels: 100_000_000 }).webp({ quality: 85 }).toBuffer()
+      const key = `${fixed.siteRoot(photoId)}/.chronoval/${Math.trunc(Number(stat.mtimeMs))}-thumbnail.webp`
+      await writeScannedDerivative(photoId, active.id, 'thumbnail', key, bytes, 'image/webp')
+      return { key, url: '' }
     }
 
     // 一个文件夹内可混放图片和视频：按单个文件扩展名判定类型
@@ -588,12 +549,13 @@ private async collectFiles(dir: string): Promise<string[]> {
 
     if (isImage) {
       try {
+        if (stat.size > 100 * 1024 ** 2) throw new Error('Image exceeds processing memory limit')
         const rawBuffer = await fs.readFile(absFile)
         // HEIC/RAW 等需转 JPEG 预览（对 exif/sharp 友好），其余格式原样返回
         const imageBuffer = await preprocessImageBuffer(rawBuffer, absFile)
 
         const { width, height } = await sharp(imageBuffer, {
-          limitInputPixels: false,
+          limitInputPixels: 100_000_000,
         })
           .rotate()
           .metadata()
@@ -609,6 +571,10 @@ private async collectFiles(dir: string): Promise<string[]> {
 
         // 缩略图统一写入内部存储（不就地写外部库目录；见 writeThumbnail）
         const thumb = await writeThumbnail(thumbnailBuffer)
+        if (!['.jpg','.jpeg','.png','.gif','.webp','.avif'].includes(fileExt)) {
+          const preview = await sharp(imageBuffer, { limitInputPixels: 100_000_000 }).rotate().resize({ width: 4096, height: 4096, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer()
+          await writeScannedDerivative(photoId, active.id, 'preview', `${fixed.siteRoot(photoId)}/.chronoval/${Math.trunc(Number(stat.mtimeMs))}-preview.jpeg`, preview, 'image/jpeg')
+        }
 
         // EXIF
         let exifData: Awaited<ReturnType<typeof extractExifData>> = null
@@ -638,7 +604,8 @@ private async collectFiles(dir: string): Promise<string[]> {
           dateTaken: photoInfo.dateTaken,
           storageKey: `${mount.name}/${rel}`,
           thumbnailKey: thumb?.key || null,
-          fileSize: stat.size,
+          fileSize: Number(stat.size),
+          fixedProviderId: active.id,
           lastModified: stat.mtime.toISOString(),
           originalUrl,
           thumbnailUrl: thumb?.url || null,
@@ -704,7 +671,8 @@ private async collectFiles(dir: string): Promise<string[]> {
         dateTaken: stat.mtime.toISOString(),
         storageKey: `${mount.name}/${rel}`,
         thumbnailKey: thumb?.key || null,
-        fileSize: stat.size,
+        fileSize: Number(stat.size),
+          fixedProviderId: active.id,
         lastModified: stat.mtime.toISOString(),
         originalUrl,
         thumbnailUrl: thumb?.url || null,

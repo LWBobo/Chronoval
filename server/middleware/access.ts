@@ -1,5 +1,7 @@
 import { settingsManager } from '../services/settings/settingsManager'
 import { resolveAccess, requireAccess } from '../utils/access'
+import { assertCsrf } from '../utils/csrf'
+import { isPublicIconRequest } from '../utils/access-policy'
 
 /**
  * /api 权限入口。策略表见 server/utils/access.ts，未命中的接口要求管理员。
@@ -25,5 +27,9 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  await requireAccess(event, resolveAccess(event.method, pathname))
+  const actor = await requireAccess(event, resolveAccess(event.method, pathname))
+  if (actor.user?.mustChangePassword && !isPublicIconRequest(event.method, pathname) && !/^\/api\/(?:me\/(?:password|profile)|profile|auth\/(?:csrf|2fa\/status)|logout|_auth\/session|system\/settings\/all)$/.test(pathname)) {
+    throw createError({ statusCode: 403, message: '请先修改初始密码', data: { code: 'PASSWORD_CHANGE_REQUIRED' } })
+  }
+  await assertCsrf(event)
 })

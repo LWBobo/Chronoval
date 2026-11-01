@@ -1,3 +1,4 @@
+import { folderAudienceAccess } from '~~/server/services/collections/access'
 import { serializeScanAlbumNodes } from '~~/server/utils/scan-album-response'
 import { z } from 'zod'
 import {
@@ -87,7 +88,7 @@ export default eventHandler(async (event) => {
   // 默认不因管理员身份放行，避免「任意密码都可进入」。
   const actor = await getActor(event)
   const visibility = getScanAlbumEffectiveVisibility(libIdNum, relPath)
-  if (!albumOpenToActor({ visibility }, actor)) {
+  if (!folderAudienceAccess(libIdNum, relPath, actor)) {
     throw createError({ statusCode: 404, statusMessage: 'Not Found' })
   }
   const adminBypass = await isAlbumAdminBypass(event, actor)

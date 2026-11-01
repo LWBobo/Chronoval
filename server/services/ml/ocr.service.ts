@@ -1,3 +1,4 @@
+import { mlSnapshotCurrent } from './partition'
 import { runOcr, MlUnavailableError } from './client'
 import { isOcrEnabled } from './config'
 import { withOcrLimit } from './limit'
@@ -28,6 +29,7 @@ async function processOcrUnlocked(photoId: string) {
 
   const text = (result.text || '').trim()
   const db = useDB()
+  if(!mlSnapshotCurrent(photoId,loaded.snapshot))return
   db.insert(tables.photoOcr)
     .values({
       photoId,

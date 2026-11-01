@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolveApiAccess } from './access-policy.ts'
+import { isPublicIconRequest, resolveApiAccess } from './access-policy.ts'
+
+test('installed icon collections are public for GET and HEAD only', () => {
+  for (const method of ['GET', 'HEAD', 'get']) {
+    for (const path of ['/api/_nuxt_icon/lucide', '/api/_nuxt_icon/lucide.json', '/api/_nuxt_icon/fluent-emoji-flat.json/']) {
+      assert.equal(isPublicIconRequest(method, path), true, `${method} ${path}`)
+      assert.equal(resolveApiAccess(method, path), 'public', `${method} ${path}`)
+    }
+  }
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+    assert.equal(isPublicIconRequest(method, '/api/_nuxt_icon/lucide.json'), false)
+    assert.equal(resolveApiAccess(method, '/api/_nuxt_icon/lucide.json'), 'admin')
+  }
+  for (const path of ['/api/_nuxt_icon', '/api/_nuxt_icon/', '/api/_nuxt_icon/lucide/admin', '/api/_nuxt_icon/../users', '/api/_nuxt_icon/lucide.json.js', '/api/_nuxt_icon/-lucide', '/api/_nuxt_other/lucide']) {
+    assert.equal(isPublicIconRequest('GET', path), false, path)
+    assert.equal(resolveApiAccess('GET', path), 'admin', path)
+  }
+})
 
 test('public read routes remain public', () => {
   const routes = [

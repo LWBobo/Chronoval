@@ -50,7 +50,19 @@ export function closeDB() {
 }
 
 export type User = typeof schema.users.$inferSelect
-export type Photo = typeof schema.photos.$inferSelect
+export type PhotoRow = typeof schema.photos.$inferSelect
+// Display components also receive public DTOs, which intentionally omit account,
+// processing and filesystem fields. Database operations infer the full row type.
+type PhotoDisplayField = 'id' | 'title' | 'description' | 'width' | 'height' | 'aspectRatio'
+  | 'dateTaken' | 'fileSize' | 'lastModified' | 'thumbnailHash' | 'tags' | 'exif'
+  | 'latitude' | 'longitude' | 'country' | 'city' | 'locationName' | 'isLivePhoto'
+  | 'isPanorama' | 'panoYaw' | 'panoPitch' | 'type' | 'source'
+export type Photo = Pick<PhotoRow, PhotoDisplayField> & Partial<Omit<PhotoRow, PhotoDisplayField>> & {
+  originalUrl?: string | null
+  thumbnailUrl?: string | null
+  livePhotoVideoUrl?: string | null
+  downloadUrl?: string | null
+}
 
 export type PipelineQueueItem = typeof schema.pipelineQueue.$inferSelect
 export type NewPipelineQueueItem = typeof schema.pipelineQueue.$inferInsert

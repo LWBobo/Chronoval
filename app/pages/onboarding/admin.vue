@@ -20,9 +20,9 @@ const {
 // but we can make it partial to allow extra fields if API adds them.
 const schema = z
   .object({
-    username: z.string().min(2, 'Username must be at least 2 characters'),
+    username: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_-]{2,31}$/, 'Use 3–32 lowercase letters, digits, underscores or hyphens; start with a letter'),
     email: z.email('Invalid email address'),
-    password: z.string().min(6, 'Password must be at least 6 characters'),
+    password: z.string().min(12, 'Password must be at least 12 characters').max(128),
     confirmPassword: z.string(),
   })
   .refine((data) => data.password === data.confirmPassword, {

@@ -1,3 +1,4 @@
+import { mlSnapshotCurrent } from './partition'
 import { eq } from 'drizzle-orm'
 import { encodeImage, encodeText, MlUnavailableError } from './client'
 import { clipMinScore, clipModel, clipTopK, isClipEnabled } from './config'
@@ -28,6 +29,7 @@ async function processSmartSearchUnlocked(photoId: string) {
   const model = await clipModel()
   const result = await encodeImage(loaded.buffer, loaded.filename, model)
   const db = useDB()
+  if(!mlSnapshotCurrent(photoId,loaded.snapshot))return
   db.insert(tables.photoEmbeddings)
     .values({
       photoId,

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import sharp from 'sharp'
 import { loadPhotoImageBuffer } from '~~/server/services/ml/photo-image'
-import { blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
+import { canSeePerson, getPerson, blockedPhotoIdsForActor } from '~~/server/services/ml/person.service'
 
 export default eventHandler(async (event) => {
   const faceId = getRouterParam(event, 'faceId')
@@ -20,17 +20,18 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Face not found' })
   }
 
-  const photo = db
+  const found = db
     .select()
     .from(tables.photos)
     .where(eq(tables.photos.id, face.photoId))
     .get()
 
-  if (!photo || photo.deletedAt) {
+  if (!found || found.deletedAt) {
     throw createError({ statusCode: 404, message: 'Photo not found' })
   }
 
-  await requireVisiblePhoto(event, photo.id)
+  const {photo,context}=await requireVisiblePhoto(event, found.id)
+  if(face.personId){const person=getPerson(face.personId);if(!person||!canSeePerson(person,context.actor))throw createError({statusCode:404,message:'Face not found'})}
 
   const actor = await getActor(event)
   if (blockedPhotoIdsForActor(actor).has(photo.id)) {

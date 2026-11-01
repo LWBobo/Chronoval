@@ -4,6 +4,6 @@
 export default defineNuxtRouteMiddleware((_to) => {
   const { loggedIn, user } = useUserSession()
   if (loggedIn.value) {
-    return navigateTo(user.value?.isAdmin ? '/dashboard' : '/')
+    return navigateTo(user.value?.mustChangePassword ? '/me/settings/security' : user.value?.isAdmin ? '/dashboard' : '/me/photos')
   }
 })

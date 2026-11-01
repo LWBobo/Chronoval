@@ -209,7 +209,7 @@ export function usePhotoFilters() {
           photo.country || '',
           photo.title || '',
           photo.description || '',
-          photo.storageKey || '',
+          photo.originalFilename || '',
           photo.originalUrl || '',
           photo.locationName || '',
         ]

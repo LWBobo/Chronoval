@@ -1,56 +1,16 @@
+import { eq } from 'drizzle-orm'
 import { z } from 'zod'
-import { and } from 'drizzle-orm'
+import { mutateCollections } from '../../../services/collections/mutations'
+import { tables } from '../../../utils/db'
 
-export default eventHandler(async (event) => {
-
-  const { albumId } = await getValidatedRouterParams(
-    event,
-    z.object({
-      albumId: z
-        .string()
-        .regex(/^\d+$/)
-        .transform((val) => parseInt(val, 10)),
-    }).parse,
-  )
-
-  const db = useDB()
-
-  // 检查相簌是否存在
-  const album = await db
-    .select()
-    .from(tables.collections)
-    .where(
-      and(
-        eq(tables.collections.id, albumId),
-        eq(tables.collections.kind, 'manual'),
-      ),
-    )
-    .get()
-
-  if (!album) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: 'Album not found',
-    })
-  }
-
-  // 使用事务删除相簌及其关联的照片关系
-  db.transaction((tx) => {
-    // 删除相簌-照片关系
-    tx.delete(tables.collectionPhotos)
-      .where(eq(tables.collectionPhotos.collectionId, albumId))
-      .run()
-
-    // 删除相簌
-    tx.delete(tables.collections)
-      .where(
-        and(
-          eq(tables.collections.id, albumId),
-          eq(tables.collections.kind, 'manual'),
-        ),
-      )
-      .run()
+export default eventHandler(async event => {
+  const actor = await requireAccess(event, 'admin')
+  const { albumId } = await getValidatedRouterParams(event, z.object({ albumId: z.coerce.number().int().positive() }).parse)
+  const body = await readValidatedBody(event, z.object({ expectedAclVersion: z.number().int().positive(), reason: z.string().trim().min(1).max(1000) }).strict().parse)
+  return mutateCollections(actor, [albumId], { [albumId]: body.expectedAclVersion }, body.reason, 'collection.delete', db => {
+    const album = db.select().from(tables.collections).where(eq(tables.collections.id, albumId)).get()
+    if (album?.kind !== 'manual') throw createError({ statusCode: 404, message: 'Album not found' })
+    db.delete(tables.collections).where(eq(tables.collections.id, albumId)).run()
+    return { success: true }
   })
-
-  return { success: true }
 })

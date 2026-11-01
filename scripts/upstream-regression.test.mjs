@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
-import { registerHooks, createRequire } from 'node:module'
+import { createRequire } from 'node:module'
 import { readFile, mkdir, rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
+import { statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { eq } from 'drizzle-orm'
 import { createSecurityRuntime } from './test-utils/security-runtime.mjs'
@@ -12,7 +13,7 @@ let runtime
 let scannerModule
 let livePhoto
 let scannerState
-const admin = { cookie: 'test_session=1' }
+const admin = { cookie: 'test_session=1', 'x-csrf-token': 'test-csrf-token' }
 const member = { cookie: 'test_session=2' }
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const scannerURL = new URL(
@@ -46,30 +47,11 @@ const fixtureModules = {
   '../ml/enqueue':
     'export const enqueueMlJobsForPhoto = async id => { globalThis.__chronovalScannerTest.ml.push(id) };',
 }
-const hooks = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    let source
-    if (context.parentURL === scannerURL || context.parentURL === managerURL)
-      source = fixtureModules[specifier]
-    if (context.parentURL === managerURL && specifier === 'exiftool-vendored')
-      source = 'export const exiftool = {};'
-    if (context.parentURL === managerURL && specifier === '../video/livephoto')
-      source = 'export const findLivePhotoVideoForImage = () => {};'
-    if (
-      context.parentURL === managerURL &&
-      specifier === '../video/motion-photo'
-    )
-      source = 'export const processMotionPhotoFromXmp = () => {};'
-    if (context.parentURL === liveURL && specifier === '../video/motion-photo')
-      source = 'export const locateEmbeddedMotionVideo = () => null;'
-    if (source)
-      return {
-        url: `data:text/javascript,${encodeURIComponent(source)}`,
-        shortCircuit: true,
-      }
-    return nextResolve(specifier, context)
-  },
-})
+const moduleFixtures = [
+  { parentURL: scannerURL, specifiers: { ...fixtureModules, sharp: 'export default function sharp() { throw new Error("Unexpected native image decoding in scanner control-flow tests") }' } },
+  { parentURL: managerURL, specifiers: fixtureModules },
+  { parentURL: liveURL, specifiers: { '../video/motion-photo': 'export const locateEmbeddedMotionVideo = () => null;' } },
+]
 
 const request = (route, options = {}) => fetch(runtime.origin + route, options)
 const job = (
@@ -96,6 +78,10 @@ const photoId = (rel) => scannerModule.buildLibraryPhotoId('scan_1', rel)
 const entry = (rel, extra = {}) => ({
   source: 'library',
   type: 'image',
+  libraryId: 1,
+  fixedProviderId: 1,
+  fileSize: statSync(path.join(runtime.scratch, 'library', rel)).size,
+  lastModified: statSync(path.join(runtime.scratch, 'library', rel)).mtime.toISOString(),
   libraryMount: 'scan_1',
   libraryPath: rel,
   originalUrl: `/library/scan_1/${rel}`,
@@ -105,25 +91,23 @@ const entry = (rel, extra = {}) => ({
 })
 
 before(async () => {
-  runtime = await createSecurityRuntime()
+  runtime = await createSecurityRuntime({ moduleFixtures })
   runtime.db
     .insert(tables.users)
     .values([
       {
         id: 1,
-        username: 'admin',
+        username: 'admin', usernameKey: 'admin', displayName: 'Administrator', emailKey: 'admin@example.test', mustChangePassword: false,
         email: 'admin@example.test',
         role: 'admin',
-        isAdmin: 1,
-        createdAt: new Date(),
+          createdAt: new Date(),
       },
       {
         id: 2,
-        username: 'member',
+        username: 'member', usernameKey: 'member', displayName: 'Member', emailKey: 'member@example.test', mustChangePassword: false,
         email: 'member@example.test',
         role: 'user',
-        isAdmin: 0,
-        createdAt: new Date(),
+          createdAt: new Date(),
       },
     ])
     .run()
@@ -154,6 +138,7 @@ before(async () => {
 
 beforeEach(async () => {
   runtime.db.delete(tables.pipelineQueue).run()
+  runtime.db.delete(tables.photoFiles).run()
   runtime.db.delete(tables.photos).run()
   const root = path.join(runtime.scratch, 'library')
   await rm(root, { recursive: true, force: true })
@@ -168,6 +153,12 @@ beforeEach(async () => {
     },
   ]
   scannerState.ml = []
+  runtime.db.delete(tables.libraries).run()
+  runtime.db.delete(tables.settingsStorageProviders).run()
+  runtime.db.insert(tables.libraries).values({ id: 1, name: 'fixture', rootPath: root }).run()
+  runtime.db.insert(tables.settingsStorageProviders).values({ id: 1, name: 'fixture', provider: 'local', config: { provider: 'local', basePath: path.join(runtime.scratch, 'storage'), prefix: 'photos', baseUrl: '/storage' } }).run()
+  runtime.state.provider = { config: runtime.db.select().from(tables.settingsStorageProviders).get().config }
+  runtime.state.libraries = runtime.db.select().from(tables.libraries).all()
   globalThis.__workerPool = {
     addTask: async (payload, options) => {
       const task = runtime.db
@@ -184,7 +175,6 @@ beforeEach(async () => {
 })
 
 after(async () => {
-  hooks.deregister()
   delete globalThis.__workerPool
   delete globalThis.__chronovalScannerTest
   await runtime?.close()
@@ -312,14 +302,14 @@ test('batch retry handles library and ML jobs together', async () => {
 test('single-file retry indexes and updates without replacing manual fields', async () => {
   await runtime.write('library/photo.jpg', 'photo')
   const worker = scanner()
-  worker.processFile = async () => entry('photo.jpg')
+  worker.processFileInner = async () => entry('photo.jpg')
   assert.equal(await worker.processSingleFile('scan_1', 'photo.jpg'), 'indexed')
   runtime.db
     .update(tables.photos)
     .set({ isPanorama: 1 })
     .where(eq(tables.photos.id, photoId('photo.jpg')))
     .run()
-  worker.processFile = async () => entry('photo.jpg', { title: 'refreshed' })
+  worker.processFileInner = async () => entry('photo.jpg', { title: 'refreshed' })
   assert.equal(await worker.processSingleFile('scan_1', 'photo.jpg'), 'updated')
   const photo = runtime.db.select().from(tables.photos).get()
   assert.equal(photo.title, 'refreshed')
@@ -330,10 +320,11 @@ test('single-file retry indexes and updates without replacing manual fields', as
 test('retry and full-scan insert races converge on one stable photo ID', async () => {
   await runtime.write('library/race.jpg', 'photo')
   const worker = scanner()
-  worker.processFile = async () => {
+  worker.processFileInner = async () => {
     runtime.db
-      .insert(tables.photos)
-      .values({ id: photoId('race.jpg'), ...entry('race.jpg') })
+      .update(tables.photos)
+      .set({ title: 'concurrent scan' })
+      .where(eq(tables.photos.id, photoId('race.jpg')))
       .run()
     return entry('race.jpg', { title: 'retry result' })
   }
@@ -354,7 +345,7 @@ test('retry of a paired MOV updates the still and removes a standalone duplicate
     })
     .run()
   const worker = scanner()
-  worker.processFile = async (mount, rel, absFile) => ({
+  worker.processFileInner = async (mount, rel, absFile) => ({
     ...entry(rel),
     ...(await livePhoto.detectLibraryLivePhoto({
       photoId: photoId(rel),
@@ -369,7 +360,7 @@ test('retry of a paired MOV updates the still and removes a standalone duplicate
   assert.equal(photos.length, 1)
   assert.equal(photos[0].id, photoId('live.jpg'))
   assert.equal(photos[0].isLivePhoto, 1)
-  assert.match(photos[0].livePhotoVideoUrl, /live\.MOV$/)
+  assert.match(runtime.db.select().from(tables.photoFiles).where(eq(tables.photoFiles.role, 'live_video')).get().libraryPath, /live\.MOV$/)
 })
 
 test('retry rejects traversal, outside symlinks, missing files and unsupported entries', async () => {
@@ -381,7 +372,7 @@ test('retry rejects traversal, outside symlinks, missing files and unsupported e
   )
   await mkdir(path.join(runtime.scratch, 'library/directory.jpg'))
   const worker = scanner()
-  worker.processFile = async () => {
+  worker.processFileInner = async () => {
     throw new Error('Processing must not start')
   }
   for (const rel of [
@@ -397,21 +388,21 @@ test('retry rejects traversal, outside symlinks, missing files and unsupported e
   assert.equal(runtime.db.select().from(tables.photos).all().length, 0)
 })
 
-test('failed retry throws without creating a phantom photo', async () => {
+test('failed retry retains an unreadable file locator for retry and cleanup', async () => {
   await runtime.write('library/broken.jpg', 'broken')
   const worker = scanner()
-  worker.processFile = async () => null
+  worker.processFileInner = async () => null
   await assert.rejects(
     worker.processSingleFile('scan_1', 'broken.jpg'),
-    /Failed to process/,
+    /Library processing failed/,
   )
-  assert.equal(runtime.db.select().from(tables.photos).all().length, 0)
+  assert.equal(runtime.db.select().from(tables.photos).get().processingStatus, 'failed')
 })
 
 test('scan failures enter the queue and duplicate active or same-version failures are suppressed', async () => {
   await runtime.write('library/broken.jpg', 'broken')
   const worker = scanner()
-  worker.processFile = async () => null
+  worker.processFileInner = async () => null
   assert.equal((await worker.scanMountByName('scan_1')).failed, 1)
   await worker.scanMountByName('scan_1')
   let tasks = runtime.db.select().from(tables.pipelineQueue).all()
@@ -469,14 +460,14 @@ test('queue worker dispatches a library retry and marks it completed', async () 
     await import('../server/services/pipeline-queue/manager.ts')
   const worker = QueueManager.getInstance('upstream-success', quiet)
   worker.getNextTask = async () => getJob(task.id)
-  const original = scannerModule.libraryScanner.processFile
-  scannerModule.libraryScanner.processFile = async () => entry('worker.jpg')
+  const original = scannerModule.libraryScanner.processFileInner
+  scannerModule.libraryScanner.processFileInner = async () => entry('worker.jpg')
   try {
     await worker.processNextTask()
     assert.equal(getJob(task.id).status, 'completed')
     assert.equal(runtime.db.select().from(tables.photos).all().length, 1)
   } finally {
-    scannerModule.libraryScanner.processFile = original
+    scannerModule.libraryScanner.processFileInner = original
   }
 })
 
@@ -491,19 +482,19 @@ test('queue worker retains three-attempt backoff for a failed library retry', as
     await import('../server/services/pipeline-queue/manager.ts')
   const worker = QueueManager.getInstance('upstream-failure', quiet)
   worker.getNextTask = async () => getJob(task.id)
-  const original = scannerModule.libraryScanner.processFile
-  scannerModule.libraryScanner.processFile = async () => null
+  const original = scannerModule.libraryScanner.processFileInner
+  scannerModule.libraryScanner.processFileInner = async () => null
   try {
     for (let attempt = 1; attempt <= 3; attempt++) {
       await worker.processNextTask()
       const current = getJob(task.id)
       assert.equal(current.attempts, attempt)
       assert.equal(current.status, attempt === 3 ? 'failed' : 'pending')
-      assert.match(current.errorMessage, /Failed to process library file/)
+      assert.match(current.errorMessage, /Library processing failed/)
     }
-    assert.equal(runtime.db.select().from(tables.photos).all().length, 0)
+    assert.equal(runtime.db.select().from(tables.photos).get().processingStatus, 'failed')
   } finally {
-    scannerModule.libraryScanner.processFile = original
+    scannerModule.libraryScanner.processFileInner = original
   }
 })
 

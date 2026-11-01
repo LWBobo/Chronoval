@@ -1,20 +1,21 @@
 import { eq } from 'drizzle-orm'
 import z from 'zod'
-import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
+import { collectionAccessSchema, replaceCollectionPolicy } from '../../services/collections/access'
+import { assertCurrentActor } from '../../services/users'
+import { assertMembershipPhotos } from '../../services/collections/mutations'
 import { generateAlbumUid } from '~~/server/utils/albumUid'
-import { replaceCollectionAccess } from '~~/server/services/collections/access-grants'
 import { toManualAlbum } from '~~/server/services/collections/manual-album'
 
 export default eventHandler(async (event) => {
+  const actor = await requireAccess(event, 'admin')
   const body = await readValidatedBody(
     event,
     z.object({
+      access: collectionAccessSchema,
       title: z.string().min(1).max(255),
       description: z.string().max(1000).optional(),
       coverPhotoId: z.string().optional(),
       photoIds: z.array(z.string()).optional(),
-      isHidden: z.boolean().optional(),
-      visibility: z.enum(['public', 'login', 'admin']).optional(),
       hideFromGallery: z.boolean().optional(),
       layout: z.enum(['waterfall', 'grid', 'immersive', 'timeline']).optional(),
       randomAnimation: z.enum(['default', 'wheel', 'compat']).optional(),
@@ -23,9 +24,6 @@ export default eventHandler(async (event) => {
       randomQuotes: z.string().max(5000).nullable().optional(),
       randomQuotesTag: z.enum(['ancient', 'modern']).nullable().optional(),
       bgmMusicId: z.number().int().nullable().optional(),
-      password: z.string().max(128).optional(),
-      passwordExemptMode: z.enum(['logged_in', 'selected']).nullable().optional(),
-      passwordExemptUsers: z.array(z.string().max(255)).nullable().optional(),
       slug: z
         .string()
         .max(120)
@@ -39,14 +37,10 @@ export default eventHandler(async (event) => {
                 .replace(/^-|-$/g, '')
             : value,
         ),
-    }).parse,
+    }).strict().parse,
   )
 
   const db = useDB()
-  const visibility = body.visibility ?? (body.isHidden ? 'login' : 'public')
-  const passwordHash = body.password?.trim()
-    ? hashAlbumPassword(body.password.trim())
-    : null
   const slug = body.slug?.trim() || null
   if (slug) {
     const duplicate = db
@@ -60,6 +54,7 @@ export default eventHandler(async (event) => {
   }
 
   const created = db.transaction((tx) => {
+    assertCurrentActor(tx as any, actor, true)
     const album = tx
       .insert(tables.collections)
       .values({
@@ -76,30 +71,17 @@ export default eventHandler(async (event) => {
         randomQuotes: body.randomQuotes || null,
         randomQuotesTag: body.randomQuotesTag || null,
         bgmMusicId: body.bgmMusicId ?? null,
-        passwordHash,
         uid: generateAlbumUid(),
         slug,
       })
       .returning()
       .get()
 
-    replaceCollectionAccess(
-      album.id,
-      {
-        visibility,
-        passwordExemptMode: passwordHash
-          ? body.passwordExemptMode === 'selected' &&
-            !body.passwordExemptUsers?.length
-            ? null
-            : body.passwordExemptMode
-          : null,
-        passwordExemptUsers: passwordHash ? body.passwordExemptUsers : null,
-      },
-      tx,
-    )
+    replaceCollectionPolicy(album.id, body.access, actor, tx as any)
 
     const photoIds = new Set(body.photoIds || [])
     if (body.coverPhotoId) photoIds.add(body.coverPhotoId)
+    if (photoIds.size) assertMembershipPhotos([...photoIds], tx as any)
     let position = 1000000
     for (const photoId of photoIds) {
       tx.insert(tables.collectionPhotos)
@@ -111,8 +93,8 @@ export default eventHandler(async (event) => {
         .onConflictDoNothing()
         .run()
     }
-    return album
-  })
+    return tx.select().from(tables.collections).where(eq(tables.collections.id, album.id)).get()!
+  }, { behavior: 'immediate' })
 
   const album = toManualAlbum(created, db)
   const { passwordHash: _passwordHash, ...safeAlbum } = album

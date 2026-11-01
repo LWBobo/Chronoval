@@ -1,5 +1,6 @@
+import { photoAssetSql } from '../../utils/photo-media'
 import { createHash } from 'node:crypto'
-import { and, asc, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
+import { and, eq, asc, isNotNull, isNull, notInArray, or } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
 import { viewerFromActor } from '~~/server/services/ml/person.service'
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
@@ -26,6 +27,7 @@ export default eventHandler(async (event): Promise<GlobeMapPayload> => {
   const actor = await getActor(event)
   const where = [
     isNull(tables.photos.deletedAt),
+    actor.isAdmin ? undefined : eq(tables.photos.stripLocation,false),
     isNotNull(tables.photos.latitude),
     isNotNull(tables.photos.longitude),
     homepageGalleryVisibilitySql(
@@ -54,8 +56,7 @@ export default eventHandler(async (event): Promise<GlobeMapPayload> => {
       title: tables.photos.title,
       city: tables.photos.city,
       locationName: tables.photos.locationName,
-      thumbnailUrl: tables.photos.thumbnailUrl,
-      thumbnailKey: tables.photos.thumbnailKey,
+      thumbnailUrl: photoAssetSql('thumbnail'),
       thumbnailHash: tables.photos.thumbnailHash,
       lastModified: tables.photos.lastModified,
       exif: tables.photos.exif,
@@ -72,7 +73,7 @@ export default eventHandler(async (event): Promise<GlobeMapPayload> => {
       const belowSeaLevel = exif.GPSAltitudeRef === 'Below Sea Level'
       const thumbnailVersion = createHash('sha1')
         .update(
-          `${row.thumbnailKey || row.thumbnailUrl || ''}:${row.lastModified || ''}`,
+          `${row.thumbnailUrl || ''}:${row.lastModified || ''}`,
         )
         .digest('hex')
         .slice(0, 12)
@@ -86,7 +87,7 @@ export default eventHandler(async (event): Promise<GlobeMapPayload> => {
         locationName: row.locationName,
         thumbnailUrl: row.thumbnailUrl,
         mapThumbnailUrl:
-          row.thumbnailKey || row.thumbnailUrl
+          row.thumbnailUrl
             ? `/api/map/photos/${encodeURIComponent(row.id)}/thumbnail?v=${thumbnailVersion}`
             : null,
         thumbnailHash: row.thumbnailHash,

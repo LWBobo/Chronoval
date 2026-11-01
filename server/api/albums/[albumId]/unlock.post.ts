@@ -34,7 +34,7 @@ export default eventHandler(async (event) => {
   }
   const adminBypass = await isAlbumAdminBypass(event, actor)
   if (adminBypass || isPasswordExemptForUser(album, actor.user)) {
-    authorizeAlbum(event, { albumId: album.id, passwordHash: album.passwordHash })
+    await authorizeAlbum(event, { albumId: album.id, passwordHash: album.passwordHash })
     return { authorized: true }
   }
 
@@ -45,6 +45,6 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: 'Incorrect password' })
   }
 
-  authorizeAlbum(event, { albumId: album.id, passwordHash: album.passwordHash })
+  await authorizeAlbum(event, { albumId: album.id, passwordHash: album.passwordHash })
   return { authorized: true }
 })

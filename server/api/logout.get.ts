@@ -1,4 +1,3 @@
-export default eventHandler(async (event) => {
-  await clearUserSession(event)
-  return { loggedOut: true }
+export default eventHandler(() => {
+  throw createError({ statusCode: 405, message: 'Use POST to log out' })
 })

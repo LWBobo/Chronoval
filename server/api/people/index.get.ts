@@ -1,3 +1,4 @@
+import { photoAssetSql } from '../../utils/photo-media'
 import { inArray } from 'drizzle-orm'
 import {
   faceThumbnailUrl,
@@ -6,9 +7,11 @@ import {
   personWithMeta,
   photoCountByPerson,
   viewerFromActor,
-  visibilityAllows,
+  canSeePerson,
 } from '~~/server/services/ml/person.service'
 import { discoverablePhotoIds } from '~~/server/utils/photo-access'
+import { collectionPasswordAccess } from '../../utils/collection-password'
+import { isAlbumAdminBypass } from '../../utils/albumAccess'
 
 export default eventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'private, no-store')
@@ -21,6 +24,7 @@ export default eventHandler(async (event) => {
   const minFaces = Number.isFinite(parsedMin) ? Math.max(0, parsedMin) : 1
 
   const actor = await getActor(event)
+  const adminPasswordBypass = await isAlbumAdminBypass(event, actor)
   const viewer = viewerFromActor(actor)
   const manage =
     query.manage === '1' || query.manage === 'true' || query.manage === true
@@ -65,7 +69,7 @@ export default eventHandler(async (event) => {
       .select({
         id: tables.photos.id,
         deletedAt: tables.photos.deletedAt,
-        thumbnailUrl: tables.photos.thumbnailUrl,
+        thumbnailUrl: photoAssetSql('thumbnail'),
         libraryMount: tables.photos.libraryMount,
         libraryPath: tables.photos.libraryPath,
       })
@@ -93,8 +97,11 @@ export default eventHandler(async (event) => {
     else facesByPerson.set(face.personId, [item])
   }
 
-  const people = listPeople({ viewer, minFaces: 0 })
+  const people = listPeople({ viewer, actor, minFaces: 0 })
     .map((person) => {
+      if (!collectionPasswordAccess(event, person.collectionId!, adminPasswordBypass)) {
+        return { id: person.id, collectionId: person.collectionId, name: null, visibility: normalizeVisibility(person), isHidden: normalizeVisibility(person) !== 'public', faceCount: 0, thumbnailFaceId: null, thumbnailUrl: null, locked: true }
+      }
       const visibleFaces = facesByPerson.get(person.id) || []
       if (
         visibleFaces.length < minFaces &&
@@ -102,7 +109,6 @@ export default eventHandler(async (event) => {
       ) {
         return null
       }
-      if (visibleFaces.length === 0) return null
       const cover = visibleFaces.find((face) => face.imageWidth > 0)
       const thumbnailFaceId = visibleFaces.some(
         (face) => face.id === person.thumbnailFaceId && face.imageWidth > 0,
@@ -110,7 +116,7 @@ export default eventHandler(async (event) => {
         ? person.thumbnailFaceId
         : (cover?.id ?? null)
       const visibility = normalizeVisibility(person)
-      if (!visibilityAllows(visibility, viewer)) return null
+      if (!canSeePerson(person, actor)) return null
       const memberPhotoIds = new Set(visibleFaces.map((face) => face.photoId))
       return {
         ...person,
@@ -120,7 +126,8 @@ export default eventHandler(async (event) => {
         thumbnailFaceId,
         thumbnailUrl: thumbnailFaceId
           ? faceThumbnailUrl(thumbnailFaceId)
-          : thumbByPhoto.get(visibleFaces[0]!.photoId) || null,
+          : (visibleFaces[0] ? thumbByPhoto.get(visibleFaces[0].photoId) : null) || null,
+        locked: false,
       }
     })
     .filter((person) => person !== null)

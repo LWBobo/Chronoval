@@ -1,3 +1,4 @@
+import { photoWithMediaColumns } from '../../utils/photo-media'
 import { and, asc, desc, isNull, notInArray, or } from 'drizzle-orm'
 import { getGalleryHiddenScanMountSet } from '~~/server/services/scan-library/manager'
 import { homepageGalleryVisibilitySql } from '~~/server/utils/gallery-visibility'
@@ -16,7 +17,8 @@ export default eventHandler(async (event) => {
   const q = getQuery(event)
   const galleryOnly = q.gallery === '1'
   const actor = await getActor(event)
-  const isAdmin = actor.isAdmin
+  const isAdmin = actor.isAdmin && q.manage === '1'
+  if(q.manage==='1'&&!actor.isAdmin)throw createError({statusCode:403,message:'Admin privileges required'})
   const loggedIn = Boolean(actor.user)
 
   const limitRaw = parseInt(String(q.limit ?? ''), 10)
@@ -55,7 +57,7 @@ export default eventHandler(async (event) => {
   }
 
   let stmt = useDB()
-    .select()
+    .select(photoWithMediaColumns())
     .from(tables.photos)
     .where(and(...where))
     .orderBy(desc(tables.photos.dateTaken), asc(tables.photos.id))

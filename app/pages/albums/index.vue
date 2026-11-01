@@ -8,7 +8,8 @@ interface ScanAlbumCover {
   thumbnailHash: string | null
   aspectRatio: number | null
 }
-interface AlbumItem extends Album {
+interface AlbumItem extends Omit<Album, 'kind' | 'relPath'> {
+  isHidden?: boolean
   kind?: 'manual' | 'scan'
   photoIds?: string[]
   covers?: ScanAlbumCover[]
@@ -64,14 +65,14 @@ interface WaterfallPhoto {
 // 背景瀑布照片：合并默认照片库 + 所有相簿封面，保证浅色/暗色主题下都有真实照片纹理
 const waterfallPhotos = computed<WaterfallPhoto[]>(() => {
   const pool: WaterfallPhoto[] = [
-    ...photos.value.map((p) => ({
+    ...photos.value.filter((p) => p.thumbnailUrl).map((p) => ({
       thumbnailUrl: p.thumbnailUrl!,
       thumbnailHash: p.thumbnailHash ?? null,
       aspectRatio: p.aspectRatio || 1,
     })),
     ...(albums.value || []).flatMap((album) =>
-      (album.covers || []).map((cover) => ({
-        thumbnailUrl: cover.thumbnailUrl,
+      (album.covers || []).filter((cover) => cover.thumbnailUrl).map((cover) => ({
+        thumbnailUrl: cover.thumbnailUrl!,
         thumbnailHash: cover.thumbnailHash ?? null,
         aspectRatio: cover.aspectRatio || 1,
       })),
@@ -321,7 +322,7 @@ const hoveredAlbum = ref<number | null>(null)
                 class="w-full h-full object-cover"
                 :src="photo.thumbnailUrl!"
                 :thumbhash="photo.thumbnailHash"
-                :alt="album.title"
+                :alt="album.title || ''"
                 :style="{
                   aspectRatio: photo.aspectRatio || 1,
                 }"

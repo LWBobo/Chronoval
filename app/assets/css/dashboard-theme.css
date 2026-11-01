@@ -384,6 +384,15 @@ html.dark body.dashboard-active [role='dialog'] {
     0 26px 60px -28px rgba(0, 0, 0, 0.8);
 }
 
+/* Centered modals are sized by their content and translated to the middle.
+   Edge collapses that box to a 1px line when backdrop-filter is on the dialog
+   itself. Slideovers set data-side and keep the blur; their height is inset-y. */
+html body.dashboard-active [role='dialog'][data-slot='content']:not([data-side]) {
+  background: var(--ui-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 /* ============================================================
    后台表单控件美化（dashboard-root + body.dashboard-active 覆盖层）
    ------------------------------------------------------------

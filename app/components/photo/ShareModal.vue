@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { motion, AnimatePresence } from 'motion-v'
 import { useSettingRef } from '~/stores/settings'
+import { writeClipboard } from '~/utils/clipboard'
 
 interface Props {
   isOpen: boolean
@@ -118,7 +119,7 @@ function isImageBytes(buf: ArrayBuffer): boolean {
   return false
 }
 
-async function downloadFile(url: string, filename: string) {
+async function downloadFile(url: string, filename: string, requireImage = true) {
   // 25s 超时：OG 端点在服务端按需渲染大图时可能较慢/超时，避免无响应挂起
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 25000)
@@ -129,7 +130,7 @@ async function downloadFile(url: string, filename: string) {
     if (blob.size === 0) throw new Error('Empty download')
     // OG 端点可能把渲染报错以 HTML/2xx 返回，这里按签名校验，非图片则视为失败
     const contentType = res.headers.get('content-type') || ''
-    if (
+    if (requireImage &&
       !contentType.includes('image/') &&
       !isImageBytes(await blob.arrayBuffer().catch(() => new ArrayBuffer(0)))
     ) {
@@ -138,7 +139,9 @@ async function downloadFile(url: string, filename: string) {
     const blobUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = blobUrl
-    link.download = filename
+    const disposition = res.headers.get('content-disposition') || ''
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+    link.download = encodedName ? decodeURIComponent(encodedName) : filename
     document.body.append(link)
     link.click()
     link.remove()
@@ -157,7 +160,8 @@ const canUseNativeShare = !!(
 const handleDownloadOriginal = async () => {
   try {
     isDownloadingOriginal.value = true
-    await downloadFile(props.photo.originalUrl!, `${props.photo.id}.jpg`)
+    if (!props.photo.downloadUrl) throw new Error('Original download unavailable')
+    await downloadFile(`${props.photo.downloadUrl}?download=1`, props.photo.id, false)
     writePhotoDownload('original')
     toast.add({ title: $t('ui.action.share.success.originalImageDownloaded'), color: 'success', icon: 'tabler:check', duration: 3000 })
   } catch {
@@ -205,7 +209,7 @@ let copyResetTimer: ReturnType<typeof setTimeout> | null = null
 
 const copyText = async (text: string, successKey: string) => {
   try {
-    await navigator.clipboard.writeText(text)
+    await writeClipboard(text)
     isCopying.value = true
     isCopied.value = true
     if (copyResetTimer) clearTimeout(copyResetTimer)

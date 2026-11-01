@@ -9,7 +9,8 @@ interface PersonCard {
   name: string | null
   faceCount: number
   isHidden: boolean
-  visibility?: 'public' | 'login' | 'admin'
+  visibility?: 'public' | 'login' | 'selected' | 'admin'
+  locked?: boolean
   thumbnailUrl: string | null
   thumbnailFaceId: string | null
 }
@@ -44,7 +45,7 @@ const people = computed(() =>
 
 const { t } = useI18n()
 
-const displayName = (p: PersonCard) => p.name?.trim() || t('ui.people.unnamed')
+const displayName = (p: PersonCard) => p.locked ? t('permissions.lockedAlbum') : p.name?.trim() || t('ui.people.unnamed')
 </script>
 
 <template>
@@ -124,7 +125,7 @@ const displayName = (p: PersonCard) => p.name?.trim() || t('ui.people.unnamed')
               class="flex size-full items-center justify-center text-neutral-400"
             >
               <UIcon
-                name="tabler:user"
+                :name="person.locked ? 'tabler:lock' : 'tabler:user'"
                 class="size-10"
               />
             </div>
@@ -135,7 +136,7 @@ const displayName = (p: PersonCard) => p.name?.trim() || t('ui.people.unnamed')
             >
               {{ displayName(person) }}
             </p>
-            <p class="text-xs text-neutral-500">
+            <p v-if="!person.locked" class="text-xs text-neutral-500">
               {{ $t('ui.people.faces', { count: person.faceCount }) }}
             </p>
             <p
@@ -144,7 +145,7 @@ const displayName = (p: PersonCard) => p.name?.trim() || t('ui.people.unnamed')
               "
               class="text-[11px] text-amber-600 dark:text-amber-400"
             >
-              {{ $t(`ui.people.visibility.${person.visibility}`) }}
+              {{ $t(`permissions.${person.visibility}`) }}
             </p>
           </div>
         </NuxtLink>

@@ -1,3 +1,5 @@
+import { collectionPasswordAccess, authorizeCollection } from './collection-password'
+import { and, eq } from 'drizzle-orm'
 import { createHash, createHmac } from 'node:crypto'
 import { normalizeAlbumPath } from './album-path'
 import { safeTokenEqual } from './token'
@@ -53,41 +55,18 @@ export const hasScanAlbumAccess = (
   },
   allowAdmin: boolean,
 ): boolean => {
-  if (allowAdmin) return true
-  // 登录用户在免密范围内（logged_in / 指定用户）
-  if (opts.sessionExempt) return true
-  // 未设置密码 → 开放，直接放行
-  if (!opts.passwordHash) return true
-
-  const scope = scanAlbumCookieName(opts.libId, opts.relPath)
-  const stored = getCookie(event, scope)
-  if (!stored) return false
-  const idx = stored.indexOf(':')
-  if (idx === -1) return false
-  const id = Number(stored.slice(0, idx))
-  const token = stored.slice(idx + 1)
-  const expected = scanAlbumToken(scope, opts.passwordHash)
-  return id === opts.libId && safeTokenEqual(token, expected)
+  const id = folderId(opts.libId, opts.relPath)
+  return !!id && collectionPasswordAccess(event, id, allowAdmin)
 }
 
 /** 签发解锁 Cookie（密码校验通过后调用） */
 export const authorizeScanAlbum = (
   event: any,
   opts: { libId: number; relPath: string; passwordHash: string | null },
-): void => {
-  const scope = scanAlbumCookieName(opts.libId, opts.relPath)
-  setCookie(
-    event,
-    scope,
-    `${opts.libId}:${scanAlbumToken(scope, opts.passwordHash)}`,
-    {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: useSecureCookie(event),
-      path: '/',
-      // 不设 maxAge → 会话 Cookie：浏览器/会话关闭后即失效，下次访问需重新输入密码
-    },
-  )
+): Promise<void> => {
+  const id = folderId(opts.libId, opts.relPath)
+  if (!id) throw createError({ statusCode: 404, message: 'Collection not found' })
+  return authorizeCollection(event, id)
 }
 
 /** 清除解锁 Cookie */
@@ -111,25 +90,10 @@ export function hasInheritedScanAlbumAccess(
   },
   allowAdmin: boolean,
 ): boolean {
-  if (allowAdmin || opts.sessionExempt || !opts.passwordHash) return true
-  const target = normalizeAlbumPath(opts.relPath)
-  const origin = normalizeAlbumPath(opts.passwordPath ?? target)
-  if (origin && target !== origin && !target.startsWith(`${origin}/`))
-    return false
-  const parts = target.split('/').filter(Boolean)
-  const minimumDepth = origin.split('/').filter(Boolean).length
-  for (let depth = parts.length; depth >= minimumDepth; depth--) {
-    if (
-      hasScanAlbumAccess(
-        event,
-        {
-          ...opts,
-          relPath: parts.slice(0, depth).join('/'),
-        },
-        false,
-      )
-    )
-      return true
-  }
-  return false
+  const id = folderId(opts.libId, opts.relPath)
+  return !!id && collectionPasswordAccess(event, id, allowAdmin)
+}
+
+function folderId(libId: number, relPath: string) {
+  return useDB().select({ id: tables.collections.id }).from(tables.collections).where(and(eq(tables.collections.kind,'folder'),eq(tables.collections.libraryId,libId),eq(tables.collections.relPath,normalizeAlbumPath(relPath)))).get()?.id
 }

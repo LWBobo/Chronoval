@@ -262,11 +262,9 @@ const formatExposureTime = (
   return `1/${Math.round(1 / seconds)}s`
 }
 
-// 普通访问不会下发内部 storageKey，优先从公开媒体 URL / 标题推断扩展名。
+// Asset URLs contain opaque IDs. Only a display title may contain an extension.
 const photoFormat = computed(() => {
-  const key = props.currentPhoto.storageKey
-    || props.currentPhoto.originalUrl?.split(/[?#]/, 1)[0]
-    || props.currentPhoto.title
+  const key = props.currentPhoto.originalFilename || props.currentPhoto.title
   const ext = key?.split('.')?.pop()?.toUpperCase()
   return ext && ext.length <= 5 ? ext : (props.currentPhoto.type === 'video' ? 'VIDEO' : null)
 })

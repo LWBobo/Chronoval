@@ -36,7 +36,7 @@ const formattedDate = computed(() => {
 })
 
 const thumbnailUrl = computed(() =>
-  photo?.thumbnailKey && photo.thumbnailUrl
+  photo?.thumbnailUrl
     ? `/thumb/${encodeURIComponent(photo.thumbnailUrl)}`
     : undefined,
 )

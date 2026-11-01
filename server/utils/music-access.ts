@@ -1,3 +1,4 @@
+import { folderAudienceAccess } from '../services/collections/access'
 import type { H3Event } from 'h3'
 import { eq } from 'drizzle-orm'
 import { getActor } from './access'
@@ -63,7 +64,7 @@ export async function requireMusicAccess(event: H3Event, musicId: number) {
         collection.libraryId,
         collection.relPath,
       )
-      if (!albumOpenToActor({ visibility }, actor)) continue
+      if (!folderAudienceAccess(collection.libraryId, collection.relPath, actor)) continue
       const auth = await getScanAlbumEffectiveAuth(
         collection.libraryId,
         collection.relPath,

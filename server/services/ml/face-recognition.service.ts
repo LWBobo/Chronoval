@@ -1,3 +1,4 @@
+import { samePhotoPartition, currentMlPhoto, eligibleMlPhotoSql } from './partition'
 import { and, eq, isNull } from 'drizzle-orm'
 import { faceMaxDistance, faceMinFaces, isFaceEnabled } from './config'
 import { isFaceReindexActive } from './face-reindex'
@@ -16,7 +17,7 @@ function livePhotoIdSet(): Set<string> {
     useDB()
       .select({ id: tables.photos.id })
       .from(tables.photos)
-      .where(isNull(tables.photos.deletedAt))
+      .where(eligibleMlPhotoSql())
       .all()
       .map((p) => p.id),
   )
@@ -47,6 +48,7 @@ export async function processFaceRecognition(options?: {
   const maxDistance = await faceMaxDistance()
   const minFaces = await faceMinFaces()
   const livePhotos = livePhotoIdSet()
+  const scopes=new Map([...livePhotos].map(id=>[id,currentMlPhoto(id)!]))
 
   let targets = db
     .select()
@@ -91,6 +93,8 @@ export async function processFaceRecognition(options?: {
   let created = 0
 
   for (const face of targets) {
+    const scope=currentMlPhoto(face.photoId)
+    if(!scope||!samePhotoPartition(scope,scopes.get(face.photoId)!))continue
     // May have been assigned earlier in this sweep via a neighbor update.
     if (personByFace.get(face.id)) continue
 
@@ -104,6 +108,8 @@ export async function processFaceRecognition(options?: {
       distance: number
     }> = []
     for (const other of allFaces) {
+      const otherScope=scopes.get(other.photoId)
+      if(!otherScope||!samePhotoPartition(scope,otherScope))continue
       const ov = embMap.get(other.id)
       if (!ov) continue
       const d = other.id === face.id ? 0 : cosineDistance(vec, ov)
@@ -141,7 +147,7 @@ export async function processFaceRecognition(options?: {
       personId = assignedNeighbor?.personId || null
     }
 
-    const anchors = allFaces.filter((row) => row.pinned && personByFace.get(row.id))
+    const anchors = allFaces.filter((row) => row.pinned && personByFace.get(row.id) && scopes.get(row.photoId) && samePhotoPartition(scope,scopes.get(row.photoId)!))
     let nearest: { personId: string; distance: number } | null = null
     let tied = false
     for (const anchor of anchors) {
@@ -162,7 +168,7 @@ export async function processFaceRecognition(options?: {
     if (nearest) personId = nearest.personId
 
     if (!personId) {
-      const createdPerson = createPerson(null)
+      const createdPerson = createPerson(null,{ownerId:scope.ownerId,ownershipType:scope.ownershipType})
       if (!createdPerson) continue
       personId = createdPerson.id
       db.update(tables.people)
@@ -172,6 +178,8 @@ export async function processFaceRecognition(options?: {
       created++
     }
 
+    const targetPerson=db.select().from(tables.people).where(eq(tables.people.id,personId)).get()
+    if(!targetPerson||!samePhotoPartition(scope,targetPerson))continue
     db.update(tables.assetFaces)
       .set({ personId })
       .where(eq(tables.assetFaces.id, face.id))

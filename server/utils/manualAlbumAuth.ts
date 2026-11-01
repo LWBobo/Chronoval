@@ -1,3 +1,4 @@
+import { collectionPasswordAccess, authorizeCollection } from './collection-password'
 import { createHmac } from 'node:crypto'
 import { safeTokenEqual } from './token'
 
@@ -44,41 +45,15 @@ export const hasAlbumAccess = (
   },
   allowAdmin: boolean,
 ): boolean => {
-  if (allowAdmin) return true
-  // 登录用户在免密范围内（logged_in / 指定用户）
-  if (opts.sessionExempt) return true
-  // 未设置密码 → 开放，直接放行
-  if (!opts.passwordHash) return true
-
-  const scope = cookieName(opts.albumId)
-  const stored = getCookie(event, scope)
-  if (!stored) return false
-  const idx = stored.indexOf(':')
-  if (idx === -1) return false
-  const id = Number(stored.slice(0, idx))
-  const token = stored.slice(idx + 1)
-  const expected = albumToken(opts.albumId, opts.passwordHash)
-  return id === opts.albumId && safeTokenEqual(token, expected)
+  return collectionPasswordAccess(event, opts.albumId, allowAdmin)
 }
 
 /** 签发解锁 Cookie（密码校验通过后调用） */
 export const authorizeAlbum = (
   event: any,
   opts: { albumId: number; passwordHash: string | null },
-): void => {
-  const scope = cookieName(opts.albumId)
-  setCookie(
-    event,
-    scope,
-    `${opts.albumId}:${albumToken(opts.albumId, opts.passwordHash)}`,
-    {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: useSecureCookie(event),
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30 天
-    },
-  )
+): Promise<void> => {
+  return authorizeCollection(event, opts.albumId)
 }
 
 /** 清除解锁 Cookie */

@@ -11,7 +11,9 @@ export default eventHandler(async () => {
       username: tables.users.username,
       email: tables.users.email,
       avatar: tables.users.avatar,
-      isAdmin: tables.users.isAdmin,
+      role: tables.users.role,
+      displayName: tables.users.displayName,
+      status: tables.users.status,
     })
     .from(tables.users)
     .orderBy(asc(tables.users.id))

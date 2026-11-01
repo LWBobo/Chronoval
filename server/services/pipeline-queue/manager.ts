@@ -1,62 +1,14 @@
 import type { ConsolaInstance } from 'consola'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'path'
 import { and, asc, desc, eq, lte, sql } from 'drizzle-orm'
-import { exiftool } from 'exiftool-vendored'
 import type {
   NewPipelineQueueItem,
   PipelineQueueItem,
-  Photo,
 } from '~~/server/utils/db'
-import { compressUint8Array } from '~~/shared/utils/u8array'
-import {
-  preprocessImageWithJpegUpload,
-  processImageMetadataAndSharp,
-} from '../image/processor'
-import { generateThumbnailAndHash } from '../image/thumbnail'
-import { extractExifData, extractPhotoInfo } from '../image/exif'
 import {
   extractLocationFromGPS,
   parseGPSCoordinates,
 } from '../location/geocoding'
 import { settingsManager } from '../settings/settingsManager'
-import { findLivePhotoVideoForImage } from '../video/livephoto'
-import { processMotionPhotoFromXmp } from '../video/motion-photo'
-import { getStorageManager } from '~~/server/plugins/3.storage'
-
-const EXIF_LOCATION_KEYS = [
-  'GPSAltitude',
-  'GPSAltitudeRef',
-  'GPSLatitude',
-  'GPSLatitudeRef',
-  'GPSLongitude',
-  'GPSLongitudeRef',
-  'GPSPosition',
-  'GPSDateStamp',
-  'GPSTimeStamp',
-  'GPSImgDirection',
-  'GPSImgDirectionRef',
-  'GPSDestBearing',
-  'GPSDestBearingRef',
-] as const
-
-const stripLocationFromExif = <
-  T extends Record<string, any> | null | undefined,
->(
-  exif: T,
-): T => {
-  if (!exif || typeof exif !== 'object') {
-    return exif
-  }
-
-  const cloned = { ...exif }
-  for (const key of EXIF_LOCATION_KEYS) {
-    delete cloned[key]
-  }
-
-  return cloned as T
-}
 
 export class QueueManager {
   private static instances: Map<string, QueueManager> = new Map()
@@ -284,6 +236,9 @@ export class QueueManager {
       })
       .where(eq(tables.pipelineQueue.id, taskId))
 
+    if (!shouldRetry && ['photo-process','photo','photo-erase-location'].includes(task.payload.type) && 'photoId' in task.payload) {
+      db.update(tables.photos).set({ processingStatus: 'failed', processingErrorCode: 'PROCESSING_TASK_EXHAUSTED', updatedAt: new Date() }).where(and(eq(tables.photos.id, task.payload.photoId), eq(tables.photos.processingStatus, 'processing'), eq(tables.photos.transferState, 'idle'))).run()
+    }
     if (shouldRetry) {
       this.logger.warn(
         `Task ${taskId} failed (attempt ${newAttempts}/${task.maxAttempts}), will retry in ${retryDelay}ms: ${errorMessage}`,
@@ -298,259 +253,7 @@ export class QueueManager {
   /** 任务处理器 */
   private processors = (() => {
     return {
-      photo: async (task: PipelineQueueItem) => {
-        const { id: taskId, payload } = task
-        if (payload.type !== 'photo') {
-          throw new Error(
-            `Invalid payload type for photo task: ${payload.type}`,
-          )
-        }
-        const { storageKey } = payload
-        const storageProvider = getStorageManager().getProvider()
-        const photoId = generateSafePhotoId(storageKey)
-
-        try {
-          this.logger.info(`Start processing task ${taskId}: ${storageKey}`)
-
-          let storageObject = await storageProvider.getFileMeta(storageKey)
-          if (!storageObject) {
-            // Fallback: try read the file directly to confirm existence (e.g., local provider)
-            const maybeBuffer = await storageProvider.get(storageKey)
-            if (maybeBuffer) {
-              storageObject = {
-                key: storageKey,
-                size: maybeBuffer.length,
-                lastModified: new Date(),
-              }
-            }
-          }
-          if (!storageObject) {
-            throw new Error(`Storage object not found`)
-          }
-
-          // STEP 1: 预处理 - 转换 HEIC 到 JPEG 并上传
-          await this.updateTaskStage(taskId, 'preprocessing')
-          this.logger.info(`[${taskId}:in-stage] preprocessing`)
-          const imageBuffers = await preprocessImageWithJpegUpload(storageKey)
-          if (!imageBuffers) {
-            throw new Error('Preprocessing failed')
-          }
-
-          // STEP 2: 元数据处理 - 使用 Sharp 处理图片元数据
-          await this.updateTaskStage(taskId, 'metadata')
-          this.logger.info(`[${taskId}:in-stage] metadata extraction`)
-          const processedData = await processImageMetadataAndSharp(
-            imageBuffers.processed,
-            storageKey,
-          )
-          if (!processedData) {
-            throw new Error('Metadata processing failed')
-          }
-
-          const { imageBuffer, metadata } = processedData
-
-          // STEP 3: 生成缩略图（GIF 保留动画）
-          await this.updateTaskStage(taskId, 'thumbnail')
-          this.logger.info(`[${taskId}:in-stage] thumbnail generation`)
-          const isGif = path.extname(storageKey).toLowerCase() === '.gif'
-          const { thumbnailBuffer, thumbnailHash } =
-            await generateThumbnailAndHash(
-              imageBuffer,
-              this.logger,
-              isGif ? { animated: true, width: 640 } : {},
-            )
-
-          // 上传缩略图到存储服务
-          const thumbnailObject = await new Promise<any>((resolve, reject) => {
-            setImmediate(async () => {
-              try {
-                const result = await storageProvider.create(
-                  `thumbnails/${photoId}.webp`,
-                  thumbnailBuffer,
-                  'image/webp',
-                )
-                resolve(result)
-              } catch (error) {
-                reject(error)
-              }
-            })
-          })
-
-          // STEP 4: 提取 EXIF 数据
-          await this.updateTaskStage(taskId, 'exif')
-          this.logger.info(`[${taskId}:in-stage] exif extraction`)
-          const exifData = await extractExifData(
-            imageBuffer,
-            imageBuffers.raw,
-            this.logger,
-          )
-          const systemAutoEraseLocationOnUpload =
-            (await settingsManager.get<boolean>(
-              'privacy',
-              'upload.autoEraseLocation',
-            )) ?? false
-          const shouldAutoEraseLocationOnUpload =
-            typeof payload.eraseLocation === 'boolean'
-              ? payload.eraseLocation
-              : systemAutoEraseLocationOnUpload
-          const normalizedExifData = shouldAutoEraseLocationOnUpload
-            ? stripLocationFromExif(exifData)
-            : exifData
-
-          // 提取照片基本信息
-          const photoInfo = extractPhotoInfo(storageKey, normalizedExifData)
-
-          // STEP 5: 地理位置反向解析
-          // 这里逆编码失败不报错，宽容处理
-          await this.updateTaskStage(taskId, 'reverse-geocoding')
-          this.logger.info(`[${taskId}:in-stage] reverse geocoding`)
-
-          let coordinates = null
-          let locationInfo = null
-          if (!shouldAutoEraseLocationOnUpload && normalizedExifData) {
-            const { latitude, longitude } =
-              parseGPSCoordinates(normalizedExifData)
-            coordinates = { latitude, longitude }
-            if (latitude && longitude) {
-              locationInfo = await extractLocationFromGPS(latitude, longitude)
-            }
-          }
-
-          // STEP 6: Motion Photo (XMP) 支持
-          await this.updateTaskStage(taskId, 'motion-photo')
-          this.logger.info(`[${taskId}:in-stage] motion photo detection`)
-          const motionPhotoInfo = imageBuffers.raw
-            ? await processMotionPhotoFromXmp({
-                photoId,
-                storageKey,
-                rawImageBuffer: imageBuffers.raw,
-                exifData: normalizedExifData,
-                storageProvider,
-                logger: this.logger,
-              })
-            : null
-
-          if (!imageBuffers.raw) {
-            this.logger.warn(
-              `[${taskId}:in-stage] motion photo detection skipped: missing raw buffer for ${storageKey}`,
-            )
-          }
-
-          // STEP 7: LivePhoto 视频配对（独立 MOV 文件）
-          await this.updateTaskStage(taskId, 'live-photo')
-          this.logger.info(`[${taskId}:in-stage] live photo detection`)
-          let livePhotoInfo = null
-          if (!motionPhotoInfo?.isMotionPhoto) {
-            const livePhotoVideo = await findLivePhotoVideoForImage(storageKey)
-            if (livePhotoVideo) {
-              livePhotoInfo = {
-                isLivePhoto: 1,
-                livePhotoVideoUrl: storageProvider.getPublicUrl(
-                  livePhotoVideo.videoKey,
-                ),
-                livePhotoVideoKey: livePhotoVideo.videoKey,
-              }
-              this.logger.info(
-                `[${taskId}:in-stage] found LivePhoto video: ${livePhotoVideo.videoKey}`,
-              )
-            }
-          } else {
-            livePhotoInfo = {
-              isLivePhoto: 1,
-              livePhotoVideoUrl: motionPhotoInfo.livePhotoVideoUrl || null,
-              livePhotoVideoKey: motionPhotoInfo.livePhotoVideoKey || null,
-            }
-          }
-
-          // 构建最终的 Photo 对象
-          const result: Photo = {
-            id: photoId,
-            title: photoInfo.title,
-            description: photoInfo.description,
-            dateTaken: photoInfo.dateTaken,
-            tags: photoInfo.tags,
-            width: metadata.width,
-            height: metadata.height,
-            aspectRatio: metadata.width / metadata.height,
-            storageKey: storageKey,
-            thumbnailKey: thumbnailObject.key,
-            fileSize: storageObject.size || null,
-            lastModified:
-              storageObject.lastModified?.toISOString() ||
-              new Date().toISOString(),
-            originalUrl: imageBuffers.jpegKey
-              ? storageProvider.getPublicUrl(imageBuffers.jpegKey) // 使用 JPEG 版本作为 originalUrl
-              : storageProvider.getPublicUrl(storageKey),
-            thumbnailUrl: storageProvider.getPublicUrl(thumbnailObject.key),
-            thumbnailHash: thumbnailHash
-              ? compressUint8Array(thumbnailHash)
-              : null,
-            exif: normalizedExifData,
-            // 地理位置信息
-            latitude: coordinates?.latitude || null,
-            longitude: coordinates?.longitude || null,
-            country: locationInfo?.country || null,
-            city: locationInfo?.city || null,
-            locationName: locationInfo?.locationName || null,
-            // LivePhoto 相关字段
-            isLivePhoto:
-              motionPhotoInfo?.isMotionPhoto || livePhotoInfo?.isLivePhoto
-                ? 1
-                : 0,
-            livePhotoVideoUrl:
-              motionPhotoInfo?.livePhotoVideoUrl ||
-              livePhotoInfo?.livePhotoVideoUrl ||
-              null,
-            livePhotoVideoKey:
-              motionPhotoInfo?.livePhotoVideoKey ||
-              livePhotoInfo?.livePhotoVideoKey ||
-              null,
-          }
-
-          const db = useDB()
-          await db.insert(tables.photos).values(result).onConflictDoUpdate({
-            target: tables.photos.id,
-            set: result,
-          })
-
-          if (shouldAutoEraseLocationOnUpload) {
-            try {
-              await this.addTask(
-                {
-                  type: 'photo-erase-location',
-                  photoId,
-                },
-                {
-                  priority: 2,
-                  maxAttempts: 3,
-                },
-              )
-            } catch (enqueueError) {
-              this.logger.warn(
-                `[${taskId}:location-erase] failed to enqueue location erase task for ${photoId}`,
-                enqueueError,
-              )
-            }
-          }
-
-          // ML 后续任务：CLIP / 人脸 / OCR（失败不影响入库）
-          try {
-            const { enqueueMlJobsForPhoto } = await import('../ml/enqueue')
-            await enqueueMlJobsForPhoto(photoId, { priority: 0 })
-          } catch (mlErr) {
-            this.logger.warn(
-              `[${taskId}:ml] failed to enqueue ML jobs for ${photoId}`,
-              mlErr,
-            )
-          }
-
-          this.logger.success(`Task ${taskId} processed successfully`)
-          return result
-        } catch (error) {
-          this.logger.error(`Task ${taskId} processing failed`, error)
-          throw error
-        }
-      },
+      photo: async (task: PipelineQueueItem) => {if(task.payload.type!=='photo')throw new Error('Invalid task');const {reprocessRegisteredPhoto}=await import('../media-files/reprocess');await reprocessRegisteredPhoto(task.payload.photoId,task.payload.eraseLocation)},
       reverseGeocoding: async (task: PipelineQueueItem) => {
         const db = useDB()
         const { id: taskId, payload } = task
@@ -582,6 +285,8 @@ export class QueueManager {
             throw new Error(`Photo ${photoId} not found`)
           }
 
+          if (photo.deletedAt || photo.stripLocation || photo.transferState !== 'idle' || photo.processingStatus !== 'ready') return
+          const fence = and(eq(tables.photos.id, photoId), eq(tables.photos.metadataVersion, photo.metadataVersion), eq(tables.photos.transferState, 'idle'), eq(tables.photos.processingStatus, 'ready'), eq(tables.photos.stripLocation, false), sql`${tables.photos.ownerId} IS ${photo.ownerId}`)
           let latitude = payload.latitude ?? photo.latitude ?? undefined
           let longitude = payload.longitude ?? photo.longitude ?? undefined
 
@@ -618,7 +323,7 @@ export class QueueManager {
                 city: null,
                 locationName: null,
               })
-              .where(eq(tables.photos.id, photoId))
+              .where(fence)
             throw new Error(`Missing coordinates for photo ${photoId}`)
           }
 
@@ -642,7 +347,7 @@ export class QueueManager {
               city: locationInfo.city ?? null,
               locationName: locationInfo.locationName ?? null,
             })
-            .where(eq(tables.photos.id, photoId))
+            .where(fence)
 
           this.logger.success(
             `[${taskId}:reverse-geocoding] updated location for photo ${photoId}`,
@@ -656,190 +361,14 @@ export class QueueManager {
         }
       },
       eraseLocation: async (task: PipelineQueueItem) => {
-        const db = useDB()
-        const storageProvider = getStorageManager().getProvider()
-        const { id: taskId, payload } = task
-
-        if (payload.type !== 'photo-erase-location') {
-          throw new Error(
-            `Invalid payload type for erase location task: ${payload.type}`,
-          )
-        }
-
-        await this.updateTaskStage(taskId, 'location-erase')
-        this.logger.info(
-          `[${taskId}:in-stage] erase location info for photo ${payload.photoId}`,
-        )
-
-        const photo = await db
-          .select()
-          .from(tables.photos)
-          .where(eq(tables.photos.id, payload.photoId))
-          .get()
-
-        if (!photo) {
-          throw new Error(`Photo ${payload.photoId} not found`)
-        }
-
-        if (!photo.storageKey) {
-          throw new Error(`Photo ${payload.photoId} has no storage key`)
-        }
-
-        const originalBuffer = await storageProvider.get(photo.storageKey)
-        if (!originalBuffer) {
-          throw new Error(`Photo file ${photo.storageKey} not found in storage`)
-        }
-
-        const tempRoot = tmpdir()
-        await mkdir(tempRoot, { recursive: true })
-        const tempDir = await mkdtemp(path.join(tempRoot, 'cframe-location-'))
-        const ext = path.extname(photo.storageKey) || '.jpg'
-        const tempFile = path.join(tempDir, `erase-location${ext}`)
-
-        try {
-          await writeFile(tempFile, originalBuffer)
-
-          const exifLocationNullMap = EXIF_LOCATION_KEYS.reduce(
-            (acc, key) => {
-              acc[key] = null
-              return acc
-            },
-            {} as Record<string, null>,
-          )
-
-          await exiftool.write(tempFile, exifLocationNullMap, [
-            '-overwrite_original',
-          ])
-
-          const updatedBuffer = await readFile(tempFile)
-
-          const prefix =
-            storageProvider.config && 'prefix' in storageProvider.config
-              ? storageProvider.config.prefix
-              : ''
-
-          await storageProvider.create(
-            photo.storageKey.replace(prefix || '', ''),
-            updatedBuffer,
-          )
-
-          const exifData = stripLocationFromExif(
-            await extractExifData(updatedBuffer),
-          )
-
-          await db
-            .update(tables.photos)
-            .set({
-              exif: exifData,
-              fileSize: updatedBuffer.length,
-              lastModified: new Date().toISOString(),
-              latitude: null,
-              longitude: null,
-              country: null,
-              city: null,
-              locationName: null,
-            })
-            .where(eq(tables.photos.id, payload.photoId))
-
-          this.logger.success(
-            `[${taskId}:location-erase] erased location info for photo ${payload.photoId}`,
-          )
-        } finally {
-          await rm(tempDir, { recursive: true, force: true })
-        }
+        if(task.payload.type!=='photo-erase-location')throw new Error('Invalid task')
+        const { sanitizePhotoLocation }=await import('../media-files/sanitize')
+        await sanitizePhotoLocation(task.payload.photoId)
       },
       livePhotoDetect: async (task: PipelineQueueItem) => {
-        const db = useDB()
-        const storageProvider = getStorageManager().getProvider()
-
-        const { id: taskId, payload } = task
-        if (payload.type !== 'live-photo-video') {
-          throw new Error(
-            `Invalid payload type for live-photo task: ${payload.type}`,
-          )
-        }
-        const { storageKey: videoKey } = payload
-
-        try {
-          this.logger.info(
-            `Start processing LivePhoto detection task ${taskId}: ${videoKey}`,
-          )
-
-          let storageObject = await storageProvider.getFileMeta(videoKey)
-          if (!storageObject) {
-            const maybeBuffer = await storageProvider.get(videoKey)
-            if (maybeBuffer) {
-              storageObject = {
-                key: videoKey,
-                size: maybeBuffer.length,
-                lastModified: new Date(),
-              }
-            }
-          }
-          if (!storageObject) {
-            throw new Error(`Storage object not found`)
-          }
-
-          // 寻找是否有同名的照片文件
-          const videoDir = path.dirname(videoKey)
-          const videoBaseName = path.basename(videoKey, path.extname(videoKey))
-
-          const possiblePhotoKeys = [
-            path.join(videoDir, `${videoBaseName}.HEIC`).replace(/\\/g, '/'),
-            path.join(videoDir, `${videoBaseName}.heic`).replace(/\\/g, '/'),
-            path.join(videoDir, `${videoBaseName}.JPG`).replace(/\\/g, '/'),
-            path.join(videoDir, `${videoBaseName}.jpg`).replace(/\\/g, '/'),
-            path.join(videoDir, `${videoBaseName}.JPEG`).replace(/\\/g, '/'),
-            path.join(videoDir, `${videoBaseName}.jpeg`).replace(/\\/g, '/'),
-          ]
-
-          let matchedPhoto: Photo | null = null
-          for (const photoKey of possiblePhotoKeys) {
-            const photos = await db
-              .select()
-              .from(tables.photos)
-              .where(eq(tables.photos.storageKey, photoKey))
-              .limit(1)
-
-            const matched = photos[0]
-            if (matched) {
-              matchedPhoto = matched
-              this.logger.info(
-                `Found matching photo for LivePhoto video: ${photoKey}`,
-              )
-              break
-            }
-          }
-
-          if (!matchedPhoto) {
-            this.logger.warn(
-              `No matching photo found for LivePhoto video: ${videoKey}`,
-            )
-            throw new Error(
-              `No matching photo found for LivePhoto video: ${videoKey}`,
-            )
-          }
-
-          const livePhotoVideoUrl = storageProvider.getPublicUrl(videoKey)
-          await db
-            .update(tables.photos)
-            .set({
-              isLivePhoto: 1,
-              livePhotoVideoUrl,
-              livePhotoVideoKey: videoKey,
-            })
-            .where(eq(tables.photos.id, matchedPhoto.id))
-
-          this.logger.success(
-            `LivePhoto detection task ${taskId} processed successfully, updated photo ${matchedPhoto.id}`,
-          )
-        } catch (error) {
-          this.logger.error(
-            `LivePhoto detection task ${taskId} processing failed`,
-            error,
-          )
-          throw error
-        }
+        if (task.payload.type !== 'live-photo-video') throw new Error('Invalid task')
+        const { processSpecificLivePhotoVideo } = await import('../video/scanner')
+        await processSpecificLivePhotoVideo(task.payload.photoId)
       },
     }
   })()
@@ -866,12 +395,42 @@ export class QueueManager {
         const { type } = task.payload
 
         switch (task.payload.type) {
+          case 'user-deletion': {
+            const { processUserDeletion } = await import('../users/deletion')
+            if (!(await processUserDeletion(task.payload.userId))) { await this.releaseTaskToPending(task.id, { delayMs: 5000, priority: -2 }); return }
+            break
+          }
+          case 'ownership-transfer':
+          case 'ownership-transfer-cleanup': {
+            const { processOwnershipTransfer } = await import('../photo-management/transfer')
+            if (!(await processOwnershipTransfer(task.payload.transferId))) { await this.releaseTaskToPending(task.id, { delayMs: 5000, priority: -1 }); return }
+            break
+          }
+          case 'photo-purge': {
+            const { purgeRegisteredPhoto } = await import('../photo-management/purge')
+            await purgeRegisteredPhoto(task.payload.photoId)
+            break
+          }
+          case 'upload-cleanup': {
+            const { cleanupUploadSession } = await import('../uploads/cleanup')
+            await cleanupUploadSession(task.payload.uploadSessionId)
+            break
+          }
+          case 'photo-process': {
+            const { acquireUploadProcessor, releaseUploadProcessor, processUploadedPhoto } = await import('../uploads/process')
+            if (!acquireUploadProcessor()) { await this.releaseTaskToPending(task.id, { delayMs: 1500, priority: -1 }); return }
+            try { await processUploadedPhoto(task.payload.photoId) } finally { releaseUploadProcessor() }
+            break
+          }
           case 'live-photo-video':
             await this.processors.livePhotoDetect(task)
             break
-          case 'photo':
-            await this.processors.photo(task)
+          case 'photo': {
+            const {acquireUploadProcessor,releaseUploadProcessor}=await import('../uploads/process')
+            if(!acquireUploadProcessor()){await this.releaseTaskToPending(task.id,{delayMs:1500,priority:-1});return}
+            try{await this.processors.photo(task)}finally{releaseUploadProcessor()}
             break
+          }
           case 'photo-reverse-geocoding':
             await this.processors.reverseGeocoding(task)
             break

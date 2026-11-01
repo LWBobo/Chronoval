@@ -118,8 +118,8 @@ function challengeSecret(): string {
   return secret
 }
 
-function signChallenge(userId: number, exp: string, nonce: string): string {
-  const payload = `${userId}:${exp}:${nonce}`
+function signChallenge(userId: number, exp: string, nonce: string, authVersion: number): string {
+  const payload = `${userId}:${exp}:${nonce}:${authVersion}`
   const sig = createHmac('sha256', challengeSecret())
     .update(payload)
     .digest('base64url')
@@ -128,6 +128,7 @@ function signChallenge(userId: number, exp: string, nonce: string): string {
 
 export interface ChallengePayload {
   userId: number
+  authVersion: number
   expiresAt: number
   nonce: string
 }
@@ -146,13 +147,14 @@ export function verifyChallenge(token: string): ChallengePayload | null {
   if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
     return null
   }
-  const [userIdStr, expStr, nonce] = payload.split(':')
+  const [userIdStr, expStr, nonce, authVersionStr] = payload.split(':')
+  const authVersion = Number(authVersionStr)
   const userId = Number(userIdStr)
   const exp = Number(expStr)
-  if (!Number.isFinite(userId) || !Number.isFinite(exp) || !nonce) return null
+  if (!Number.isSafeInteger(userId) || !Number.isFinite(exp) || !nonce || !Number.isSafeInteger(authVersion) || authVersion < 1) return null
   if (Date.now() / 1000 > exp) return null
   if (usedChallengeNonces.has(nonce)) return null
-  return { userId, expiresAt: exp, nonce }
+  return { userId, expiresAt: exp, nonce, authVersion }
 }
 
 /** TOTP 校验成功后原子消费挑战，阻止复制 Cookie 后重复建立会话。 */
@@ -169,14 +171,14 @@ export function consumeChallenge(challenge: ChallengePayload): boolean {
 }
 
 /** 签发挑战 Cookie 值（httpOnly、SameSite=Lax、10 分钟有效） */
-export function createChallengeToken(userId: number): {
+export function createChallengeToken(userId: number, authVersion = 1): {
   token: string
   expiresAt: Date
 } {
   const exp = Math.floor(Date.now() / 1000) + CHALLENGE_TTL_SECONDS
   const nonce = randomBytes(18).toString('base64url')
   return {
-    token: signChallenge(userId, String(exp), nonce),
+    token: signChallenge(userId, String(exp), nonce, authVersion),
     expiresAt: new Date(exp * 1000),
   }
 }

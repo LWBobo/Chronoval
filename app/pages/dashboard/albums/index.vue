@@ -11,7 +11,8 @@ useHead({
   title: () => $t('title.albums'),
 })
 
-interface AlbumItem extends Album {
+interface AlbumItem extends Omit<Album, 'kind' | 'urlKey' | 'title' | 'relPath'> {
+  title: string
   photoCount?: number
   photoIds?: string[]
   coverPhoto?: Photo | null
@@ -70,16 +71,18 @@ const allPhotos = ref<Photo[]>([])
 
 const isAlbumSlideoverOpen = ref(false)
 const isDeleteConfirmOpen = ref(false)
+const deletionReason = ref('')
 
 const currentAlbum = ref<AlbumItem | null>(null)
 
 const loadAlbums = async () => {
   isLoadingAlbums.value = true
   try {
-    const response = await $fetch('/api/albums')
+    const response = await $fetch('/api/albums', { query: { manage: '1' } })
     // 手动相簿用 photoIds 数量；外部库相簿使用其自带 photoCount，避免被重置为 0
     albums.value = (response as any[]).map((album) => ({
       ...album,
+      title: album.title || album.relPath || String(album.id),
       photoCount:
         album.kind === 'scan'
           ? album.photoCount ?? 0
@@ -144,6 +147,7 @@ const openEditSlideover = (album: AlbumItem) => {
 }
 
 const openDeleteConfirm = (album: AlbumItem) => {
+  deletionReason.value = ''
   currentAlbum.value = album
   isDeleteConfirmOpen.value = true
 }
@@ -189,11 +193,13 @@ const resetScanAlbumMeta = async (album: AlbumItem) => {
 const isSubmittingForm = ref(false)
 
 const deleteAlbum = async () => {
-  if (!currentAlbum.value) return
+  if (!currentAlbum.value || !deletionReason.value.trim() || isSubmittingForm.value) return
+  isSubmittingForm.value = true
 
   try {
     await $fetch(`/api/albums/${currentAlbum.value.id}`, {
       method: 'DELETE',
+      body: { expectedAclVersion: currentAlbum.value.aclVersion, reason: deletionReason.value },
     })
 
     useToast().add({
@@ -209,6 +215,8 @@ const deleteAlbum = async () => {
       title: $t('dashboard.albums.messages.deleteError'),
       color: 'error',
     })
+  } finally {
+    isSubmittingForm.value = false
   }
 }
 
@@ -253,6 +261,7 @@ onMounted(async () => {
     </template>
 
     <template #body>
+      <CollectionBatchPanel :collections="filteredAlbums.map((item:any)=>({collectionId:item.collectionId||item.id,title:item.title||item.relPath||String(item.id)})).filter((item:any)=>item.collectionId)" @saved="loadAlbums()" />
       <div class="flex flex-col gap-6">
         <!-- 页面标题、搜索与统计 -->
         <div class="flex flex-col gap-4">
@@ -484,6 +493,7 @@ onMounted(async () => {
                 </div>
               </div>
 
+              <UInput v-if="!isResetScanConfirm" v-model="deletionReason" class="w-full" :placeholder="$t('permissions.reason')" />
               <div class="flex justify-end gap-2 pt-4">
                 <UButton
                   variant="ghost"
@@ -495,6 +505,8 @@ onMounted(async () => {
                 <UButton
                   :color="isResetScanConfirm ? 'warning' : 'error'"
                   :icon="isResetScanConfirm ? 'tabler:eraser' : 'tabler:trash'"
+                  :loading="isSubmittingForm"
+                  :disabled="!isResetScanConfirm && !deletionReason.trim()"
                   @click="confirmDestructive"
                 >
                   {{

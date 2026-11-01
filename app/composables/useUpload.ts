@@ -145,6 +145,9 @@ export function useUpload(options: UseUploadOptions = {}) {
     callbacks: UploadCallbacks = {},
     attempt: number = 1,
   ): Promise<XMLHttpRequest> => {
+    const destination = new URL(signedUrl, window.location.origin)
+    const csrfToken = destination.origin === window.location.origin && destination.pathname.startsWith('/api/')
+      ? (await $fetch<{ token: string }>('/api/auth/csrf')).token : null
     // 重置状态（仅在第一次尝试时）
     if (attempt === 1) {
       resetStatus()
@@ -178,6 +181,7 @@ export function useUpload(options: UseUploadOptions = {}) {
 
       // 成功处理
       xhr.addEventListener('load', () => {
+        if (xhr.status < 200 || xhr.status >= 300) return
         const endTime = Date.now()
         updateStatus({ status: 'success', endTime })
         callbacks.onStatusChange?.('success')
@@ -352,6 +356,7 @@ export function useUpload(options: UseUploadOptions = {}) {
 
       // 准备请求
       xhr.open('PUT', signedUrl)
+      if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken)
 
       // 设置请求头
       xhr.setRequestHeader(

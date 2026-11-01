@@ -6,6 +6,9 @@ import {
   normalizeVisibility,
 } from '~~/server/services/ml/person.service'
 import { discoverablePhotoIds } from '~~/server/utils/photo-access'
+import { collectionPasswordAccess } from '../../utils/collection-password'
+import { isAlbumAdminBypass } from '../../utils/albumAccess'
+import { withAssetUrlsBatch } from '../../services/media-files'
 
 export default eventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'private, no-store')
@@ -24,19 +27,20 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Person not found' })
   }
   const visibility = normalizeVisibility(person)
+  const unlocked = collectionPasswordAccess(event, person.collectionId!, await isAlbumAdminBypass(event, actor))
+  if (!unlocked) {
+    return { person: { id: person.id, collectionId: person.collectionId, name: null, visibility, isHidden: visibility !== 'public', faceCount: 0, thumbnailUrl: null, locked: true }, photos: [] }
+  }
 
   const personPhotos = getPersonPhotoIds(id)
   const visiblePhotoIds = await discoverablePhotoIds(
     event,
     personPhotos.map((photo) => photo.id),
   )
-  const photos = personPhotos
+  const photos = withAssetUrlsBatch(personPhotos
     .filter((photo) => visiblePhotoIds.has(photo.id))
-    .map((photo) => toPublicPhoto(photo))
-
-  if (photos.length === 0 && !actor.isAdmin) {
-    throw createError({ statusCode: 404, message: 'Person not found' })
-  }
+    , (photo) => actor.isAdmin || actor.user?.id === photo.ownerId)
+    .map((photo) => toPublicPhoto(photo, actor.isAdmin || actor.user?.id === photo.ownerId))
 
   const visibleFace = useDB()
     .select({ id: tables.assetFaces.id, photoId: tables.assetFaces.photoId })
@@ -51,7 +55,8 @@ export default eventHandler(async (event) => {
       visibility,
       isHidden: visibility !== 'public',
       faceCount: photos.length,
-      thumbnailUrl: faceThumbnailUrl(visibleFace?.id || person.thumbnailFaceId),
+      thumbnailUrl: faceThumbnailUrl(visibleFace?.id),
+      locked: false,
     },
     photos,
   }

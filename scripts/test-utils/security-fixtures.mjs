@@ -7,6 +7,7 @@ const state = () => globalThis.__chronovalSecurityTest
 export const useDB = () => state().db
 export const getStorageManager = () => ({ getProvider: () => state().provider })
 export const settingsManager = {
+  storage: { getActiveProvider: async () => state().db.select().from(schema.settingsStorageProviders).limit(1).get() },
   get: async (namespace, key, fallback) =>
     state().settings.get(`${namespace}:${key}`) ?? fallback,
 }

@@ -1,0 +1,10 @@
+# Only dependency manifests and the entrypoint are needed to build this image.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!packages/
+!packages/webgl-image/
+!packages/webgl-image/package.json
+!docker/
+!docker/dev-entrypoint.sh

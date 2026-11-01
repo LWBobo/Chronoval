@@ -49,7 +49,8 @@ interface RecordOptions {
   /** 关联用户 id；未知账户（登录邮箱不存在）可省略 */
   userId?: number
   /** 尝试登入的邮箱（必填，未知账户的失败足迹也据此留存） */
-  email: string
+  email: string | null
+  identifier?: string
   method?: LoginLogMethod
   status: LoginLogStatus
 }
@@ -74,6 +75,8 @@ export function recordLoginAttempt(event: H3Event, opts: RecordOptions) {
     .values({
       userId: opts.userId,
       email: opts.email,
+      loginIdentifier: opts.identifier ?? opts.email ?? '',
+      identifierType: (opts.identifier ?? opts.email ?? '').includes('@') ? 'email' : 'username',
       ip,
       userAgent,
       country: geo?.country ?? null,

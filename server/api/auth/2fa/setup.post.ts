@@ -1,14 +1,9 @@
 import QRCode from 'qrcode'
+import { prepareTwoFactor } from '../../../services/users/two-factor'
 
 export default eventHandler(async (event) => {
   const actor = await requireAccess(event, 'user')
-  const db = useDB()
-
-  const user = db
-    .select()
-    .from(tables.users)
-    .where(eq(tables.users.id, actor.user!.id))
-    .get()
+  const user = prepareTwoFactor(actor)
   if (!user) {
     throw createError({ statusCode: 404, message: 'User not found' })
   }
@@ -19,14 +14,7 @@ export default eventHandler(async (event) => {
   }
 
   // 复用尚未确认的 pending secret，保证刷新页面后二维码一致
-  let secret = user.totpSecret
-  if (!secret) {
-    secret = generateTotpSecret()
-    db.update(tables.users)
-      .set({ totpSecret: secret })
-      .where(eq(tables.users.id, user.id))
-      .run()
-  }
+  const secret = user.totpSecret!
 
   const account = user.email || user.username
   const otpauth = buildTotpUri({ secret, account, issuer: 'Chronoval' })

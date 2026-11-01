@@ -1,6 +1,12 @@
 import pkg from './package.json'
+import { createRequire } from 'node:module'
 import type { AnalyticsConfig } from './shared/types/config'
 import i18n, { dayjsLocales } from './i18n/i18n.options'
+
+// file-type loads strtok3's filesystem entry dynamically. Resolve from file-type
+// so pnpm's strict dependency layout does not require a new direct dependency.
+const projectRequire = createRequire(import.meta.url)
+const fileTypeRequire = createRequire(projectRequire.resolve('file-type'))
 
 /**
  * 解析环境变量 NUXT_ALLOWED_HOSTS：逗号分隔的主机白名单（可含通配符 *.domain）。
@@ -54,6 +60,8 @@ const ALLOWED_HOSTS = resolveAllowedHosts([...DEFAULT_ALLOWED_HOSTS])
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
+  // Production images discard maps; avoid generating and retaining them in memory.
+  sourcemap: { server: false, client: false },
 
   modules: [
     'reka-ui/nuxt',
@@ -206,6 +214,10 @@ export default defineNuxtConfig({
 
   nitro: {
     preset: 'node_server',
+    externals: {
+      // Include index.js and FileTokenizer.js, beyond the statically used core.
+      traceInclude: [fileTypeRequire.resolve('strtok3')],
+    },
     experimental: {
       websocket: true,
       tasks: true,
@@ -289,6 +301,9 @@ export default defineNuxtConfig({
       },
       commonjsOptions: {
         include: [/maplibre-gl/, /node_modules/],
+        // VueUse core/shared are pure ESM. Let Rollup load them normally instead
+        // of eagerly preloading them through commonjs--resolver's this.load().
+        exclude: [/[/\\]node_modules[/\\]@vueuse[/\\](?:core|shared)[/\\]/],
         transformMixedEsModules: true,
       },
     },
@@ -315,6 +330,16 @@ export default defineNuxtConfig({
         },
       },
     ],
+  },
+
+  hooks: {
+    'build:error'(error) {
+      // The CLI otherwise prints only the message, hiding the resolver/transform
+      // stack needed to distinguish plugin failures from dependency parse errors.
+      if (error instanceof Error && error.stack) {
+        console.error('[chronoval:build] Full error stack:\n' + error.stack)
+      }
+    },
   },
 
   gtag: {
@@ -374,6 +399,50 @@ export default defineNuxtConfig({
       scan: true,
       // 动态 :name（composables / 定义表）scan 扫不到；fallbackToApi=false 时必须显式打进包。
       icons: [
+        // Nuxt UI resolves these defaults dynamically from appConfig, outside
+        // the application's template scan. Bundle them for offline use too.
+        'lucide:arrow-down',
+        'lucide:arrow-left',
+        'lucide:arrow-right',
+        'lucide:arrow-up',
+        'lucide:circle-alert',
+        'lucide:check',
+        'lucide:chevrons-left',
+        'lucide:chevrons-right',
+        'lucide:chevron-down',
+        'lucide:chevron-left',
+        'lucide:chevron-right',
+        'lucide:chevron-up',
+        'lucide:x',
+        'lucide:copy',
+        'lucide:copy-check',
+        'lucide:moon',
+        'lucide:grip-vertical',
+        'lucide:ellipsis',
+        'lucide:circle-x',
+        'lucide:arrow-up-right',
+        'lucide:eye',
+        'lucide:eye-off',
+        'lucide:file',
+        'lucide:folder',
+        'lucide:folder-open',
+        'lucide:hash',
+        'lucide:info',
+        'lucide:sun',
+        'lucide:loader-circle',
+        'lucide:menu',
+        'lucide:minus',
+        'lucide:panel-left-close',
+        'lucide:panel-left-open',
+        'lucide:plus',
+        'lucide:rotate-ccw',
+        'lucide:search',
+        'lucide:square',
+        'lucide:circle-check',
+        'lucide:monitor',
+        'lucide:lightbulb',
+        'lucide:upload',
+        'lucide:triangle-alert',
         'fluent-emoji-flat:thumbs-up',
         'fluent-emoji-flat:red-heart',
         'fluent-emoji-flat:smiling-face-with-heart-eyes',

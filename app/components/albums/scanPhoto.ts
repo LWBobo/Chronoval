@@ -18,7 +18,7 @@ export interface ScanPhoto {
   width?: number | null
   height?: number | null
   fileSize?: number | null
-  storageKey?: string | null
+  downloadUrl?: string | null
   tags?: string[] | null
   latitude?: number | null
   longitude?: number | null

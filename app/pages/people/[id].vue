@@ -1,12 +1,18 @@
 <script lang="ts" setup>
+import { getPersonVersions } from '~/utils/collection-versions'
+import type { CollectionAccessInput } from '~~/shared/types/permissions'
 const requestFetch = useRequestFetch()
 const route = useRoute()
 const personId = computed(() => String(route.params.id || ''))
 
-type PersonVisibility = 'public' | 'login' | 'admin'
+type PersonVisibility = 'public' | 'login' | 'selected' | 'admin'
 
 interface PersonDetail {
   id: string
+  collectionId: number
+  ownershipType?: 'site' | 'user'
+  ownerId?: number | null
+  locked?: boolean
   name: string | null
   faceCount: number
   isHidden?: boolean
@@ -23,7 +29,11 @@ type PersonPhoto = Photo
 
 const { loggedIn, user } = useUserSession()
 const isAdmin = computed(() => Boolean(loggedIn.value && user.value?.isAdmin))
-const visibilityLevels: PersonVisibility[] = ['public', 'login', 'admin']
+const accessOpen = ref(false)
+const accessDraft = ref<CollectionAccessInput | null>(null)
+const passwordDraft = ref('')
+const unlockError = ref('')
+const unlocking = ref(false)
 const { t } = useI18n()
 const toast = useToast()
 const nameDraft = ref('')
@@ -35,7 +45,7 @@ const { data: peoplePayload, refresh: refreshPeople } = useAsyncData(
   () =>
     isAdmin.value
       ? requestFetch<{ people: PersonOption[] }>('/api/people', {
-          query: { minFaces: 0 },
+          query: { minFaces: 0, manage: 1 },
         })
       : Promise.resolve({ people: [] as PersonOption[] }),
   { watch: [isAdmin] },
@@ -43,7 +53,7 @@ const { data: peoplePayload, refresh: refreshPeople } = useAsyncData(
 
 const mergeOptions = computed(() =>
   (peoplePayload.value?.people || []).filter(
-    (person) => person.id !== personId.value,
+    (other: any) => other.id !== personId.value && other.ownershipType === person.value?.ownershipType && other.ownerId === person.value?.ownerId,
   ),
 )
 
@@ -71,19 +81,6 @@ const openPersonPhoto = (index: number) => {
 
 const person = computed(() => data.value?.person)
 const photos = computed(() => data.value?.photos || [])
-const blocked = computed(() => {
-  const value = person.value
-  if (!value) return false
-  const visibility = value.visibility || (value.isHidden ? 'admin' : 'public')
-  if (visibility === 'public') return false
-  if (!loggedIn.value) return true
-  if (visibility === 'admin') return !isAdmin.value
-  return false
-})
-const currentVisibility = computed<PersonVisibility>(() => {
-  if (person.value?.visibility) return person.value.visibility
-  return person.value?.isHidden ? 'admin' : 'public'
-})
 
 const displayName = computed(
   () =>
@@ -97,16 +94,16 @@ watch(person, (value) => {
 async function savePerson(patch: {
   name?: string | null
   isHidden?: boolean
-  visibility?: PersonVisibility
+  access?: CollectionAccessInput
 }) {
   if (!person.value || saving.value) return
-  if (patch.visibility && patch.visibility === currentVisibility.value) return
   saving.value = true
   try {
     await requestFetch(`/api/people/${person.value.id}`, {
       method: 'PUT',
       body: patch,
     })
+    accessOpen.value = false
     await refresh()
     toast.add({ title: t('ui.people.saved'), color: 'success' })
   } catch (err: any) {
@@ -129,6 +126,8 @@ async function mergeIntoThis() {
       body: {
         targetId: person.value.id,
         sourceIds: [mergeSourceId.value],
+        versions: await getPersonVersions([person.value.id, mergeSourceId.value]),
+        reason: t('accounts.mergeReason'),
       },
     })
     mergeSourceId.value = ''
@@ -145,6 +144,17 @@ async function mergeIntoThis() {
   }
 }
 
+async function unlockPerson() {
+  if (!person.value?.collectionId || unlocking.value) return
+  unlocking.value = true; unlockError.value = ''
+  try {
+    await $fetch(`/api/collections/${person.value.collectionId}/unlock`, { method: 'POST', body: { password: passwordDraft.value } })
+    passwordDraft.value = ''
+    await refresh()
+  } catch (e: any) { unlockError.value = e?.data?.message || e.message }
+  finally { unlocking.value = false }
+}
+
 useHead({
   title: () => displayName.value || $t('title.people'),
 })
@@ -157,6 +167,7 @@ useHead({
       aria-hidden="true"
     />
     <AppTopHeader />
+    <UModal v-model:open="accessOpen" :title="$t('permissions.editAccess')"><template #body><CollectionAccessEditor v-if="accessOpen" v-model="accessDraft" :collection-id="person?.collectionId" /></template><template #footer><UButton :disabled="!accessDraft" :loading="saving" @click="accessDraft && savePerson({ access: accessDraft })">{{ $t('ui.people.save') }}</UButton></template></UModal>
 
     <div class="mx-auto w-full max-w-6xl px-4 pt-16 pb-20">
       <div
@@ -171,12 +182,18 @@ useHead({
       </div>
 
       <p
-        v-else-if="error || blocked"
+        v-else-if="error"
         class="text-sm text-neutral-500"
       >
         {{ $t('ui.people.notVisible') }}
       </p>
 
+      <form v-else-if="person?.locked" class="mx-auto max-w-sm space-y-4" @submit.prevent="unlockPerson">
+        <h1 class="text-xl font-semibold">{{ $t('permissions.lockedAlbum') }}</h1>
+        <UInput v-model="passwordDraft" type="password" autocomplete="current-password" :placeholder="$t('permissions.password')" class="w-full" />
+        <p v-if="unlockError" role="alert" class="text-red-600">{{ unlockError }}</p>
+        <UButton type="submit" :loading="unlocking">{{ $t('permissions.unlock') }}</UButton>
+      </form>
       <template v-else-if="person">
         <header class="mb-8 flex items-center gap-4">
           <div
@@ -227,26 +244,7 @@ useHead({
                 >
                   {{ $t('ui.people.save') }}
                 </UButton>
-                <UButton
-                  v-for="level in visibilityLevels"
-                  :key="level"
-                  type="button"
-                  size="sm"
-                  :color="
-                    currentVisibility === level
-                      ? level === 'admin'
-                        ? 'error'
-                        : level === 'login'
-                          ? 'warning'
-                          : 'primary'
-                      : 'neutral'
-                  "
-                  :variant="currentVisibility === level ? 'solid' : 'outline'"
-                  :loading="saving && currentVisibility === level"
-                  @click="savePerson({ visibility: level })"
-                >
-                  {{ $t(`ui.people.visibility.${level}`) }}
-                </UButton>
+                <UButton v-if="person.ownershipType === 'site'" type="button" size="sm" variant="outline" @click="accessOpen = true">{{ $t('permissions.editAccess') }}</UButton>
               </div>
               <div class="flex flex-wrap items-center gap-2">
                 <select

@@ -10,6 +10,17 @@ interface AccessRule {
   access: AccessLevel
 }
 
+// Nuxt Icon serves installed, public icon collections through this read-only API.
+// Keep the match narrow: other internal endpoints and all writes stay protected.
+export function isPublicIconRequest(method: string, pathname: string): boolean {
+  return (
+    ['GET', 'HEAD'].includes(method.toUpperCase()) &&
+    /^\/api\/_nuxt_icon\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\.json)?$/.test(
+      pathname.replace(/\/+$/, ''),
+    )
+  )
+}
+
 const RULES: AccessRule[] = [
   // nuxt-auth-utils 内置：只读取/清除调用者自己的会话，普通账号与访客都需要。
   {
@@ -19,7 +30,11 @@ const RULES: AccessRule[] = [
   },
   { methods: ['POST'], pattern: /^\/api\/login$/, access: 'public' },
   { methods: ['POST'], pattern: /^\/api\/login\/2fa$/, access: 'public' },
-  { methods: ['GET'], pattern: /^\/api\/logout$/, access: 'public' },
+  { methods: ['GET', 'POST'], pattern: /^\/api\/logout$/, access: 'public' },
+  { methods: ['GET'], pattern: /^\/api\/auth\/csrf$/, access: 'public' },
+  { pattern: /^\/api\/me(?:\/|$)/, access: 'user' },
+  { pattern: /^\/api\/uploads\/sessions(?:\/|$)/, access: 'user' },
+  { methods: ['POST'], pattern: /^\/api\/collections\/\d+\/unlock$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/auth\/github$/, access: 'public' },
   { methods: ['GET'], pattern: /^\/api\/auth\/2fa\/status$/, access: 'user' },
   {
@@ -118,6 +133,7 @@ export function resolveApiAccess(
   method: string,
   pathname: string,
 ): AccessLevel {
+  if (isPublicIconRequest(method, pathname)) return 'public'
   const normalizedMethod =
     method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
   const normalizedPath = pathname.replace(/\/+$/, '') || '/'

@@ -1,3 +1,4 @@
+import { photoAssetSql } from '../../utils/photo-media'
 import { normalizeAlbumPath } from '../../utils/album-path'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -279,6 +280,9 @@ export const updateScanLibrary = async (
 ): Promise<boolean> => {
   const db = useDB()
   const patch: Partial<ScanLibraryInput> = {}
+  const currentLibrary=getScanLibraryRow(id)
+  if(currentLibrary?.deleting)throw createError({statusCode:409,message:'扫描库正在删除，请等待清理完成'})
+  if(input.rootPath!==undefined&&currentLibrary&&path.resolve(input.rootPath)!==path.resolve(currentLibrary.rootPath)&&db.select({id:tables.photoFiles.id}).from(tables.photoFiles).where(eq(tables.photoFiles.libraryId,id)).get())throw createError({statusCode:409,message:'此扫描库已有文件登记，不能直接更改根目录；请新增扫描库'})
   if (input.rootPath !== undefined) patch.rootPath = path.resolve(input.rootPath)
   if (input.name !== undefined && (input.name as string).trim())
     patch.name = (input.name as string).trim()
@@ -336,29 +340,11 @@ const removeLibraryThumbnails = async (
   loc: string,
 ): Promise<void> => {
   const db = useDB()
-  const thumbnails = db
-    .select({ key: tables.photos.thumbnailKey })
-    .from(tables.photos)
-    .where(
-      and(
-        eq(tables.photos.source, 'library'),
-        eq(tables.photos.libraryMount, mount),
-      ),
-    )
-    .all()
-
-  // 存储后端可能尚未初始化（如删除发生在引导早期），此时只尽力而为、不阻塞库删除
-  const provider = getGlobalStorageManager()?.getProvider()
-  for (const t of thumbnails) {
-    if (!t.key || !provider) continue
-    try {
-      await provider.delete(t.key)
-    } catch (err) {
-      logger.dynamic('scan-library').warn(
-        `${loc} Failed to remove thumbnail ${t.key}:`,
-        err,
-      )
-    }
+  const photos=db.select().from(tables.photos).where(eq(tables.photos.libraryMount,mount)).all()
+  const {permanentlyDeletePhoto}=await import('../trash/cleanup')
+  for(const photo of photos){
+    db.update(tables.photos).set({deletedAt:photo.deletedAt??new Date()}).where(eq(tables.photos.id,photo.id)).run()
+    await permanentlyDeletePhoto({...photo,deletedAt:photo.deletedAt??new Date()})
   }
 }
 
@@ -370,10 +356,12 @@ export const deleteScanLibrary = async (id: number): Promise<boolean> => {
   // 同步清理该库的缩略图（统一存于内部存储，按 key 删除），避免删除外部库后遗留孤儿缩略图占磁盘空间。
   const row = getScanLibraryRow(id)
   if (row) {
+    db.update(libraries).set({enabled:false,deleting:true,disabledAt:row.disabledAt??new Date()}).where(eq(libraries.id,id)).run()
+    invalidateLibraryMountsCache()
+    if(db.select({id:tables.photos.id}).from(tables.photos).where(and(eq(tables.photos.libraryId,id),eq(tables.photos.processingStatus,'processing'))).get())throw createError({statusCode:409,message:'扫描库仍在处理文件，已暂停扫描，请稍后重试删除'})
     await removeLibraryThumbnails(mount, row.rootPath, 'deleted')
   }
 
-  await db.delete(tables.photos).where(eq(tables.photos.libraryMount, mount)).run()
   const { removeLibraryCollections } = await import('../collections/sync-folder')
   removeLibraryCollections(id)
   invalidateLibraryMountsCache()
@@ -513,7 +501,8 @@ export const getScanAlbumEffectiveAuth = async (
 const audienceRank: Record<CollectionAudience, number> = {
   public: 0,
   login: 1,
-  admin: 2,
+  selected: 2,
+  admin: 3,
 }
 
 /**
@@ -617,6 +606,7 @@ export interface ScanAlbumCover {
 
 /** 扫描相簿节点（顶层相簿或嵌套子相簿），用于相册页展示 */
 export interface ScanAlbumNode {
+  collectionId?: number
   kind: 'scan'
   libId: number
   /** 挂载名（如 scan_12），用于定位元数据 */
@@ -688,12 +678,12 @@ const scanPhotoColumns = {
   libraryPath: tables.photos.libraryPath,
   type: tables.photos.type,
   dateTaken: tables.photos.dateTaken,
-  thumbnailUrl: tables.photos.thumbnailUrl,
+  thumbnailUrl: photoAssetSql('thumbnail'),
   thumbnailHash: tables.photos.thumbnailHash,
   aspectRatio: tables.photos.aspectRatio,
-  originalUrl: tables.photos.originalUrl,
+  originalUrl: photoAssetSql('original'),
   isLivePhoto: tables.photos.isLivePhoto,
-  livePhotoVideoUrl: tables.photos.livePhotoVideoUrl,
+  livePhotoVideoUrl: photoAssetSql('live_video'),
 }
 
 type ScanPhotoRow = {
@@ -957,7 +947,6 @@ export const getScanAlbumDetail = async (
     width: number | null
     height: number | null
     fileSize: number | null
-    storageKey: string | null
     tags: string[] | null
     latitude: number | null
     longitude: number | null
@@ -1012,7 +1001,6 @@ export const getScanAlbumDetail = async (
       width: number | null
       height: number | null
       fileSize: number | null
-      storageKey: string | null
       tags: string[] | null
       latitude: number | null
       longitude: number | null
@@ -1032,7 +1020,6 @@ export const getScanAlbumDetail = async (
         width: tables.photos.width,
         height: tables.photos.height,
         fileSize: tables.photos.fileSize,
-        storageKey: tables.photos.storageKey,
         tags: tables.photos.tags,
         latitude: tables.photos.latitude,
         longitude: tables.photos.longitude,
@@ -1062,14 +1049,13 @@ export const getScanAlbumDetail = async (
       width: detail?.width ?? null,
       height: detail?.height ?? null,
       fileSize: detail?.fileSize ?? null,
-      storageKey: detail?.storageKey ?? null,
       tags: detail?.tags ?? null,
       latitude: detail?.latitude ?? null,
       longitude: detail?.longitude ?? null,
       city: detail?.city ?? null,
       country: detail?.country ?? null,
       locationName: detail?.locationName ?? null,
-      type: p.type,
+      type: p.type ?? 'image',
     }
   })
 
@@ -1150,26 +1136,13 @@ export const cleanupExpiredDisabledScanLibraries = async (
 
   if (expired.length === 0) return 0
 
+  let cleaned = 0
   for (const row of expired) {
-    const mount = scanMountName(row.id)
-    // 删除该库的全部缩略图（统一存于内部存储）
-    await removeLibraryThumbnails(mount, row.rootPath, '(cleanup)')
-    // 删除已有缩略图的照片记录与库配置行
-    await db
-      .delete(tables.photos)
-      .where(eq(tables.photos.libraryMount, mount))
-      .run()
-    await db
-      .delete(libraries)
-      .where(eq(libraries.id, row.id))
-      .run()
-    logger
-      .dynamic('scan-library')
-      .info(
-        `(cleanup) Purged disabled scan library #${row.id} "${row.name}" (disabled > ${graceDays}d, not recovered)`,
-      )
+    // Use the same registered-file purge as an explicit library deletion.
+    try { await deleteScanLibrary(row.id); cleaned++ }
+    catch (error) { logger.dynamic('scan-library').warn('Deferred disabled-library cleanup', error) }
   }
 
   invalidateLibraryMountsCache()
-  return expired.length
+  return cleaned
 }

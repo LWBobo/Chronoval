@@ -1,10 +1,14 @@
+import { samePhotoPartition, assertPersonPhotoPartition, currentMlPhoto } from './partition'
+import { photoWithMediaColumns } from '../../utils/photo-media'
+import { photoAssetSql } from '../../utils/photo-media'
+import { collectionAudienceAccess, collectionAudienceSql } from '../collections/access'
 import { and, desc, eq, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm'
 import { faceMaxDistance } from './config'
 import { bufferToFloat32, cosineDistance } from './vector'
 import { randomUUID } from 'node:crypto'
 import { readCollectionAccess, replaceCollectionAccess } from '../collections/access-grants'
 
-export type PersonVisibility = 'public' | 'login' | 'admin'
+export type PersonVisibility = 'public' | 'login' | 'selected' | 'admin'
 export type PersonViewer = 'public' | 'user' | 'admin'
 
 export function normalizeVisibility(person: {
@@ -45,20 +49,8 @@ export function visibilityAllows(visibility: PersonVisibility, viewer: PersonVie
  * 一张照片里只要有一个人当前访问者看不到，整张照片就不可见。
  * 把其中一个人改回公开后，其余人若仍是登录可见或仅管理员，照片继续隐藏。
  */
-export function photoAllowedByPeopleSql(viewer: PersonViewer): SQL {
-  if (viewer === 'admin') return sql`1`
-  const blockedAudiences =
-    viewer === 'user' ? sql`('admin')` : sql`('login', 'admin')`
-  return sql`NOT EXISTS (
-    SELECT 1
-    FROM ${tables.assetFaces}
-    INNER JOIN ${tables.people}
-      ON ${tables.assetFaces.personId} = ${tables.people.id}
-    INNER JOIN ${tables.accessGrants}
-      ON ${tables.accessGrants.collectionId} = ${tables.people.collectionId}
-    WHERE ${tables.assetFaces.photoId} = ${tables.photos.id}
-      AND ${tables.accessGrants.audience} IN ${blockedAudiences}
-  )`
+export function photoAllowedByPeopleSql(viewer: PersonViewer, userId: number | null = null): SQL {
+  return sql`NOT EXISTS(SELECT 1 FROM asset_faces af INNER JOIN people p ON p.id=af.person_id WHERE af.photo_id=${tables.photos.id} AND p.ownership_type='site' AND NOT ${collectionAudienceSql(sql`p.collection_id`, userId, viewer==='admin')})`
 }
 
 export function blockedPhotoIdsForActor(actor: {
@@ -75,6 +67,7 @@ export function blockedPhotoIdsForActor(actor: {
     })
     .from(tables.assetFaces)
     .innerJoin(tables.people, eq(tables.assetFaces.personId, tables.people.id))
+    .where(eq(tables.people.ownershipType, 'site'))
     .all()
   for (const row of rows) {
     if (row.photoId && !canSeePerson(row, actor)) blocked.add(row.photoId)
@@ -90,7 +83,8 @@ export function canSeePerson(
   },
   actor: { user?: { id?: string | number } | null; isAdmin?: boolean },
 ) {
-  return visibilityAllows(normalizeVisibility(person), viewerFromActor(actor))
+  if (!person.collectionId) return false
+  return collectionAudienceAccess(person.collectionId, { user: actor.user ? { id: Number(actor.user.id) } as any : null, isAdmin: !!actor.isAdmin })
 }
 
 function ensureVisibilityColumn() {}
@@ -166,13 +160,14 @@ export function reconcilePeople(personIds: Iterable<string>) {
 export function listPeople(options?: {
   viewer?: PersonViewer
   minFaces?: number
+  actor?: import('../../utils/access').Actor
 }) {
   ensureVisibilityColumn()
   const db = useDB()
   const minFaces = options?.minFaces ?? 1
   const viewer = options?.viewer ?? 'public'
   let rows = db.select().from(tables.people).all()
-  rows = rows.filter((p) => visibilityAllows(normalizeVisibility(p), viewer))
+  rows = rows.filter((p) => options?.actor ? canSeePerson(p,options.actor) : viewer === 'admin' || (p.ownershipType === 'site' && visibilityAllows(normalizeVisibility(p),viewer)))
   rows = rows.filter(
     (p) => p.faceCount >= minFaces || Boolean(p.name?.trim()),
   )
@@ -217,6 +212,9 @@ export function ensurePersonCollection(
       .insert(tables.collections)
       .values({
         kind: 'person',
+        ownershipType: person.ownershipType,
+        ownerId: person.ownerId,
+        visibility: person.ownershipType === 'user' ? 'admin' : audience ?? 'public',
         title: person.name,
         showOnGallery: true,
         showOnAlbums: false,
@@ -231,14 +229,12 @@ export function ensurePersonCollection(
       .where(eq(tables.people.id, personId))
       .run()
   }
-  const nextAudience = audience ?? normalizeVisibility(person)
-  replaceCollectionAccess(collectionId, { visibility: nextAudience }, db)
   return collectionId
 }
 
 export function createPerson(
   name?: string | null,
-  options?: { origin?: 'ml' | 'manual'; visibility?: PersonVisibility },
+  options?: { origin?: 'ml' | 'manual'; visibility?: PersonVisibility; ownerId?:number|null; ownershipType?:'site'|'user' },
 ) {
   const id = randomUUID()
   const visibility = options?.visibility ?? 'public'
@@ -247,7 +243,8 @@ export function createPerson(
     .values({
       id,
       name: name?.trim() || null,
-      ownerId: null,
+      ownerId: options?.ownerId??null,
+      ownershipType:options?.ownershipType??'site',
       origin: options?.origin ?? 'ml',
       thumbnailFaceId: null,
       faceCount: 0,
@@ -261,8 +258,6 @@ export function updatePerson(
   id: string,
   patch: {
     name?: string | null
-    isHidden?: boolean
-    visibility?: PersonVisibility
     thumbnailFaceId?: string | null
   },
 ) {
@@ -279,10 +274,7 @@ export function updatePerson(
     .set(next)
     .where(eq(tables.people.id, id))
     .run()
-  const visibility =
-    patch.visibility ??
-    (patch.isHidden === undefined ? undefined : patch.isHidden ? 'admin' : 'public')
-  ensurePersonCollection(id, visibility)
+  ensurePersonCollection(id)
   return getPerson(id)
 }
 
@@ -334,7 +326,7 @@ export function getPersonPhotoIds(personId: string) {
   const ids = [...linkedPhotoIds(personId)]
   if (!ids.length) return []
   return db
-    .select()
+    .select(photoWithMediaColumns())
     .from(tables.photos)
     .where(inArray(tables.photos.id, ids))
     .all()
@@ -356,6 +348,7 @@ export function addPhotosToPerson(personId: string, photoIds: string[]) {
   let added = 0
   let already = 0
   for (const photoId of unique) {
+    assertPersonPhotoPartition(person,photoId)
     if (linked.has(photoId)) {
       already++
       continue
@@ -385,6 +378,7 @@ export function addPhotosToPerson(personId: string, photoIds: string[]) {
     linked.add(photoId)
     added++
   }
+  reconcilePerson(personId)
   return { added, already, photoCount: linked.size }
 }
 
@@ -394,7 +388,8 @@ export function searchPhotosForPerson(
   limit = 48,
   cursor = '',
 ) {
-  if (!getPerson(personId)) {
+  const selectedPerson=getPerson(personId)
+  if (!selectedPerson) {
     throw createError({ statusCode: 404, message: 'Person not found' })
   }
   const db = useDB()
@@ -405,6 +400,9 @@ export function searchPhotosForPerson(
   const cursorDate = separator >= 0 ? cursor.slice(0, separator) : ''
   const cursorId = separator >= 0 ? cursor.slice(separator + 1) : ''
   const filters: SQL[] = [
+    eq(tables.photos.ownershipType,selectedPerson.ownershipType),
+    selectedPerson.ownerId===null?isNull(tables.photos.ownerId):eq(tables.photos.ownerId,selectedPerson.ownerId),
+    eq(tables.photos.transferState,'idle'),eq(tables.photos.processingStatus,'ready'),
     isNull(tables.photos.deletedAt),
     or(
       isNull(tables.photos.libraryId),
@@ -440,7 +438,7 @@ export function searchPhotosForPerson(
     .select({
       id: tables.photos.id,
       title: tables.photos.title,
-      thumbnailUrl: tables.photos.thumbnailUrl,
+      thumbnailUrl: photoAssetSql('thumbnail'),
       dateTaken: tables.photos.dateTaken,
     })
     .from(tables.photos)
@@ -501,6 +499,8 @@ export function getFacesForPhoto(photoId: string) {
 /** 手建人物的照片在检测出唯一一张脸后，把这张脸固定为锚点。 */
 export async function anchorManualMembers(photoId: string) {
   const db = useDB()
+  const snapshot=currentMlPhoto(photoId)
+  if(!snapshot)return
   const manualFaces = db
     .select({ personId: tables.assetFaces.personId })
     .from(tables.assetFaces)
@@ -519,7 +519,7 @@ export async function anchorManualMembers(photoId: string) {
   if (personIds.size !== 1) return
   const personId = [...personIds][0]!
   const person = getPerson(personId)
-  if (!person || person.origin !== 'manual') return
+  if (!person || person.origin !== 'manual'||!samePhotoPartition(person,snapshot)) return
   const detected = db
     .select()
     .from(tables.assetFaces)
@@ -542,6 +542,8 @@ export async function anchorManualMembers(photoId: string) {
     .run()
   if (face.personId && face.personId !== personId) {
     const maxDistance = await faceMaxDistance()
+    const current=currentMlPhoto(photoId)
+    if(!current||!samePhotoPartition(current,snapshot))return
     const anchorEmb = db
       .select()
       .from(tables.faceEmbeddings)
@@ -557,6 +559,8 @@ export async function anchorManualMembers(photoId: string) {
       .all()
     for (const other of others) {
       if (other.id === face.id) continue
+      const otherPhoto=currentMlPhoto(other.photoId)
+      if(!otherPhoto||!samePhotoPartition(otherPhoto,snapshot))continue
       if (!anchorVec) continue
       const otherEmb = db
         .select()
@@ -588,6 +592,9 @@ export function reassignFace(faceId: string, personId: string | null) {
     .get()
   if (!face) throw createError({ statusCode: 404, message: 'Face not found' })
 
+  const photo=currentMlPhoto(face.photoId)
+  if(!photo)throw createError({statusCode:409,message:'照片暂不可操作'})
+  if(personId){const target=getPerson(personId);if(!target)throw createError({statusCode:404,message:'Person not found'});assertPersonPhotoPartition(target,face.photoId)}
   const oldPerson = face.personId
   db.update(tables.assetFaces)
     .set({ personId, pinned: personId != null })
@@ -612,6 +619,17 @@ export function mergePeople(targetId: string, sourceIds: string[]) {
     if (sid === targetId) continue
     const source = getPerson(sid)
     if (!source) continue
+    if(!samePhotoPartition(source,target))throw createError({statusCode:409,message:'不能合并不同所有者分区的人物'})
+    if(source.collectionId&&target.collectionId){
+      const policy=(id:number)=>{
+        const row=db.select().from(tables.collections).where(eq(tables.collections.id,id)).get()!
+        const viewers=db.select({id:tables.collectionViewers.userId}).from(tables.collectionViewers).where(eq(tables.collectionViewers.collectionId,id)).all().map(v=>v.id).sort((a,b)=>a-b)
+        const exemptions=db.select({id:tables.collectionPasswordExemptions.userId}).from(tables.collectionPasswordExemptions).where(eq(tables.collectionPasswordExemptions.collectionId,id)).all().map(v=>v.id).sort((a,b)=>a-b)
+        return JSON.stringify([row.visibility,row.passwordHash,row.passwordExemptMode,viewers,exemptions])
+      }
+      if(policy(source.collectionId)!==policy(target.collectionId))throw createError({statusCode:409,message:'人物相册权限或密码不同，请先明确统一后再合并'})
+    }
+    for(const photo of getPersonPhotoIds(source.id))assertPersonPhotoPartition(target,photo.id)
     db.update(tables.assetFaces)
       .set({ personId: targetId })
       .where(eq(tables.assetFaces.personId, sid))
@@ -628,7 +646,8 @@ export function mergePeople(targetId: string, sourceIds: string[]) {
         .where(eq(tables.people.id, targetId))
         .run()
     }
-    db.delete(tables.people).where(eq(tables.people.id, sid)).run()
+    if(source.collectionId)db.delete(tables.collections).where(eq(tables.collections.id,source.collectionId)).run()
+    else db.delete(tables.people).where(eq(tables.people.id, sid)).run()
   }
   recount(targetId)
   return getPerson(targetId)
@@ -643,6 +662,7 @@ export function personWithMeta(person: typeof tables.people.$inferSelect) {
   const visibility = normalizeVisibility(person)
   return {
     ...person,
+    aclVersion: person.collectionId ? useDB().select({version:tables.collections.aclVersion}).from(tables.collections).where(eq(tables.collections.id,person.collectionId)).get()?.version : null,
     visibility,
     isHidden: visibility !== 'public',
     thumbnailUrl: faceThumbnailUrl(person.thumbnailFaceId),

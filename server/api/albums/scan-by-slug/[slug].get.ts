@@ -3,6 +3,7 @@ import { and, eq, tables } from '~~/server/utils/db'
 import { ensureAlbumUid } from '~~/server/utils/albumUid'
 import { getManualAlbumById } from '~~/server/services/collections/manual-album'
 import { albumOpenToActor } from '~~/server/utils/albumVisibility'
+import { folderAudienceAccess } from '../../../services/collections/access'
 import {
   getScanAlbumEffectiveVisibility,
   getScanLibraryByKey,
@@ -56,8 +57,7 @@ export default eventHandler(async (event) => {
   if (!library?.enabled || library.displayMode === 'gallery') {
     throw createError({ statusCode: 404, statusMessage: 'Not Found' })
   }
-  const visibility = getScanAlbumEffectiveVisibility(libId, meta.relPath)
-  if (!albumOpenToActor({ visibility }, actor)) {
+  if (!folderAudienceAccess(libId, meta.relPath, actor)) {
     throw createError({ statusCode: 404, statusMessage: 'Not Found' })
   }
 

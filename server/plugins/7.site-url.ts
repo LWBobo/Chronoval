@@ -1,50 +1,40 @@
+import type { H3Event } from 'h3'
 import { settingsManager } from '../services/settings/settingsManager'
-import { normalizeSiteUrl } from '../utils/site-url'
+import { normalizeSiteUrl, resolveRequestOrigin } from '../utils/site-url'
 
 interface SiteConfigStackInitCtx {
   siteConfig: {
     push: (input: Record<string, unknown>) => void
   }
-  event: {
-    context?: {
-      siteConfigNitroOrigin?: string
-    }
-  }
+  event: H3Event
 }
 
 export default defineNitroPlugin(async (nitroApp) => {
-  // nuxt-og-image 等模块通过 nuxt-site-config 的 site-config 栈解析规范地址
-  // （withSiteUrl -> getNitroOrigin）。该栈在运行时默认按请求来源推导协议：
-  // 生产环境会把非 localhost 主机强制为 https，反代也会带 x-forwarded-proto=https。
-  // 同时，开发模式下 withSiteUrl 直接用 nitroOrigin（请求来源）而非站点栈。
-  // 这里在 site-config:init（每次请求初始化栈，晚于 nitro/runtime 默认入栈）时，
-  // 把基础设置中的站点地址（保留用户显式写的 http:// 协议）以更高优先级重新入栈，
-  // 并顺带覆盖请求的 nitroOrigin，从而让 OG 分享图/分享链接在开发与生产、
-  // 内网 IP/反代域名等场景下都固定使用用户自定义的协议（如内网 http://IP:port）。
+  // nuxt-site-config 在生产环境会把非 localhost 主机的协议强制改成 https。
+  // site-config:init 会等待本 hook 返回的 Promise：已配置的站点地址保留其协议；
+  // 未配置时改用本次请求的可信来源（转发头仅接受受信任代理），避免规范地址停留在 https。
   nitroApp.hooks.hook('site-config:init', (ctx: SiteConfigStackInitCtx) => {
-    settingsManager
+    return settingsManager
       .get<string>('app', 'siteUrl')
+      .catch((error) => {
+        console.warn('[site-url] 同步站点地址到 site-config 失败:', error)
+        return ''
+      })
       .then((siteUrl) => {
-        const canonical: string =
+        const configured: string =
           normalizeSiteUrl(siteUrl?.trim() || '') ||
           normalizeSiteUrl(process.env.NUXT_PUBLIC_SITE_URL || '')
+        const canonical = configured || resolveRequestOrigin(ctx.event)
         if (!canonical) return
         ctx.siteConfig.push({
-          _context: 'chronoval:app-site-url',
+          _context: configured ? 'chronoval:app-site-url' : 'chronoval:request-origin',
           _priority: 1, // 高于 nitro(-4) / runtime(0)，保证覆盖默认协议推导
           url: canonical,
         })
-        // 开发模式下 withSiteUrl 使用 nitroOrigin：覆盖为已配置的规范地址，
-        // 确保 http/IP:port 自定义地址也能被 OG 分享图接受。
-        if (ctx.event?.context) {
-          ctx.event.context.siteConfigNitroOrigin = canonical
-        }
+        ctx.event.context.siteConfigNitroOrigin = canonical
         console.info(
           `[site-url] site-config 栈 + nitroOrigin 已应用规范地址: ${canonical}`,
         )
-      })
-      .catch((error) => {
-        console.warn('[site-url] 同步站点地址到 site-config 失败:', error)
       })
   })
 

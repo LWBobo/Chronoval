@@ -1,3 +1,4 @@
+import { photoAssetSql } from '../../../../utils/photo-media'
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -23,18 +24,6 @@ async function loadSourceBuffer(photo: {
   id: string
   thumbnailKey: string | null
 }): Promise<Buffer | null> {
-  if (photo.thumbnailKey) {
-    try {
-      const provider = getStorageManager().getProvider()
-      const stored = await provider.get(photo.thumbnailKey)
-      if (stored?.length) {
-        return Buffer.isBuffer(stored) ? stored : Buffer.from(stored)
-      }
-    } catch {
-      // Fall through to the original/legacy image loader.
-    }
-  }
-
   const loaded = await loadPhotoImageBuffer(photo.id)
   return loaded?.buffer ?? null
 }
@@ -112,8 +101,8 @@ export default eventHandler(async (event) => {
   const photo = useDB()
     .select({
       id: tables.photos.id,
-      thumbnailKey: tables.photos.thumbnailKey,
-      thumbnailUrl: tables.photos.thumbnailUrl,
+      thumbnailKey: photoAssetSql('thumbnail'),
+      thumbnailUrl: photoAssetSql('thumbnail'),
       lastModified: tables.photos.lastModified,
     })
     .from(tables.photos)
@@ -134,7 +123,7 @@ export default eventHandler(async (event) => {
   const etag = `"map-thumb-${version}"`
 
   setHeader(event, 'Content-Type', 'image/webp')
-  setHeader(event, 'Cache-Control', 'private, no-cache')
+  setHeader(event, 'Cache-Control', 'private, no-store')
   setHeader(event, 'ETag', etag)
   setHeader(event, 'Vary', 'Cookie')
   if (getRequestHeader(event, 'if-none-match') === etag) {
@@ -143,6 +132,6 @@ export default eventHandler(async (event) => {
   }
 
   const output = await createCachedThumbnail(cacheFile, photo, size)
-  setHeader(event, 'Content-Length', String(output.length))
+  setHeader(event, 'Content-Length', output.length)
   return output
 })

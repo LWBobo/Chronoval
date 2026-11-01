@@ -1,3 +1,5 @@
+import { currentMlPhoto, type PhotoPartition } from './partition'
+import { registeredFile } from '../media-files/read'
 import { eq } from 'drizzle-orm'
 import sharp from 'sharp'
 import { getGlobalStorageManager } from '../storage'
@@ -30,7 +32,7 @@ async function prepareMlImage(
 }
 export async function loadPhotoImageBuffer(
   photoId: string,
-): Promise<{ buffer: Buffer; filename: string } | null> {
+): Promise<{ buffer: Buffer; filename: string; snapshot: PhotoPartition & { checksum:string|null; originalVersion:number } } | null> {
   const db = useDB()
   const photo = db
     .select()
@@ -39,58 +41,12 @@ export async function loadPhotoImageBuffer(
     .get()
   if (!photo || photo.deletedAt) return null
 
-  const storage = getGlobalStorageManager()
-  if (!storage) return null
-
-  let provider: { get: (key: string) => Promise<Buffer | null> }
-  try {
-    provider = storage.getProvider()
-  } catch {
-    return null
-  }
-
-  // Originals keep detail that a second pass over the thumbnail would lose.
-  if (photo.source === 'library' && photo.libraryMount && photo.libraryPath) {
-    try {
-      const { readFile } = await import('node:fs/promises')
-      const { join } = await import('node:path')
-      // Common mount root used by compose
-      const candidates = [
-        join('/app/library', photo.libraryPath),
-        join(process.cwd(), 'data/library', photo.libraryPath),
-      ]
-      for (const p of candidates) {
-        try {
-          const buf = await readFile(p)
-          if (buf.length) {
-            return prepareMlImage(
-              buf,
-              photo.libraryPath.split('/').pop() || `${photoId}.jpg`,
-            )
-          }
-        } catch {
-          /* next */
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const keys = [photo.storageKey, photo.thumbnailKey].filter(
-    (k): k is string => Boolean(k),
-  )
-  for (const key of keys) {
-    try {
-      const buf = await provider.get(key)
-      if (buf && buf.length > 0) {
-        const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf)
-        return prepareMlImage(raw, key.split('/').pop() || `${photoId}.jpg`)
-      }
-    } catch {
-      /* try next */
-    }
-  }
-
-  return null
+  if(photo.transferState!=='idle'||photo.processingStatus!=='ready')return null
+  if(photo.ownerId){const owner=db.select({status:tables.users.status}).from(tables.users).where(eq(tables.users.id,photo.ownerId)).get();if(owner?.status!=='active')return null}
+  const { registeredFileBuffer }=await import('../media-files/read')
+  const original=registeredFile(photoId,'original')
+  if(!original)return null
+  const snapshot={ownershipType:photo.ownershipType,ownerId:photo.ownerId,checksum:photo.contentChecksum,originalVersion:original.contentVersion}
+  const raw=await registeredFileBuffer(photoId,['preview','thumbnail','original'])
+  return {...await prepareMlImage(raw,photo.originalFilename||`${photoId}.jpg`),snapshot}
 }

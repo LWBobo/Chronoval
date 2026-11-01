@@ -1,10 +1,12 @@
 <script lang="ts" setup>
+import { getPersonVersions } from '~/utils/collection-versions'
 const props = defineProps<{
   photoId: string
   visible?: boolean
 }>()
 
 interface FaceDto {
+  metadataVersion: number
   id: string
   x1: number
   y1: number
@@ -17,6 +19,8 @@ interface FaceDto {
 interface PersonOption {
   id: string
   name: string | null
+  ownershipType: string
+  ownerId: number | null
 }
 
 const { loggedIn, user } = useUserSession()
@@ -51,9 +55,10 @@ async function loadPeople() {
   if (!isAdmin.value) return
   try {
     const res = await $fetch<{ people: PersonOption[] }>('/api/people', {
-      query: { minFaces: 0 },
+      query: { minFaces: 0, manage: 1 },
     })
-    people.value = res.people || []
+    const photo: any = await $fetch(`/api/admin/photos/${props.photoId}`)
+    people.value = (res.people || []).filter(person => person.ownershipType === photo.ownershipType && person.ownerId === photo.ownerId)
   } catch {
     people.value = []
   }
@@ -92,7 +97,7 @@ async function saveAssign(payload: {
   try {
     await $fetch(`/api/faces/${menuFace.value.id}`, {
       method: 'PUT',
-      body: payload,
+      body: { ...payload, expectedMetadataVersion: menuFace.value.metadataVersion, versions: await getPersonVersions([menuFace.value.personId, payload.personId].filter((id): id is string => !!id)), reason: t('accounts.reassignReason') },
     })
     menuFaceId.value = null
     await loadFaces(props.photoId)

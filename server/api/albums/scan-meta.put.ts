@@ -4,7 +4,8 @@ import {
   upsertScanAlbumMeta,
   clearScanAlbumMeta,
 } from '~~/server/services/scan-library/album-meta'
-import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
+import { collectionAccessSchema } from '../../services/collections/access'
+import { assertCurrentActor } from '../../services/users'
 import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
 
 /**
@@ -13,6 +14,7 @@ import { parseExemptUsers } from '~~/server/utils/albumPasswordExempt'
  */
 export default eventHandler(async (event) => {
 
+  const actor = await requireAccess(event, 'admin')
   const body = await readValidatedBody(
     event,
     z.object({
@@ -22,14 +24,7 @@ export default eventHandler(async (event) => {
       title: z.string().max(255).nullable().optional(),
       description: z.string().max(1000).nullable().optional(),
       coverPhotoId: z.string().nullable().optional(),
-      isHidden: z.boolean().optional(),
-      // 相簿访问密码：非空明文 → 设置新密码；配合 clearPassword=true → 清除密码；否则保持不变
-      password: z.string().max(128).optional(),
-      clearPassword: z.boolean().optional(),
-      // 密码免密范围：null=清除（所有访问者都需密码）；未传=保持不变
-      passwordExemptMode: z.enum(['logged_in', 'selected']).nullable().optional(),
-      // 免密用户邮箱列表（仅 selected 模式生效）；null=清除；未传=保持不变
-      passwordExemptUsers: z.array(z.string().max(255)).nullable().optional(),
+      access: collectionAccessSchema.optional(),
       slug: z
         .string()
         .max(120)
@@ -52,7 +47,7 @@ export default eventHandler(async (event) => {
       bgmMusicId: z.number().int().nullable().optional(),
       // 传 true 时清除该相簿的元数据（还原为默认推导值）
       clear: z.boolean().optional(),
-    }).parse,
+    }).strict().refine(value => !value.clear || !value.access, '清除展示配置与修改权限须分别提交').parse,
   )
 
   const mount = scanMountName(body.libId)
@@ -62,24 +57,15 @@ export default eventHandler(async (event) => {
     return { success: true, cleared: true }
   }
 
-  // 只保存带盐哈希；空输入保持原密码，clearPassword 显式清除。
-  let passwordHash: string | null | undefined
-  if (body.clearPassword) {
-    passwordHash = null
-  } else if (body.password && body.password.trim()) {
-    passwordHash = hashAlbumPassword(body.password.trim())
-  }
-
-  const meta = await upsertScanAlbumMeta({
+  const meta = useDB().transaction((tx) => {
+    assertCurrentActor(tx as any, actor, true)
+    return upsertScanAlbumMeta({
     mount,
+    access: body.access,
     relPath: body.path,
     title: body.title,
     description: body.description,
     coverPhotoId: body.coverPhotoId,
-    isHidden: body.isHidden,
-    passwordHash,
-    passwordExemptMode: body.passwordExemptMode,
-    passwordExemptUsers: body.passwordExemptUsers,
     slug: body.slug,
     layout: body.layout,
     randomWheelAnimation: body.randomWheelAnimation,
@@ -88,7 +74,8 @@ export default eventHandler(async (event) => {
     randomQuotes: body.randomQuotes,
     randomQuotesTag: body.randomQuotesTag,
     bgmMusicId: body.bgmMusicId,
-  })
+    }, actor)
+  }, { behavior: 'immediate' })
 
   return {
     success: true,

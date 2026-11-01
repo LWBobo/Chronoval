@@ -1,0 +1,68 @@
+name: chronoval-dev
+
+services:
+  web:
+    image: chronoval-dev:local
+    container_name: chronoval-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      network: host
+      entitlements:
+        - network.host
+    init: true
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "3100:3100"
+    environment:
+      NODE_ENV: development
+      NODE_OPTIONS: --max-old-space-size=3072
+      PORT: "3100"
+      NUXT_PORT: "3100"
+      NITRO_PORT: "3100"
+      HOST: 0.0.0.0
+      NITRO_HOST: 0.0.0.0
+      NUXT_TELEMETRY_DISABLED: "1"
+      NUXT_ALLOWED_HOSTS: ${CHRONOVAL_DEV_HOSTS:-192.168.31.99,localhost,127.0.0.1}
+      NUXT_PUBLIC_SITE_URL: ${CHRONOVAL_DEV_SITE_URL:-http://192.168.31.99:3100}
+      NUXT_SESSION_NAME: chronoval-dev-session
+      NUXT_COOKIE_SECURE: "false"
+      DATABASE_URL: ./data/app.sqlite3
+      NUXT_STORAGE_PROVIDER: local
+      NUXT_PROVIDER_LOCAL_PATH: /app/storage
+      NUXT_PROVIDER_LOCAL_BASE_URL: /storage
+      NUXT_PROVIDER_LOCAL_PREFIX: photos/
+      LIBRARY_ENABLED: "true"
+      EXIFTOOL_PATH: /usr/bin/exiftool
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+    volumes:
+      # Nested volumes keep generated files and Linux native dependencies off
+      # the host source tree. Source changes remain visible to Nuxt immediately.
+      - .:/app:ro
+      - /app/node_modules
+      - /app/packages/webgl-image/node_modules
+      - /app/packages/webgl-image/dist
+      - /app/.nuxt
+      - /app/.output
+      # Mask the source checkout's production .env.
+      - ./docker/dev.env:/app/.env:ro
+      - ${CHRONOVAL_DEV_STATE_DIR:-../Chronoval-dev-state}/data:/app/data
+      - ${CHRONOVAL_DEV_STATE_DIR:-../Chronoval-dev-state}/storage:/app/storage
+      - ./data/map_info:/app/data/map_info:ro
+    mem_limit: 5g
+    memswap_limit: 6g
+    cpus: 2.0
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - "const r=await fetch('http://127.0.0.1:3100/api/_auth/session',{signal:AbortSignal.timeout(10000)});process.exit(r.ok?0:1)"
+      interval: 30s
+      timeout: 15s
+      start_period: 180s
+      retries: 5

@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { safeLoginRedirect } from '~/utils/login-redirect'
 definePageMeta({
   middleware: 'guest',
 })
@@ -35,7 +36,7 @@ const FOREST_SRCSET = `
 
 // 注：移动端采用弹性布局 + 基于视口高度的响应式间距（clamp）自适应任意尺寸，
 // 不使用容器/整页 transform 缩放——实测 transform 与 zoom 都会让 backdrop-filter 毛玻璃失效。
-const { fetch: fetchUserSession } = useUserSession()
+const { fetch: fetchUserSession, user } = useUserSession()
 
 const config = useRuntimeConfig()
 const settingsStore = useSettingsStore()
@@ -124,7 +125,9 @@ const afterAuthenticated = async () => {
     title: $t('auth.messages.loginSuccess.title'),
     description: $t('auth.messages.loginSuccess.description'),
   })
-  router.push(route.query.redirect?.toString() || '/dashboard')
+  const fallback = user.value?.isAdmin ? '/dashboard' : '/me/photos'
+  const destination = user.value?.mustChangePassword ? '/me/settings/security' : safeLoginRedirect(route.query.redirect, fallback)
+  await router.push(destination)
 }
 
 const handleAuthError = (error: any) => {
@@ -211,7 +214,7 @@ const handleAuthError = (error: any) => {
 
     <!-- ===== 桌面端登录面板：白玻璃直接顶满上/下/右边缘，表单居中坐于磨砂之上（占比收窄让图片更大） ===== -->
     <section class="absolute inset-y-0 right-0 z-20 hidden w-[42%] items-center justify-center lg:flex lg:pr-[3vw]">
-      <div class="login-panel w-full max-w-[22rem]">
+      <div class="login-panel max-h-full w-full max-w-[22rem] overflow-y-auto py-6">
         <AuthForm
           ref="authFormRefDesk"
           :verify="step === 'verify'"
@@ -243,7 +246,7 @@ const handleAuthError = (error: any) => {
 
     <!-- ===== 登录卡片（移动端保持原样：居中浮于全屏森林上） ===== -->
     <section class="relative z-20 flex w-full flex-1 items-center justify-center px-5 py-6 min-h-0 lg:hidden">
-      <div class="auth-glass w-full max-w-[24rem] rounded-[1.375rem] px-7 py-9 max-h-[88svh] overflow-y-auto sm:px-10">
+      <div class="auth-glass w-full max-w-[24rem] rounded-[1.375rem] px-7 py-9 max-h-full overflow-y-auto sm:px-10">
         <AuthForm
           ref="authFormRef"
           :verify="step === 'verify'"

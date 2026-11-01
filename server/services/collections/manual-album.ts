@@ -4,7 +4,7 @@ import {
   type CollectionAudience,
 } from './access-grants'
 
-export type ManualAlbum = typeof tables.collections.$inferSelect & {
+export type ManualAlbum = Omit<typeof tables.collections.$inferSelect, 'passwordExemptMode'> & {
   visibility: CollectionAudience
   isHidden: boolean
   hideFromGallery: boolean

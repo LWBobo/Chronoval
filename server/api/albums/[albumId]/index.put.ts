@@ -1,33 +1,29 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
-import { hashAlbumPassword } from '~~/server/utils/scanAlbumPassword'
-import {
-  readCollectionAccess,
-  replaceCollectionAccess,
-} from '~~/server/services/collections/access-grants'
+import { collectionAccessSchema, replaceCollectionPolicy } from '../../../services/collections/access'
+import { assertCurrentActor, audit } from '../../../services/users'
+import { assertCollectionVersion, assertMembershipPhotos } from '../../../services/collections/mutations'
 import { getManualAlbumById, toManualAlbum } from '~~/server/services/collections/manual-album'
 
 export default eventHandler(async (event) => {
+  const actor = await requireAccess(event, 'admin')
   const { albumId } = await getValidatedRouterParams(
     event,
     z.object({
       albumId: z.string().regex(/^\d+$/).transform(Number),
-    }).parse,
+    }).strict().parse,
   )
   const body = await readValidatedBody(
     event,
     z.object({
+      access: collectionAccessSchema.optional(),
+      expectedAclVersion: z.number().int().positive().optional(),
+      reason: z.string().trim().min(1).max(1000).optional(),
       title: z.string().min(1).max(255).optional(),
       description: z.string().max(1000).optional(),
       coverPhotoId: z.string().optional(),
       photoIds: z.array(z.string()).optional(),
-      isHidden: z.boolean().optional(),
-      visibility: z.enum(['public', 'login', 'admin']).optional(),
       hideFromGallery: z.boolean().optional(),
-      password: z.string().max(128).optional(),
-      clearPassword: z.boolean().optional(),
-      passwordExemptMode: z.enum(['logged_in', 'selected']).nullable().optional(),
-      passwordExemptUsers: z.array(z.string().max(255)).nullable().optional(),
       layout: z.enum(['waterfall', 'grid', 'immersive', 'timeline']).optional(),
       randomAnimation: z.enum(['default', 'wheel', 'compat']).optional(),
       randomWheelAnimation: z.boolean().optional(),
@@ -48,7 +44,7 @@ export default eventHandler(async (event) => {
                 .replace(/^-|-$/g, '')
             : value,
         ),
-    }).parse,
+    }).strict().parse,
   )
 
   const db = useDB()
@@ -71,6 +67,14 @@ export default eventHandler(async (event) => {
   }
 
   const updated = db.transaction((tx) => {
+    assertCurrentActor(tx as any, actor, true)
+    if (body.photoIds !== undefined || body.coverPhotoId !== undefined) {
+      assertCollectionVersion(albumId, body.expectedAclVersion ?? body.access?.expectedAclVersion, tx as any)
+      if (!body.reason && !body.access?.reason) throw createError({ statusCode: 422, message: '修改成员须填写原因' })
+      const ids = [...(body.photoIds ?? []), ...(body.coverPhotoId ? [body.coverPhotoId] : [])]
+      if (ids.length) assertMembershipPhotos(ids, tx as any)
+      if (body.photoIds === undefined && body.coverPhotoId && !tx.select().from(tables.collectionPhotos).where(and(eq(tables.collectionPhotos.collectionId, albumId), eq(tables.collectionPhotos.photoId, body.coverPhotoId))).get()) throw createError({ statusCode: 422, message: '封面必须属于当前相册' })
+    }
     const patch: Partial<typeof tables.collections.$inferInsert> = {
       updatedAt: new Date(),
     }
@@ -94,10 +98,6 @@ export default eventHandler(async (event) => {
       patch.randomQuotesTag = body.randomQuotesTag || null
     if (body.bgmMusicId !== undefined) patch.bgmMusicId = body.bgmMusicId
     if (nextSlug !== undefined) patch.slug = nextSlug
-    if (body.clearPassword) patch.passwordHash = null
-    else if (body.password?.trim())
-      patch.passwordHash = hashAlbumPassword(body.password.trim())
-
     tx.update(tables.collections)
       .set(patch)
       .where(
@@ -108,43 +108,7 @@ export default eventHandler(async (event) => {
       )
       .run()
 
-    if (
-      body.visibility !== undefined ||
-      body.isHidden !== undefined ||
-      body.clearPassword ||
-      body.passwordExemptMode !== undefined ||
-      body.passwordExemptUsers !== undefined
-    ) {
-      const access = readCollectionAccess(albumId, tx)
-      replaceCollectionAccess(
-        albumId,
-        {
-          visibility:
-            body.visibility ??
-            (body.isHidden === undefined
-              ? access.visibility
-              : body.isHidden
-                ? 'login'
-                : 'public'),
-          passwordExemptMode:
-            body.clearPassword
-              ? null
-              : body.passwordExemptMode === undefined
-              ? access.passwordExemptMode
-              : body.passwordExemptMode === 'selected' &&
-                  !body.passwordExemptUsers?.length
-                ? null
-                : body.passwordExemptMode,
-          passwordExemptUsers:
-            body.clearPassword
-              ? null
-              : body.passwordExemptUsers === undefined
-              ? access.passwordExemptUsers
-              : body.passwordExemptUsers,
-        },
-        tx,
-      )
-    }
+    if (body.access) replaceCollectionPolicy(albumId, body.access, actor, tx as any)
 
     if (body.photoIds !== undefined) {
       tx.delete(tables.collectionPhotos)
@@ -163,6 +127,12 @@ export default eventHandler(async (event) => {
           .onConflictDoNothing()
           .run()
       }
+      audit(tx as any, actor.user!.id, 'collection.members-replace', 'collection', albumId, { reason: body.reason ?? body.access?.reason, after: { count: photoIds.size } })
+    }
+
+    if (body.photoIds === undefined && body.coverPhotoId !== undefined) {
+      if (!body.access) tx.update(tables.collections).set({ aclVersion: sql`${tables.collections.aclVersion}+1` }).where(eq(tables.collections.id, albumId)).run()
+      audit(tx as any, actor.user!.id, 'collection.cover-update', 'collection', albumId, { reason: body.reason ?? body.access?.reason, after: { coverPhotoId: body.coverPhotoId || null } })
     }
 
     return tx
@@ -170,7 +140,7 @@ export default eventHandler(async (event) => {
       .from(tables.collections)
       .where(eq(tables.collections.id, albumId))
       .get()!
-  })
+  }, { behavior: 'immediate' })
 
   const album = toManualAlbum(updated, db)
   const { passwordHash: _passwordHash, ...safeAlbum } = album

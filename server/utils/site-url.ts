@@ -1,5 +1,7 @@
 import type { H3Event } from 'h3'
+import { getRequestURL } from 'h3'
 import { settingsManager } from '../services/settings/settingsManager'
+import { trustsForwardedHeaders } from './trusted-proxy'
 
 /**
  * 站点规范地址（无尾随斜杠），用于分享链接与 OG 图地址。
@@ -23,9 +25,14 @@ export function normalizeSiteUrl(url: string): string {
 /**
  * 当前请求的完整站点原始地址（含协议/端口），无尾随斜杠。
  * 未配置规范地址时用它作为分享/OG 的基础地址。
+ * X-Forwarded-Host / X-Forwarded-Proto 仅在直连地址属于受信任代理时采信。
  */
 export function resolveRequestOrigin(event: H3Event): string {
-  const url = getRequestURL(event)
+  const trustForwarded = trustsForwardedHeaders(event)
+  const url = getRequestURL(event, {
+    xForwardedHost: trustForwarded,
+    xForwardedProto: trustForwarded,
+  })
   return normalizeSiteUrl(url.origin)
 }
 

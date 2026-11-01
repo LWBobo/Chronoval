@@ -8,7 +8,8 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Missing photo id' })
   }
 
-  await requireVisiblePhoto(event, photoId)
+  const { photo } = await requireVisiblePhoto(event, photoId, { allowAdminDeleted: true })
+  const version = photo.metadataVersion
 
   const actor = await getActor(event)
   const faces = getFacesForPhoto(photoId).filter(
@@ -35,10 +36,11 @@ export default eventHandler(async (event) => {
       }
     }
     return {
-      ...face,
+      id: face.id, x1: face.x1, y1: face.y1, x2: face.x2, y2: face.y2, imageWidth: face.imageWidth, imageHeight: face.imageHeight,
+      metadataVersion: actor.isAdmin ? version : undefined,
       personId,
       personName,
-      thumbnailUrl: `/api/faces/${face.id}/thumbnail`,
+      thumbnailUrl: personId || actor.isAdmin || actor.user?.id === photo.ownerId ? `/api/faces/${face.id}/thumbnail` : null,
     }
   })
 

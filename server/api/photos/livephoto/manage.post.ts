@@ -1,132 +1,30 @@
-import {
-  processSpecificLivePhotoVideo,
-  scanAndProcessExistingLivePhotos,
-} from '~~/server/services/video/scanner'
 import { eq } from 'drizzle-orm'
-import { findLivePhotoVideoForImage } from '~~/server/services/video/livephoto'
-import { getStorageManager } from '~~/server/plugins/3.storage'
-import { batchTestLivePhotoDetection } from '~~/server/services/video/test-utils'
+import { z } from 'zod'
+import { processSpecificLivePhotoVideo, siteLivePhotoIds } from '../../../services/video/scanner'
+import { batchTestLivePhotoDetection } from '../../../services/video/test-utils'
+import { assertCurrentActor, audit } from '../../../services/users'
+import { tables, useDB } from '../../../utils/db'
 
-export default eventHandler(async (event) => {
-
-  const body = await readBody(event)
-  const { action, videoKey, photoId, photoIds } = body
-
-  if (!action) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: 'Action is required',
-    })
-  }
-
-  try {
-    switch (action) {
-      case 'scan': {
-        // 扫描现有文件
-        const scanResults = await scanAndProcessExistingLivePhotos()
-        return {
-          message: 'Scan completed',
-          results: scanResults,
-        }
-      }
-
-      case 'detect': {
-        // 批量检测现有照片的 LivePhoto 视频
-        const results = await batchTestLivePhotoDetection(photoIds)
-        return {
-          message: 'Batch LivePhoto detection completed',
-          results,
-        }
-      }
-
-      case 'process': {
-        // 处理特定文件
-        if (!videoKey) {
-          throw createError({
-            statusCode: 400,
-            statusMessage: 'videoKey is required for process action',
-          })
-        }
-
-        const success = await processSpecificLivePhotoVideo(videoKey)
-        return {
-          message: success
-            ? 'LivePhoto processed successfully'
-            : 'Failed to process LivePhoto',
-          success,
-          videoKey,
-        }
-      }
-
-      case 'update-photo': {
-        // 为特定照片检查和更新 LivePhoto 状态
-        if (!photoId) {
-          throw createError({
-            statusCode: 400,
-            statusMessage: 'photoId is required for update-photo action',
-          })
-        }
-
-        const db = useDB()
-        const photos = await db
-          .select()
-          .from(tables.photos)
-          .where(eq(tables.photos.id, photoId))
-          .limit(1)
-
-        if (photos.length === 0) {
-          throw createError({
-            statusCode: 404,
-            statusMessage: 'Photo not found',
-          })
-        }
-
-        const photo = photos[0]
-        const livePhotoVideo = await findLivePhotoVideoForImage(
-          photo.storageKey!,
-        )
-
-        if (livePhotoVideo) {
-          const storageProvider = getStorageManager().getProvider()
-
-          await db
-            .update(tables.photos)
-            .set({
-              isLivePhoto: 1,
-              livePhotoVideoUrl: storageProvider.getPublicUrl(
-                livePhotoVideo.videoKey,
-              ),
-              livePhotoVideoKey: livePhotoVideo.videoKey,
-            })
-            .where(eq(tables.photos.id, photoId))
-
-          return {
-            message: 'Photo updated to LivePhoto successfully',
-            success: true,
-            photoId,
-            videoKey: livePhotoVideo.videoKey,
-          }
-        } else {
-          return {
-            message: 'No matching video found for this photo',
-            success: false,
-            photoId,
-          }
-        }
-      }
-
-      default:
-        throw createError({
-          statusCode: 400,
-          statusMessage:
-            'Invalid action. Use "scan", "detect", "process", or "update-photo"',
-        })
+export default eventHandler(async event => {
+  const actor = await requireAccess(event, 'admin')
+  const body = await readValidatedBody(event, z.discriminatedUnion('action', [
+    z.object({ action: z.literal('detect'), photoIds: z.array(z.string().min(1)).max(500).optional() }).strict(),
+    z.object({ action: z.literal('scan'), photoIds: z.array(z.string().min(1)).max(500), reason: z.string().trim().min(1).max(1000) }).strict(),
+    z.object({ action: z.enum(['process', 'update-photo']), photoId: z.string().min(1), expectedMetadataVersion: z.number().int().positive(), reason: z.string().trim().min(1).max(1000) }).strict(),
+  ]).parse)
+  if (body.action === 'detect') return batchTestLivePhotoDetection(body.photoIds)
+  return useDB().transaction(db => {
+    assertCurrentActor(db as any, actor, true)
+    const ids = body.action === 'scan' ? siteLivePhotoIds(body.photoIds) : [body.photoId]
+    if (body.action !== 'scan') {
+      const photo = db.select().from(tables.photos).where(eq(tables.photos.id, body.photoId)).get()
+      if (photo?.metadataVersion !== body.expectedMetadataVersion) throw createError({ statusCode: 409, message: '照片已变化，请刷新' })
     }
-  } catch (error) {
-    logger.chrono.error('LivePhoto management error:', error)
-    throw createError({
-      statusCode: 500,
-      statusMessage: 'Failed to process LivePhoto management request',
+    const results = ids.map(photoId => {
+      const success = processSpecificLivePhotoVideo(photoId)
+      audit(db as any, actor.user!.id, 'photo.live-photo-refresh', 'photo', photoId, { reason: body.reason, after: { isLivePhoto: success } })
+      return { photoId, success }
     })
-  }
+    return { success: true, results }
+  }, { behavior: 'immediate' })
 })

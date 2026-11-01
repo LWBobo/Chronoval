@@ -1,0 +1,39 @@
+FROM node:24.16.0-alpine3.22
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com
+ENV PNPM_HOME=/pnpm \
+    COREPACK_HOME=/opt/corepack \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    npm_config_registry=${NPM_REGISTRY} \
+    npm_config_better_sqlite3_binary_host_mirror=https://registry.npmmirror.com/-/binary/better-sqlite3/ \
+    npm_config_nodedir=/usr/local \
+    npm_config_jobs=2 \
+    NODE_OPTIONS=--max-old-space-size=3072
+ENV PATH="${PNPM_HOME}:${PATH}"
+
+RUN sed -i "s#https://dl-cdn.alpinelinux.org#${ALPINE_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache --timeout 60 python3 make g++ ca-certificates perl exiftool ffmpeg \
+    && corepack enable \
+    && corepack prepare pnpm@10.34.1 --activate
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/webgl-image/package.json ./packages/webgl-image/package.json
+
+# Source is mounted at runtime. Defer the root Nuxt postinstall until then,
+# but compile the native dependencies for this image's Node and libc now.
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --ignore-scripts --child-concurrency=2 --network-concurrency=8 \
+    && pnpm rebuild better-sqlite3 sharp \
+    && node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close(); require('sharp');" \
+    && sha256sum package.json pnpm-lock.yaml pnpm-workspace.yaml packages/webgl-image/package.json \
+       | sha256sum > /opt/chronoval-dev-dependencies.sha256 \
+    && mkdir -p /app/.nuxt /app/.output /app/data /app/storage /app/packages/webgl-image/dist \
+    && chown -R node:node /app
+
+COPY --chmod=755 docker/dev-entrypoint.sh /usr/local/bin/chronoval-dev
+USER node
+EXPOSE 3100
+ENTRYPOINT ["/usr/local/bin/chronoval-dev"]
+CMD ["pnpm", "run", "dev"]

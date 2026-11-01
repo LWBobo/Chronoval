@@ -43,6 +43,8 @@ const siteTitle = computed(() => (getSetting('app:title') as string) || '')
 const photoCount = computed(() => photos.value?.length ?? 0)
 
 const route = useRoute()
+const { user: accountUser } = useUserSession()
+const logout = useAccountLogout()
 const router = useRouter()
 const headerQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
 
@@ -261,8 +263,10 @@ function submitHeaderSearch() {
                 />
               </UTooltip>
               <template v-else>
+                <UTooltip :text="$t('accounts.personal')"><UButton to="/me/photos" icon="tabler:user" variant="ghost" color="neutral" :aria-label="$t('accounts.personal')" /></UTooltip>
                 <UTooltip :text="$t('ui.action.dashboard.tooltip')">
                   <UButton
+                    v-if="accountUser?.isAdmin"
                     size="sm"
                     color="info"
                     variant="soft"
@@ -278,7 +282,7 @@ function submitHeaderSearch() {
                     variant="soft"
                     class="cursor-pointer rounded bg-transparent text-(--glass-muted) hover:bg-(--glass-hover) hover:text-(--glass-text)"
                     icon="tabler:logout"
-                    @click="clear"
+                    @click="logout"
                   />
                 </UTooltip>
               </template>

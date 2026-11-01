@@ -7,6 +7,12 @@ import type {
 } from '~~/shared/types/settings'
 import type { SettingKey, SettingNamespace } from './contants'
 import { mapPmtilesFilename } from '~~/shared/map-pmtiles'
+import { sql } from 'drizzle-orm'
+import { storageConfigSchema, type StorageConfig } from '../../../shared/types/storage'
+
+function providerHasManagedReferences(id: number) {
+  return !!useDB().get(sql`SELECT 1 WHERE EXISTS(SELECT 1 FROM photo_files WHERE storage_provider_id=${id}) OR EXISTS(SELECT 1 FROM upload_sessions WHERE storage_provider_id=${id}) OR EXISTS(SELECT 1 FROM photo_transfer_files WHERE storage_provider_id=${id}) OR EXISTS(SELECT 1 FROM storage_path_claims WHERE storage_provider_id=${id})`)
+}
 
 export class SettingsManager {
   private static instance: SettingsManager
@@ -497,19 +503,22 @@ export class SettingsManager {
 
     async updateProvider(
       id: number,
-      providerConfig: Partial<NewSettingStorageProvider['config']>,
+      providerConfig: { name?: string; provider?: StorageConfig['provider']; config?: Partial<StorageConfig> },
     ): Promise<void> {
       const db = useDB()
-      db.update(tables.settingsStorageProviders)
-        .set({
-          ...providerConfig,
-        })
-        .where(eq(tables.settingsStorageProviders.id, id))
-        .run()
+      db.transaction(tx => {
+        const current = tx.select().from(tables.settingsStorageProviders).where(eq(tables.settingsStorageProviders.id,id)).get()
+        if (!current) throw createError({statusCode:404,message:'Storage configuration not found'})
+        const config = storageConfigSchema.parse({...current.config,...providerConfig.config,provider:providerConfig.provider??current.provider})
+        const identityKeys = ['provider','basePath','endpoint','bucket','rootPath','prefix']
+        if (providerHasManagedReferences(id) && identityKeys.some(key => (current.config as any)[key] !== (config as any)[key])) throw createError({statusCode:409,message:'此存储已有照片或上传任务，不能修改文件定位配置；请新增存储配置后切换'})
+        tx.update(tables.settingsStorageProviders).set({name:providerConfig.name??current.name,provider:config.provider,config,updatedAt:new Date()}).where(eq(tables.settingsStorageProviders.id,id)).run()
+      },{behavior:'immediate'})
     },
 
     async deleteProvider(id: number): Promise<void> {
       const db = useDB()
+      if(providerHasManagedReferences(id))throw createError({statusCode:409,message:'此存储仍有照片或文件任务引用，不能删除'})
       db.delete(tables.settingsStorageProviders)
         .where(eq(tables.settingsStorageProviders.id, id))
         .run()

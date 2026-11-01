@@ -1,14 +1,13 @@
 import { z } from 'zod'
-import { addPhotosToPerson } from '~~/server/services/ml/person.service'
-
-export default eventHandler(async (event) => {
-  const id = getRouterParam(event, 'id')
-  if (!id) {
-    throw createError({ statusCode: 400, message: 'Missing person id' })
-  }
-  const body = await readValidatedBody(
-    event,
-    z.object({ photoIds: z.array(z.string().min(1)).min(1).max(200) }).parse,
-  )
-  return addPhotosToPerson(id, body.photoIds)
+import { addPhotosToPerson } from '../../../services/ml/person.service'
+import { membershipFields, mutateCollections, personCollectionIds, assertMembershipPhotos } from '../../../services/collections/mutations'
+export default eventHandler(async event => {
+  const actor = await requireAccess(event, 'admin')
+  const id = getRouterParam(event, 'id')!
+  const body = await readValidatedBody(event, z.object({ ...membershipFields, expectedAclVersion: z.number().int().positive() }).strict().parse)
+  const [collectionId] = personCollectionIds([id])
+  return mutateCollections(actor, [collectionId!], { [collectionId!]: body.expectedAclVersion }, body.reason, 'person.members-add', db => {
+    assertMembershipPhotos(body.photoIds, db)
+    return addPhotosToPerson(id, body.photoIds)
+  })
 })

@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { getCollectionVersions, getPersonVersions } from '~/utils/collection-versions'
 definePageMeta({
   layout: 'dashboard',
 })
@@ -7,10 +8,12 @@ useHead({
   title: () => $t('title.peopleAlbums'),
 })
 
-type PersonVisibility = 'public' | 'login' | 'admin'
+type PersonVisibility = 'public' | 'login' | 'selected' | 'admin'
 
 interface PersonAlbum {
   id: string
+  collectionId: number
+  ownershipType: 'site' | 'user'
   name: string | null
   faceCount: number
   photoCount?: number
@@ -54,7 +57,20 @@ const newPersonName = ref('')
 let photoTimer: ReturnType<typeof setTimeout> | undefined
 let photoSearchRun = 0
 
-const levels: PersonVisibility[] = ['public', 'login', 'admin']
+const levels: PersonVisibility[] = ['public', 'login', 'selected', 'admin']
+const accessTarget = ref<PersonAlbum | null>(null)
+const accessDraft = ref<import('~~/shared/types/permissions').CollectionAccessInput | null>(null)
+const accessError = ref('')
+async function saveAccess() {
+  if (!accessTarget.value || !accessDraft.value) return
+  savingId.value = accessTarget.value.id
+  try {
+    await $fetch(`/api/admin/collections/${accessTarget.value.collectionId}/access`, { method: 'PUT', body: accessDraft.value })
+    accessTarget.value = null
+    await loadPeople()
+  } catch (e: any) { accessError.value = e?.data?.message || e.message }
+  finally { savingId.value = null }
+}
 
 const displayName = (person: PersonAlbum) =>
   person.name?.trim() || t('dashboard.people.unnamed')
@@ -107,43 +123,6 @@ const loadPeople = async () => {
     })
   } finally {
     loading.value = false
-  }
-}
-
-const setVisibility = async (
-  person: PersonAlbum,
-  visibility: PersonVisibility,
-) => {
-  if (person.visibility === visibility || savingId.value) return
-  const previous = person.visibility
-  person.visibility = visibility
-  savingId.value = person.id
-  try {
-    const saved = await $fetch<{ person: PersonAlbum }>(
-      `/api/people/${person.id}`,
-      {
-        method: 'PUT',
-        body: { visibility },
-      },
-    )
-    person.visibility = saved.person.visibility || 'public'
-    if (person.visibility !== visibility) {
-      throw new Error(t('dashboard.people.saveFailed'))
-    }
-    toast.add({
-      title: t('dashboard.people.saved'),
-      description: `${displayName(person)} · ${t(`dashboard.people.levels.${visibility}`)}`,
-      color: 'success',
-    })
-  } catch (error: any) {
-    person.visibility = previous
-    toast.add({
-      title: t('dashboard.people.saveFailed'),
-      description: error?.data?.message || error?.message,
-      color: 'error',
-    })
-  } finally {
-    savingId.value = null
   }
 }
 
@@ -204,7 +183,7 @@ const confirmDelete = async () => {
   try {
     await $fetch('/api/people/bulk-delete', {
       method: 'POST',
-      body: { ids: pendingDeleteIds.value },
+      body: { ids: pendingDeleteIds.value, versions: await getPersonVersions(pendingDeleteIds.value), reason: t('accounts.removePersonReason') },
     })
     const drop = new Set(pendingDeleteIds.value)
     people.value = people.value.filter((person) => !drop.has(person.id))
@@ -352,7 +331,7 @@ const confirmAdd = async () => {
   try {
     const result = await $fetch<{ added: number; photoCount: number }>(
       `/api/people/${addTarget.value.id}/photos`,
-      { method: 'POST', body: { photoIds: pickedIds.value } },
+      { method: 'POST', body: { photoIds: pickedIds.value, expectedAclVersion: (await getCollectionVersions([addTarget.value.collectionId]))[String(addTarget.value.collectionId)], reason: t('accounts.membershipReason') } },
     )
     addTarget.value.photoCount = result.photoCount
     toast.add({
@@ -394,9 +373,10 @@ onMounted(loadPeople)
   <UDashboardPanel>
     <template #header>
       <UDashboardNavbar :title="$t('title.peopleAlbums')" />
-    </template>
+</template>
 
     <template #body>
+      <CollectionBatchPanel :collections="people.filter((item:any)=>item.ownershipType==='site'&&item.collectionId).map((item:any)=>({collectionId:item.collectionId,title:item.name||item.id}))" @saved="loadPeople()" />
       <div class="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <div>
           <h2 class="text-lg font-semibold text-(--ui-text)">
@@ -599,28 +579,8 @@ onMounted(loadPeople)
               </div>
             </div>
 
-            <div class="mt-4 grid grid-cols-1 gap-1.5">
-              <UButton
-                v-for="level in levels"
-                :key="level"
-                size="sm"
-                block
-                :loading="savingId === person.id && person.visibility === level"
-                :color="
-                  person.visibility === level
-                    ? level === 'admin'
-                      ? 'error'
-                      : level === 'login'
-                        ? 'warning'
-                        : 'primary'
-                    : 'neutral'
-                "
-                :variant="person.visibility === level ? 'solid' : 'outline'"
-                :icon="person.visibility === level ? 'tabler:check' : undefined"
-                @click="setVisibility(person, level)"
-              >
-                {{ $t(`dashboard.people.levels.${level}`) }}
-              </UButton>
+            <div class="mt-4">
+              <UButton block variant="outline" @click="accessError = ''; accessTarget = person">{{ $t('permissions.edit') }} · {{ $t(`permissions.${person.visibility}`) }}</UButton>
             </div>
 
             <div class="mt-2 flex items-center justify-between gap-2">
@@ -838,4 +798,11 @@ onMounted(loadPeople)
       </div>
     </template>
   </UDashboardPanel>
+      <UModal :open="!!accessTarget" @update:open="value => { if (!value) accessTarget = null }" :title="$t('permissions.edit')">
+    <template #body>
+      <CollectionAccessEditor v-if="accessTarget" :key="accessTarget.collectionId" v-model="accessDraft" :collection-id="accessTarget.collectionId" />
+      <p v-if="accessError" class="mt-3 text-red-600" role="alert">{{ accessError }}</p>
+    </template>
+    <template #footer><UButton :loading="!!savingId" :disabled="!accessDraft || accessTarget?.ownershipType === 'user'" @click="saveAccess">{{ $t('permissions.save') }}</UButton></template>
+  </UModal>
 </template>

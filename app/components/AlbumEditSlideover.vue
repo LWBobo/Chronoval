@@ -2,6 +2,8 @@
 import type { Photo } from '~~/server/utils/db'
 import type { FormSubmitEvent, FormError } from '@nuxt/ui'
 import { onMounted, watch } from 'vue'
+import type { CollectionAccessInput } from '~~/shared/types/permissions'
+import { writeClipboard } from '~/utils/clipboard'
 
 /**
  * 相簿「新建 / 编辑」共享滑窗组件。
@@ -20,12 +22,13 @@ import { onMounted, watch } from 'vue'
  */
 interface AlbumItem {
   id?: number
+  collectionId?: number
   title: string
   description?: string | null
   coverPhotoId?: string | null
   bgmMusicId?: number | null
   isHidden?: boolean
-  visibility?: 'public' | 'login' | 'admin' | null
+  visibility?: 'public' | 'login' | 'selected' | 'admin' | null
   hideFromGallery?: boolean
   password?: string | null
   uid?: string | null
@@ -47,8 +50,8 @@ interface AlbumItem {
   children?: AlbumItem[]
   external?: boolean
   passwordProtected?: boolean
-  /** 密码免密范围（管理端回显）：null=需密码；'logged_in'=登录用户免密；'selected'=指定用户免密 */
-  passwordExemptMode?: 'logged_in' | 'selected' | null
+  /** 密码免密范围与统一 collection 策略一致。 */
+  passwordExemptMode?: 'none' | 'logged_in' | 'selected' | null
   /** 免密用户邮箱列表（管理端回显） */
   passwordExemptUsers?: string[] | null
   photoCount?: number
@@ -60,7 +63,7 @@ interface AlbumFormState {
   title: string
   description: string
   isHidden: boolean
-  visibility: 'public' | 'login' | 'admin'
+  visibility: 'public' | 'login' | 'selected' | 'admin'
   hideFromGallery: boolean
   slug: string
   password: string
@@ -95,6 +98,8 @@ const slideoverOpen = computed({
 })
 
 const currentAlbum = ref<AlbumItem | null>(null)
+const accessDraft = ref<CollectionAccessInput | null>(null)
+const accessCollectionId = computed(() => currentAlbum.value?.collectionId ?? (currentAlbum.value?.kind !== 'scan' ? currentAlbum.value?.id : undefined))
 
 const formData = reactive<AlbumFormState>({
   title: '',
@@ -162,66 +167,6 @@ const randomModeIndex = computed(() =>
     (formData.randomAnimation as string) || 'default',
   ),
 )
-
-// 相簿密码「按钮式开关」：是否开启访问密码（表单态）
-const passwordToggle = ref(false)
-const hasStoredPassword = computed(() => {
-  const album = currentAlbum.value
-  return !!album && !!(album as any).passwordProtected
-})
-// 眼睛开关：明文/密文显示密码输入框内容
-const passwordReveal = ref(false)
-
-// —— 密码免密范围（仅设置了密码时生效）——
-// ''=所有访问者都需密码；'logged_in'=任意登录用户免密；'selected'=仅所选用户免密
-type ExemptMode = '' | 'logged_in' | 'selected'
-const passwordExemptMode = ref<ExemptMode>('')
-const passwordExemptUsers = ref<string[]>([])
-interface UserLite {
-  id: number
-  username: string
-  email: string
-}
-const allUsers = ref<UserLite[]>([])
-
-// 免密范围选项（URadioGroup）
-const exemptModeOptions = computed(() => [
-  { value: '', label: $t('dashboard.albums.form.passwordExemptOff') },
-  {
-    value: 'logged_in',
-    label: $t('dashboard.albums.form.passwordExemptLoggedIn'),
-  },
-  {
-    value: 'selected',
-    label: $t('dashboard.albums.form.passwordExemptSelected'),
-  },
-])
-
-// 拉取用户列表（指定用户免密的标签选择数据源）
-const loadUsers = async () => {
-  try {
-    allUsers.value = await $fetch<UserLite[]>('/api/users')
-  } catch {
-    allUsers.value = []
-  }
-}
-
-// 滑窗每次打开时刷新用户列表（轻量表，直接重拉保证新注册用户可见）
-watch(
-  () => props.open,
-  (open) => {
-    if (open) void loadUsers()
-  },
-)
-
-const showPasswordWarningToast = () => {
-  useToast().add({
-    title: $t('dashboard.albums.form.passwordSaveError'),
-    color: 'warning',
-    progress: { color: 'error' },
-    duration: 4000,
-  })
-}
 
 const formRef = ref()
 const isSubmittingForm = ref(false)
@@ -322,24 +267,6 @@ const albumPublicUrl = computed(() =>
     : manualAlbumPublicUrl.value,
 )
 
-const writeClipboard = async (text: string) => {
-  if (navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-  const area = document.createElement('textarea')
-  area.value = text
-  area.setAttribute('readonly', '')
-  area.style.position = 'fixed'
-  area.style.top = '0'
-  area.style.left = '-9999px'
-  document.body.appendChild(area)
-  area.select()
-  const ok = document.execCommand('copy')
-  document.body.removeChild(area)
-  if (!ok) throw new Error('copy failed')
-}
-
 const copyPublicUrl = async () => {
   const url = albumPublicUrl.value
   if (!url) return
@@ -408,7 +335,6 @@ const confirmResetUid = async () => {
 const populateForm = (album: AlbumItem | null) => {
   currentAlbum.value = album
   formData.slug = ''
-  passwordReveal.value = false
 
   // 新建模式：重置为默认值
   if (!album) {
@@ -425,9 +351,6 @@ const populateForm = (album: AlbumItem | null) => {
     formData.randomQuotes = ''
     formData.randomQuotesTag = null
     formData.bgmMusicId = null
-    passwordToggle.value = false
-    passwordExemptMode.value = ''
-    passwordExemptUsers.value = []
     coverPhotoId.value = ''
     selectedPhotoIds.value = []
     formRef.value?.clear()
@@ -437,6 +360,7 @@ const populateForm = (album: AlbumItem | null) => {
   formData.title = album.title
   formData.description = album.description || ''
   formData.visibility =
+    album.visibility === 'selected' ||
     album.visibility === 'admin' ||
     album.visibility === 'login' ||
     album.visibility === 'public'
@@ -459,17 +383,6 @@ const populateForm = (album: AlbumItem | null) => {
   formData.randomQuotes = (album as any)?.randomQuotes || ''
   formData.randomQuotesTag = (album as any)?.randomQuotesTag || null
   formData.bgmMusicId = (album as any)?.bgmMusicId || null
-  passwordToggle.value = !!(album as any).passwordProtected
-  // 免密范围回显：未设密码时重置为「所有访问者都需密码」
-  const exemptModeRaw = (album as any).passwordExemptMode
-  passwordExemptMode.value =
-    exemptModeRaw === 'logged_in' || exemptModeRaw === 'selected'
-      ? exemptModeRaw
-      : ''
-  const exemptUsersRaw = (album as any).passwordExemptUsers
-  passwordExemptUsers.value = Array.isArray(exemptUsersRaw)
-    ? exemptUsersRaw
-    : []
   coverPhotoId.value = album.coverPhotoId || ''
   // 手动相簿支持选照片；扫描相簿无照片集合，留空即可
   selectedPhotoIds.value = isScanAlbum(album)
@@ -487,39 +400,7 @@ watch(
 
 const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
   isSubmittingForm.value = true
-  const newPassword = event.data.password?.trim() || ''
-  // 打开了访问密码开关、但未输入任何密码时：禁止保存，弹出系统失败提示
-  if (passwordToggle.value && !newPassword && !hasStoredPassword.value) {
-    isSubmittingForm.value = false
-    showPasswordWarningToast()
-    return
-  }
-  // 依据「按钮式开关」推导密码载荷：
-  // - 关闭开关 → 清除已设定的密码；
-  // - 开关开启 → 输入了新密码则更新；未输入且原本已有密码则保持不变（无密码被校验拦截）。
-  const passwordPayload = passwordToggle.value
-    ? newPassword
-      ? { password: newPassword, clearPassword: false }
-      : { password: undefined, clearPassword: false }
-    : { password: undefined, clearPassword: true }
-  // 免密范围载荷：仅在设置了密码时有意义；关闭密码时一并清除免密配置
-  if (passwordToggle.value && passwordExemptMode.value === 'selected' && passwordExemptUsers.value.length === 0) {
-    isSubmittingForm.value = false
-    useToast().add({
-      title: $t('dashboard.albums.form.passwordExemptUsersRequired'),
-      color: 'warning',
-    })
-    return
-  }
-  const exemptPayload = passwordToggle.value
-    ? {
-        passwordExemptMode: passwordExemptMode.value || null,
-        passwordExemptUsers:
-          passwordExemptMode.value === 'selected'
-            ? [...passwordExemptUsers.value]
-            : null,
-      }
-    : { passwordExemptMode: null, passwordExemptUsers: null }
+  if (!accessDraft.value) { isSubmittingForm.value = false; return }
   try {
     if (currentAlbum.value && isScanAlbum(currentAlbum.value)) {
       // 外部库相簿（含任意层级子相簿）：保存到扫描相簿元数据
@@ -530,15 +411,13 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
         title: event.data.title,
         description: event.data.description || null,
         coverPhotoId: coverPhotoId.value || null,
-        isHidden: event.data.isHidden,
+        access: accessDraft.value,
         layout: event.data.layout,
         randomAnimation: event.data.randomAnimation,
         randomQuotesEnabled: event.data.randomQuotesEnabled,
         randomQuotes: event.data.randomQuotes?.trim() || null,
         randomQuotesTag: event.data.randomQuotesTag || null,
         bgmMusicId: formData.bgmMusicId || null,
-        ...passwordPayload,
-        ...exemptPayload,
         slug: event.data.slug?.trim() || null,
       }
       await $fetch('/api/albums/scan-meta', { method: 'PUT', body })
@@ -554,10 +433,9 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
         body: {
           title: event.data.title,
           description: event.data.description ?? undefined,
-          coverPhotoId: coverPhotoId.value || undefined,
+          coverPhotoId: coverPhotoId.value || '',
           photoIds: selectedPhotoIds.value,
-          isHidden: formData.visibility !== 'public',
-          visibility: formData.visibility,
+          access: accessDraft.value,
           hideFromGallery: event.data.hideFromGallery,
           layout: event.data.layout,
           randomAnimation: event.data.randomAnimation,
@@ -565,8 +443,6 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
           randomQuotes: event.data.randomQuotes?.trim() || null,
           randomQuotesTag: event.data.randomQuotesTag || null,
           bgmMusicId: formData.bgmMusicId || null,
-          ...passwordPayload,
-          ...exemptPayload,
           slug: event.data.slug?.trim() || null,
         },
       })
@@ -583,10 +459,9 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
         body: {
           title: event.data.title,
           description: event.data.description ?? undefined,
-          coverPhotoId: coverPhotoId.value || undefined,
+          coverPhotoId: coverPhotoId.value || '',
           photoIds: selectedPhotoIds.value,
-          isHidden: formData.visibility !== 'public',
-          visibility: formData.visibility,
+          access: accessDraft.value,
           hideFromGallery: event.data.hideFromGallery,
           layout: event.data.layout,
           randomAnimation: event.data.randomAnimation,
@@ -594,8 +469,6 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
           randomQuotes: event.data.randomQuotes?.trim() || null,
           randomQuotesTag: event.data.randomQuotesTag || null,
           bgmMusicId: formData.bgmMusicId || null,
-          password: passwordToggle.value ? newPassword || undefined : undefined,
-          ...exemptPayload,
           slug: event.data.slug?.trim() || null,
         },
       })
@@ -616,6 +489,7 @@ const onFormSubmit = async (event: FormSubmitEvent<AlbumFormState>) => {
         ? $t('dashboard.albums.messages.updateError')
         : $t('dashboard.albums.messages.createError'),
       color: 'error',
+      description: (error as any)?.data?.message || (error as any)?.message,
     })
   } finally {
     isSubmittingForm.value = false
@@ -1086,136 +960,7 @@ const submitButtonLabel = computed(() => {
               <span class="h-px flex-1 bg-neutral-100 dark:bg-neutral-800" />
             </header>
 
-            <!-- 相簿密码：按钮式开关 -->
-            <UFormField name="password">
-              <div class="overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50/50 dark:border-neutral-800 dark:bg-neutral-900/40">
-                <div class="flex items-center justify-between gap-4 px-4 py-3">
-                  <div class="min-w-0 space-y-0.5">
-                    <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                      {{ $t('dashboard.albums.form.password') }}
-                    </p>
-                    <p v-if="!passwordToggle" class="text-xs text-neutral-500 dark:text-neutral-400">
-                      {{ $t('dashboard.albums.form.passwordNotSet') }}
-                    </p>
-                  </div>
-                  <USwitch
-                    :model-value="passwordToggle"
-                    color="info"
-                    @update:model-value="passwordToggle = $event"
-                  />
-                </div>
-                <div v-if="passwordToggle" class="border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
-                  <UInput
-                    v-model="formData.password"
-                    class="w-full"
-                    :type="passwordReveal ? 'text' : 'password'"
-                    autocomplete="new-password"
-                    :placeholder="
-                      hasStoredPassword
-                        ? $t('dashboard.albums.form.passwordPlaceholderSet')
-                        : $t('dashboard.albums.form.passwordPlaceholder')
-                    "
-                  >
-                    <template #trailing>
-                      <UButton
-                        variant="ghost"
-                        color="neutral"
-                        square
-                        :icon="passwordReveal ? 'i-lucide-eye-off' : 'i-lucide-eye'"
-                        :aria-label="$t('dashboard.albums.form.passwordReveal')"
-                        @click="passwordReveal = !passwordReveal"
-                      />
-                    </template>
-                  </UInput>
-
-                  <!-- 密码免密范围：谁可以不输密码直接访问 -->
-                  <div class="mt-3">
-                    <p class="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                      {{ $t('dashboard.albums.form.passwordExempt') }}
-                    </p>
-                    <p class="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500">
-                      {{ $t('dashboard.albums.form.passwordExemptHint') }}
-                    </p>
-                    <URadioGroup
-                      v-model="passwordExemptMode"
-                      :items="exemptModeOptions"
-                      value-key="value"
-                      :ui="{ fieldset: 'mt-2 gap-1.5' }"
-                      size="xs"
-                      class="mt-1"
-                    />
-                    <!-- 指定用户：标签多选 -->
-                    <div v-if="passwordExemptMode === 'selected'" class="mt-2.5">
-                      <USelectMenu
-                        v-model="passwordExemptUsers"
-                        :items="allUsers.map((u) => u.email)"
-                        multiple
-                        size="sm"
-                        searchable
-                        :placeholder="$t('dashboard.albums.form.passwordExemptUsersPlaceholder')"
-                        :search-input-placeholder="$t('dashboard.albums.form.passwordExemptUsersSearch')"
-                        class="w-full"
-                      >
-                        <template #leading="{ modelValue }">
-                          <Icon
-                            v-if="(modelValue as string[] | undefined)?.length"
-                            name="tabler:users-group"
-                            class="size-4 shrink-0 text-neutral-400"
-                          />
-                        </template>
-                      </USelectMenu>
-                      <p v-if="allUsers.length === 0" class="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-                        {{ $t('dashboard.albums.form.passwordExemptNoUsers') }}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </UFormField>
-
-            <!-- 普通相簿：公开 / 仅登录 / 仅管理员 -->
-            <div
-              v-if="!currentAlbum || !isScanAlbum(currentAlbum)"
-              class="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40"
-            >
-              <div class="space-y-0.5">
-                <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                  {{ $t('dashboard.albums.form.visibility') }}
-                </p>
-                <p class="text-xs text-neutral-500 dark:text-neutral-400">
-                  {{ $t('dashboard.albums.form.visibilityHint') }}
-                </p>
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <UButton
-                  v-for="level in (['public', 'login', 'admin'] as const)"
-                  :key="level"
-                  type="button"
-                  size="xs"
-                  :color="formData.visibility === level ? 'primary' : 'neutral'"
-                  :variant="formData.visibility === level ? 'solid' : 'soft'"
-                  @click="formData.visibility = level; formData.isHidden = level !== 'public'"
-                >
-                  {{ $t(`dashboard.albums.form.visibility_${level}`) }}
-                </UButton>
-              </div>
-            </div>
-
-            <!-- 扫描相簿仍用原来的登录门槛 -->
-            <div
-              v-else
-              class="flex items-start justify-between gap-4 rounded-lg border border-neutral-200 bg-neutral-50/50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40"
-            >
-              <div class="min-w-0 space-y-0.5">
-                <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                  {{ $t('dashboard.albums.form.isHidden') }}
-                </p>
-                <p class="text-xs text-neutral-500 dark:text-neutral-400">
-                  {{ $t('dashboard.albums.form.isHiddenHint') }}
-                </p>
-              </div>
-              <USwitch v-model="formData.isHidden" color="info" />
-            </div>
+            <CollectionAccessEditor v-if="open" :key="accessCollectionId ?? 'new'" v-model="accessDraft" :collection-id="accessCollectionId" />
 
             <!-- 首页照片画廊隐藏：按钮式开关 -->
             <div
@@ -1722,7 +1467,7 @@ const submitButtonLabel = computed(() => {
                     <p
                       class="truncate text-[10px] font-medium text-white/92"
                     >
-                      {{ photo.title || photo.storageKey || $t('ui.photo.untitled') }}
+                      {{ photo.title || $t('ui.photo.untitled') }}
                     </p>
                     <p class="truncate text-[9px] text-white/72">
                       {{ photo.city
